@@ -489,6 +489,56 @@ void retreatTurn(Encounter& encounter)
     }
 }
 
+int attackAllotment(const std::vector<MonsterAttack>& attacks)
+{
+    for (const MonsterAttack& attack : attacks) {
+        if (attack.name == "Multiattack") {
+            return attack.count < 1 ? 1 : attack.count;
+        }
+    }
+    return 1;
+}
+
+std::optional<int> completeMonsterAttack(Encounter& encounter, int targetIndex, int amount,
+                                        std::vector<Character>& characters, int attackerIndex, int attacksUsed,
+                                        int allotment)
+{
+    const int count = combatantCount(encounter.combatants);
+    if (targetIndex < 0 || targetIndex >= count || amount < 0) {
+        return std::nullopt;
+    }
+    if (attacksUsed < 0) {
+        attacksUsed = 0;
+    }
+    if (allotment < 1) {
+        allotment = 1;
+    }
+
+    Combatant& target = encounter.combatants[static_cast<std::size_t>(targetIndex)];
+    if (!applyDamage(target, amount)) {
+        return std::nullopt;
+    }
+    target.hp = cappedHitPoints(target.hp, target.maxHp);
+    if (!isMonsterCombatant(target) && carryCharacterHitPoints(characters, target)) {
+        for (const Character& character : characters) {
+            if (character.id == target.sourceId) {
+                target.hp = character.hp.current;
+                break;
+            }
+        }
+    }
+    keepTurnInInitiative(encounter);
+    if (attackerIndex < 0 || attackerIndex >= count || encounter.turnIndex != attackerIndex) {
+        return 0;
+    }
+    ++attacksUsed;
+    if (attacksUsed >= allotment) {
+        advanceTurn(encounter);
+        return 0;
+    }
+    return attacksUsed;
+}
+
 bool restoreFightUndo(Encounter& encounter, std::vector<Character>& characters, const FightUndo& undo)
 {
     encounter = undo.encounter;

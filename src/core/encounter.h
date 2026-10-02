@@ -163,4 +163,20 @@ struct FightUndo {
 // id is not in the roster; the fight is still restored.
 bool restoreFightUndo(Encounter& encounter, std::vector<Character>& characters, const FightUndo& undo);
 
+// How many attack-button uses this monster gets on its turn. That is the
+// Multiattack action's count, or 1 when the monster has no Multiattack.
+int attackAllotment(const std::vector<MonsterAttack>& attacks);
+
+// One attack-button use that was not cancelled. Damages the combatant at
+// targetIndex (temporary HP first), writes a character's current HP back to
+// the roster, and steps the marker if the combatant whose turn it was has
+// left the initiative order. When the marker is still attackerIndex, this use
+// counts toward allotment. Reaching the allotment advances the turn and the
+// returned count is 0. The count is also 0 when the turn moved for another
+// reason. Returns empty, and changes nothing, when the target index is out of
+// range or amount is negative.
+std::optional<int> completeMonsterAttack(Encounter& encounter, int targetIndex, int amount,
+                                        std::vector<Character>& characters, int attackerIndex, int attacksUsed,
+                                        int allotment);
+
 }  // namespace combat

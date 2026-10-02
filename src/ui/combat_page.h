@@ -89,6 +89,8 @@ private:
     void previousTurn();
     void nextTurn();
     void undoLastChange();
+    void syncAttackCount();
+    void setHitText(const QString& text);
     bool beginUndo(FightEdit edit, const Combatant* sheetCombatant, FightUndo& snapshot);
     void keepUndo(FightEdit edit, FightUndo snapshot);
     bool fightChanged(const FightUndo& snapshot, const Combatant* sheetCombatant);
@@ -107,21 +109,37 @@ private:
     std::vector<Condition> m_conditions;
     QString m_loadError;
     std::mt19937 m_dice;
+    struct PageUndo {
+        FightUndo fight;
+        int attacksUsed = 0;
+        std::string countedCombatantId;
+        QString hitText;
+    };
+
     bool m_populating = false;
     bool m_undoing = false;
+    bool m_suppressUndo = false;
     bool m_reportedLoadError = false;
     bool m_swordCursor = false;
     FightEdit m_openEdit = FightEdit::None;
-    std::optional<FightUndo> m_undo;
+    int m_attacksUsed = 0;
+    int m_capturedAttacksUsed = 0;
+    std::optional<PageUndo> m_undo;
     std::optional<int> m_armedDamage;
     std::string m_armedEffect;
+    std::string m_armedAttackerId;
     std::string m_undoEncounterId;
+    std::string m_countedCombatantId;
+    std::string m_capturedCountedCombatantId;
+    QString m_hitText;
+    QString m_capturedHitText;
 
     QComboBox* m_encounterCombo = nullptr;
     QWidget* m_fight = nullptr;
     QLabel* m_emptyHint = nullptr;
     QLabel* m_roundLabel = nullptr;
     QLabel* m_activeLabel = nullptr;
+    QLabel* m_hitLabel = nullptr;
     QPushButton* m_previousTurnButton = nullptr;
     QPushButton* m_nextTurnButton = nullptr;
     QPushButton* m_undoButton = nullptr;

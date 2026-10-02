@@ -373,6 +373,86 @@ TEST_CASE("a character combatant copies hp and ac and is not given a bonus")
     CHECK(!combatant.initiativeBonus.has_value());
 }
 
+TEST_CASE("multiattack allots two attacks and a lone attack allots one")
+{
+    const int multi = attackAllotment({
+        MonsterAttack{"Multiattack", "The goblin makes two attacks.", 2},
+        MonsterAttack{"Scimitar", "Hit: 4 (1d6 + 1) Slashing damage.", 2},
+    });
+    CHECK_EQ(multi, 2);
+    CHECK_EQ(attackAllotment({MonsterAttack{"Bite", "Hit: 4 (1d6 + 1) Piercing damage.", 1}}), 1);
+
+    Character aria;
+    aria.id = "aria";
+    aria.name = "Aria";
+    aria.hp.current = 30;
+    aria.hp.max = 30;
+    Encounter encounter = fightWith({
+        goblin("goblin", 18, 2),
+        makeCharacterCombatant(aria, "aria-row"),
+    });
+    encounter.combatants[1].initiative = 10;
+    std::vector<Character> roster{aria};
+
+    const std::optional<int> afterFirst = completeMonsterAttack(encounter, 1, 1, roster, 0, 0, multi);
+    CHECK(afterFirst.has_value());
+    CHECK_EQ(*afterFirst, 1);
+    CHECK_EQ(encounter.turnIndex, 0);
+    CHECK_EQ(encounter.combatants[0].name, std::string("Goblin Warrior"));
+
+    const std::optional<int> afterSecond = completeMonsterAttack(encounter, 1, 1, roster, 0, *afterFirst, multi);
+    CHECK(afterSecond.has_value());
+    CHECK_EQ(*afterSecond, 0);
+    CHECK_EQ(encounter.turnIndex, 1);
+
+    encounter.turnIndex = 0;
+    const std::optional<int> lone =
+        completeMonsterAttack(encounter, 1, 1, roster, 0, 0, attackAllotment({}));
+    CHECK(lone.has_value());
+    CHECK_EQ(*lone, 0);
+    CHECK_EQ(encounter.turnIndex, 1);
+}
+
+TEST_CASE("undo of a targeted attack restores the row, the sheet, and the turn")
+{
+    Character aria;
+    aria.id = "aria";
+    aria.name = "Aria";
+    aria.hp.current = 20;
+    aria.hp.max = 30;
+
+    Encounter encounter = fightWith({
+        goblin("goblin", 18, 2),
+        makeCharacterCombatant(aria, "aria-row"),
+    });
+    encounter.combatants[1].tempHp = 4;
+    std::vector<Character> roster{aria};
+    const FightUndo undo{encounter, roster[0]};
+
+    const std::optional<int> used = completeMonsterAttack(encounter, 1, 6, roster, 0, 0, 1);
+    CHECK(used.has_value());
+    CHECK_EQ(*used, 0);
+    CHECK_EQ(encounter.turnIndex, 1);
+    CHECK_EQ(encounter.combatants[1].tempHp, 0);
+    CHECK_EQ(encounter.combatants[1].hp, 18);
+    CHECK_EQ(roster[0].hp.current, 18);
+
+    CHECK(restoreFightUndo(encounter, roster, undo));
+    CHECK_EQ(encounter.combatants[1].hp, 20);
+    CHECK_EQ(encounter.combatants[1].tempHp, 4);
+    CHECK_EQ(encounter.turnIndex, 0);
+    CHECK_EQ(roster[0].hp.current, 20);
+    CHECK_EQ(roster[0].hp.max, 30);
+
+    const int sheet = roster[0].hp.current;
+    const std::optional<int> monsterHit = completeMonsterAttack(encounter, 0, 3, roster, 0, 0, 2);
+    CHECK(monsterHit.has_value());
+    CHECK_EQ(*monsterHit, 1);
+    CHECK_EQ(encounter.turnIndex, 0);
+    CHECK_EQ(encounter.combatants[0].hp, 7);
+    CHECK_EQ(roster[0].hp.current, sheet);
+}
+
 TEST_CASE("undo restores hit points on the fight and the sheet, one change only")
 {
     Character aria;
