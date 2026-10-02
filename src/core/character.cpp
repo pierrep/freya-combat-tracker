@@ -27,6 +27,14 @@ std::string formatModifier(int modifier)
     return (modifier >= 0 ? "+" : "") + std::to_string(modifier);
 }
 
+std::string formatHitPoints(int current, std::optional<int> maximum)
+{
+    if (!maximum.has_value()) {
+        return std::to_string(current);
+    }
+    return std::to_string(current) + " / " + std::to_string(*maximum);
+}
+
 std::vector<std::string> validateCharacter(const Character& character)
 {
     std::vector<std::string> problems;

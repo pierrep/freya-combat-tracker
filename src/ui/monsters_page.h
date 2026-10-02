@@ -85,6 +85,7 @@ private:
     QLineEdit* m_size = nullptr;
     QLineEdit* m_creatureType = nullptr;
     QSpinBox* m_hp = nullptr;
+    QLabel* m_hpSlash = nullptr;
     QSpinBox* m_ac = nullptr;
     QLineEdit* m_hitDice = nullptr;
     QLineEdit* m_speed = nullptr;

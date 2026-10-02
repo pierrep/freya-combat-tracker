@@ -212,10 +212,14 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     form->addRow(tr("AC"), m_acLabel);
     m_hp = makeNumberBox();
     m_hp->setObjectName(QStringLiteral("hpField"));
-    form->addRow(tr("HP"), m_hp);
     m_maxHpLabel = new QLabel;
     m_maxHpLabel->setObjectName(QStringLiteral("maxHpField"));
-    form->addRow(tr("Maximum HP"), m_maxHpLabel);
+    auto* hpRow = new QHBoxLayout;
+    hpRow->setSpacing(0);
+    hpRow->addWidget(m_hp);
+    hpRow->addWidget(m_maxHpLabel);
+    hpRow->addStretch(1);
+    form->addRow(tr("HP"), hpRow);
     m_tempHp = makeNumberBox();
     m_tempHp->setObjectName(QStringLiteral("tempHpField"));
     form->addRow(tr("Temporary HP"), m_tempHp);
@@ -451,7 +455,8 @@ QString CombatPage::combatantLabel(const Combatant& combatant, bool active) cons
     const QString marker = active ? QStringLiteral("● ") : QStringLiteral("   ");
     QString label = marker + QString::number(combatant.initiative) + QStringLiteral("    ") +
                     QString::fromStdString(combatant.name) + QStringLiteral("    AC ") +
-                    QString::number(combatant.ac) + QStringLiteral("    HP ") + QString::number(combatant.hp);
+                    QString::number(combatant.ac) + QStringLiteral("    HP ") +
+                    QString::fromStdString(formatHitPoints(combatant.hp, combatant.maxHp));
     if (combatant.tempHp != 0) {
         label += tr("    temp %1").arg(combatant.tempHp);
     }
@@ -596,9 +601,11 @@ void CombatPage::showCombatant()
     m_hp->setValue(combatant->hp);
     m_tempHp->setValue(combatant->tempHp);
     if (combatant->maxHp.has_value()) {
-        m_maxHpLabel->setText(QString::number(*combatant->maxHp));
+        m_maxHpLabel->setText(QStringLiteral(" / %1").arg(*combatant->maxHp));
+        m_maxHpLabel->setVisible(true);
     } else {
-        m_maxHpLabel->setText(tr("Not stored"));
+        m_maxHpLabel->clear();
+        m_maxHpLabel->setVisible(false);
     }
     {
         const QSignalBlocker blocker(m_conditionList);
@@ -714,7 +721,8 @@ void CombatPage::showAttacks()
         encounter->turnIndex < static_cast<int>(encounter->combatants.size())) {
         turn = &encounter->combatants[static_cast<std::size_t>(encounter->turnIndex)];
     }
-    const bool monster = turn != nullptr && isMonsterCombatant(*turn);
+    const Combatant* selected = selectedCombatant();
+    const bool monster = turn != nullptr && selected == turn && isMonsterCombatant(*turn);
     m_attacksSection->setVisible(monster);
     if (!monster) {
         m_attacks->clear();

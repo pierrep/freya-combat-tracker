@@ -2,6 +2,7 @@
 #include "core/sheet.h"
 #include "test_harness.h"
 
+#include <optional>
 #include <string>
 
 using namespace combat;
@@ -109,4 +110,10 @@ TEST_CASE("validateCharacter checks classes, spells, slots, gear, and conditions
 
     character.spellSlots.pop_back();
     CHECK(validateCharacter(character).empty());
+}
+
+TEST_CASE("hit points format as current over maximum")
+{
+    CHECK_EQ(formatHitPoints(12, 30), std::string("12 / 30"));
+    CHECK_EQ(formatHitPoints(4, std::nullopt), std::string("4"));
 }

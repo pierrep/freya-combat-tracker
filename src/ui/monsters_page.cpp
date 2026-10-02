@@ -46,11 +46,12 @@ bool isBlank(const QString& text)
 
 QString listLabel(const Monster& monster)
 {
-    const QString name = QString::fromStdString(monster.name);
+    QString label = QString::fromStdString(monster.name) + QStringLiteral("    ") +
+                    QString::fromStdString(formatHitPoints(monster.hp, monster.hp));
     if (monster.source == kCustomMonsterSource) {
-        return name + QStringLiteral("    Custom");
+        label += QStringLiteral("    Custom");
     }
-    return name;
+    return label;
 }
 
 QString scoreText(int score)
@@ -62,7 +63,7 @@ QString scoreText(int score)
 
 QString hpText(const Monster& monster)
 {
-    const QString hp = QString::number(monster.hp);
+    const QString hp = QString::fromStdString(formatHitPoints(monster.hp, monster.hp));
     if (monster.hitDice.empty()) {
         return hp;
     }
@@ -204,7 +205,15 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     nameFont.setPointSizeF(nameFont.pointSizeF() * 1.4);
     nameFont.setBold(true);
     m_statName->setFont(nameFont);
-    statLayout->addWidget(m_statName);
+    m_statChallenge = new QLabel;
+    m_statChallenge->setObjectName(QStringLiteral("monsterStatChallenge"));
+    m_statChallenge->setFont(nameFont);
+    m_statChallenge->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    auto* nameRow = new QHBoxLayout;
+    nameRow->setSpacing(16);
+    nameRow->addWidget(m_statName, 1);
+    nameRow->addWidget(m_statChallenge, 0, Qt::AlignRight | Qt::AlignVCenter);
+    statLayout->addLayout(nameRow);
     m_statType = new QLabel;
     m_statType->setWordWrap(true);
     statLayout->addWidget(m_statType);
@@ -216,13 +225,14 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     m_statSpeed->setWordWrap(true);
     m_statInitiative = new QLabel;
     m_statPerception = new QLabel;
-    m_statChallenge = new QLabel;
     statForm->addRow(tr("AC"), m_statAc);
     statForm->addRow(tr("HP"), m_statHp);
     statForm->addRow(tr("Speed"), m_statSpeed);
     statForm->addRow(tr("Initiative"), m_statInitiative);
     statForm->addRow(tr("Passive Perception"), m_statPerception);
-    statForm->addRow(tr("Challenge Rating"), m_statChallenge);
+    auto* challengeGap = new QLabel(QStringLiteral(" "));
+    challengeGap->setObjectName(QStringLiteral("challengeRatingGap"));
+    statForm->addRow(QString(), challengeGap);
     statLayout->addLayout(statForm);
 
     auto* abilityHeading = new QLabel(tr("Ability scores"));
@@ -264,7 +274,13 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     m_ac = makeNumberBox();
     basics->addRow(tr("AC"), m_ac);
     m_hp = makeNumberBox();
-    basics->addRow(tr("HP"), m_hp);
+    m_hpSlash = new QLabel;
+    auto* hpRow = new QHBoxLayout;
+    hpRow->setSpacing(0);
+    hpRow->addWidget(m_hp);
+    hpRow->addWidget(m_hpSlash);
+    hpRow->addStretch(1);
+    basics->addRow(tr("HP"), hpRow);
     m_hitDice = new QLineEdit;
     m_hitDice->setPlaceholderText(tr("3d6"));
     basics->addRow(tr("Hit dice"), m_hitDice);
@@ -485,7 +501,11 @@ void MonstersPage::showSelected()
         m_statSpeed->setText(QString::fromStdString(monster->speed));
         m_statInitiative->setText(QString::fromStdString(formatModifier(monster->initiativeBonus)));
         m_statPerception->setText(QString::number(monster->passivePerception));
-        m_statChallenge->setText(QString::fromStdString(monster->challengeRating));
+        if (monster->challengeRating.empty()) {
+            m_statChallenge->clear();
+        } else {
+            m_statChallenge->setText(tr("CR %1").arg(QString::fromStdString(monster->challengeRating)));
+        }
         for (std::size_t i = 0; i < kAbilities.size(); ++i) {
             m_statScores[i]->setText(scoreText(monster->abilities.*kAbilities[i].member));
         }
@@ -502,6 +522,7 @@ void MonstersPage::showSelected()
     m_creatureType->setText(QString::fromStdString(monster->creatureType));
     m_ac->setValue(monster->ac);
     m_hp->setValue(monster->hp);
+    m_hpSlash->setText(QStringLiteral(" / %1").arg(monster->hp));
     m_hitDice->setText(QString::fromStdString(monster->hitDice));
     m_speed->setText(QString::fromStdString(monster->speed));
     m_initiative->setValue(monster->initiativeBonus);
@@ -629,6 +650,7 @@ void MonstersPage::onFormEdited()
     monster->creatureType = m_creatureType->text().toStdString();
     monster->ac = m_ac->value();
     monster->hp = m_hp->value();
+    m_hpSlash->setText(QStringLiteral(" / %1").arg(monster->hp));
     monster->hitDice = m_hitDice->text().toStdString();
     monster->speed = m_speed->text().toStdString();
     monster->initiativeBonus = m_initiative->value();
@@ -639,6 +661,9 @@ void MonstersPage::onFormEdited()
         m_modifiers[i]->setText(QString::fromStdString(formatModifier(abilityModifier(m_scores[i]->value()))));
     }
     m_catalog.updateCustomMonster(*monster);
+    if (QListWidgetItem* item = m_list->currentItem()) {
+        item->setText(listLabel(*monster));
+    }
     if (Monster* visible = const_cast<Monster*>(selectedVisible())) {
         if (visible->id == monster->id) {
             *visible = *monster;

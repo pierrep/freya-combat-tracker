@@ -254,7 +254,9 @@ void EncounterBuilderPage::reloadCharacters()
     const QSignalBlocker blocker(m_characterCombo);
     m_characterCombo->clear();
     for (const Character& character : m_characters) {
-        m_characterCombo->addItem(QString::fromStdString(character.name), QString::fromStdString(character.id));
+        const QString label = QString::fromStdString(character.name) + QStringLiteral("    ") +
+                              QString::fromStdString(formatHitPoints(character.hp.current, character.hp.max));
+        m_characterCombo->addItem(label, QString::fromStdString(character.id));
     }
     const int row = m_characterCombo->findData(previous);
     if (row >= 0) {
@@ -273,10 +275,12 @@ void EncounterBuilderPage::refreshMonsterChoices()
     const QSignalBlocker blocker(m_monsterChoices);
     m_monsterChoices->clear();
     for (const Monster& monster : matches) {
-        auto* item = new QListWidgetItem(QString::fromStdString(monster.name));
+        QString label = QString::fromStdString(monster.name) + QStringLiteral("    ") +
+                        QString::fromStdString(formatHitPoints(monster.hp, monster.hp));
         if (monster.source == kCustomMonsterSource) {
-            item->setText(item->text() + QStringLiteral("    Custom"));
+            label += QStringLiteral("    Custom");
         }
+        auto* item = new QListWidgetItem(label);
         item->setData(Qt::UserRole, QString::fromStdString(monster.id));
         m_monsterChoices->addItem(item);
     }
@@ -411,7 +415,9 @@ void EncounterBuilderPage::rebuildRoster()
     m_rosterHint->setVisible(encounter->combatants.empty());
     m_roster->setVisible(!encounter->combatants.empty());
     for (const Combatant& combatant : encounter->combatants) {
-        m_roster->addItem(QString::fromStdString(combatant.name));
+        const QString label = QString::fromStdString(combatant.name) + QStringLiteral("    ") +
+                              QString::fromStdString(formatHitPoints(combatant.hp, combatant.maxHp));
+        m_roster->addItem(label);
     }
 }
 

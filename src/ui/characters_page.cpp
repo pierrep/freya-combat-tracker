@@ -56,7 +56,8 @@ bool isBlank(const QString& text)
 
 QString listLabel(const Character& character)
 {
-    return QString::fromStdString(character.name);
+    return QString::fromStdString(character.name) + QStringLiteral("    ") +
+           QString::fromStdString(formatHitPoints(character.hp.current, character.hp.max));
 }
 
 QLabel* sectionLabel(const QString& text)
@@ -192,9 +193,9 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
     m_hpMax->setObjectName(QStringLiteral("hpMax"));
     m_tempHp = makeNumberBox(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
     auto* hpRow = new QHBoxLayout;
-    hpRow->addWidget(new QLabel(tr("Current")));
+    hpRow->setSpacing(4);
     hpRow->addWidget(m_hpCurrent);
-    hpRow->addWidget(new QLabel(tr("Maximum")));
+    hpRow->addWidget(new QLabel(QStringLiteral("/")));
     hpRow->addWidget(m_hpMax);
     hpRow->addWidget(new QLabel(tr("Temporary")));
     hpRow->addWidget(m_tempHp);
@@ -705,7 +706,7 @@ void CharactersPage::onNameEdited(const QString& text)
         return;
     }
     character->name = text.toStdString();
-    m_list->currentItem()->setText(text);
+    m_list->currentItem()->setText(listLabel(*character));
     persist();
 }
 
@@ -756,6 +757,9 @@ void CharactersPage::onNumberChanged()
     character->deathSaves.successes = m_deathSuccesses->value();
     character->deathSaves.failures = m_deathFailures->value();
     updateModifierLabels();
+    if (QListWidgetItem* item = m_list->currentItem()) {
+        item->setText(listLabel(*character));
+    }
     persist();
 }
 

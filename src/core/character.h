@@ -188,6 +188,9 @@ int abilityModifier(int score);
 // Formats a modifier the way a stat block shows it: "+3", "+0", "-1".
 std::string formatModifier(int modifier);
 
+// "12 / 30". When maximum is empty, the current number alone.
+std::string formatHitPoints(int current, std::optional<int> maximum);
+
 // Light checks for a stored character. Scores, hit points, and bonuses are
 // not range-checked. Returns an empty list when the character is valid.
 std::vector<std::string> validateCharacter(const Character& character);
