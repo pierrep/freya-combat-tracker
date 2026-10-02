@@ -2,6 +2,10 @@
 
 A local desktop combat tracker for fifth edition (2024 rules), built with C++20 and Qt 6 Widgets. 5E compatible.
 
+Phase 6 fills a character from a PDF you exported on this machine. The app does not log in and does not call D&D Beyond. On the Characters page, Import PDF reads the classic fillable sheet's named form fields and shows a short report. Create new character adds a character. Replace, after you confirm, overwrites the imported fields on a character you pick and keeps that character's id. Encounters are not changed. There is no match on name.
+
+The reader is qpdf (Apache-2.0) in the data library. It maps the name, the six scores, AC, current / maximum / temporary HP, passive Perception, the typed initiative total, speed, proficiency bonus, class and level, species (`Race `, or `Race` when the spaced name is absent), gear lines, spell names, and spell slots. If a spell name is in the SRD catalog, the sheet stores that id. Otherwise it stores the name and no description. Feature essays, personality, ideals, bonds, flaws, backstory, and appearance are dropped and are not shown. Skill and save checkboxes are skipped. If the file has no filled form fields, the import stops and asks for a fresh browser Export to PDF. Page text is not read, and the PDF is not kept.
+
 Phase 5 keeps the fight's bookkeeping on the Combat page. You apply damage and healing to the active combatant, add or remove SRD conditions, set or clear concentration, and count death saves. Temporary HP is spent before current HP. A character's spell slots can be spent, and Finish rest puts them back to the maximum stored on the sheet. The page also shows ability modifiers, the proficiency bonus from total level, save bonuses, and the Dexterity initiative modifier. The initiative number on the combatant is still the one turn order uses.
 
 ## Layout
@@ -9,13 +13,13 @@ Phase 5 keeps the fight's bookkeeping on the Combat page. You apply damage and h
 | Path | Target | Depends on |
 | --- | --- | --- |
 | `src/core` | `combat_core` (static library) | C++ standard library only |
-| `src/data` | `combat_data` (static library) | `combat_core`, nlohmann/json |
+| `src/data` | `combat_data` (static library) | `combat_core`, nlohmann/json, qpdf |
 | `src/ui` | `combat_app` (executable `freya-combat-tracker`) | `combat_core`, `combat_data`, Qt 6 Widgets |
 | `tests/core`, `tests/data` | `core_tests`, `data_tests` | No Qt; run without a display |
 
 ## Build
 
-Requirements: CMake 3.25+, Ninja, a C++20 compiler (GCC 13+, Clang 17+, Apple Clang, or MSVC 2022), and Qt 6.4+ (6.8+ recommended; distro packages such as Ubuntu 24.04's `qt6-base-dev` work, or use the official installer or [aqtinstall](https://github.com/miurahr/aqtinstall)). nlohmann/json is used from the system if CMake finds it, otherwise fetched at configure time.
+Requirements: CMake 3.25+, Ninja, a C++20 compiler (GCC 13+, Clang 17+, Apple Clang, or MSVC 2022), Qt 6.4+ (6.8+ recommended; distro packages such as Ubuntu 24.04's `qt6-base-dev` work, or use the official installer or [aqtinstall](https://github.com/miurahr/aqtinstall)), and qpdf (Apache-2.0). CMake looks for qpdf in `$HOME/opt/qpdf` and then on the default search path. nlohmann/json is used from the system if CMake finds it, otherwise fetched at configure time.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64
@@ -28,7 +32,7 @@ To build only the Qt-free libraries and tests, pass `-DCOMBAT_TRACKER_BUILD_APP=
 
 ## Saved data
 
-Characters are saved to `characters.json` (`schemaVersion` 2) in the per-user app data folder:
+Characters are saved to `characters.json` (`schemaVersion` 3) in the per-user app data folder:
 
 - macOS: `~/Library/Application Support/CombatTracker/`
 - Linux: `$XDG_DATA_HOME/combat-tracker/` (or `~/.local/share/combat-tracker/`)
@@ -36,7 +40,9 @@ Characters are saved to `characters.json` (`schemaVersion` 2) in the per-user ap
 
 Every edit is saved right away by writing a temporary file and renaming it over the old one. If a file cannot be read, the app shows the error and leaves that file untouched.
 
-A `schemaVersion` 1 roster still opens. The old `hp` number becomes both `hp.current` and `hp.max`, temporary HP starts at 0, and the new lists start empty. Opening it does not rewrite the file. The first save copies those original bytes to `characters.v1.json` beside it (and does not replace that copy later), then writes version 2. An older build refuses a version 2 file.
+A `schemaVersion` 1 roster still opens. The old `hp` number becomes both `hp.current` and `hp.max`, temporary HP starts at 0, and the new lists start empty. Opening it does not rewrite the file. The first save copies those original bytes to `characters.v1.json` beside it (and does not replace that copy later), then writes version 3. A version 2 file still opens, with `external` empty. An older build refuses a version 3 file.
+
+An imported character may include `external`: `source` (`dndbeyond-pdf`), `importedAt` (UTC), and `fileName` (the file name only, not a remote id). Characters typed in omit that object.
 
 The sheet stores spell ids (or a name, when the spell is not in the catalog) and a prepared flag. It does not store spell or condition descriptions. Spell slots are typed per level as a current count and a maximum. Species may be any name; the picker lists the SRD species. Gear is a name, a quantity, and an equipped flag.
 

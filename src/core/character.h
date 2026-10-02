@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -101,6 +102,16 @@ struct DeathSaves {
     bool operator==(const DeathSaves&) const = default;
 };
 
+// Where a character came from, when an import recorded it. Empty when the
+// character was typed in. No remote id is stored.
+struct CharacterImport {
+    std::string source;
+    std::string importedAt;
+    std::string fileName;
+
+    bool operator==(const CharacterImport&) const = default;
+};
+
 struct Character {
     std::string id;
     std::string name;
@@ -122,6 +133,7 @@ struct Character {
     std::vector<std::string> conditions;
     DeathSaves deathSaves;
     std::string notes;
+    std::optional<CharacterImport> external;
 
     bool operator==(const Character&) const = default;
 };
@@ -176,7 +188,7 @@ int abilityModifier(int score);
 // Formats a modifier the way a stat block shows it: "+3", "+0", "-1".
 std::string formatModifier(int modifier);
 
-// Light checks for a schema 2 character. Scores, hit points, and bonuses are
+// Light checks for a stored character. Scores, hit points, and bonuses are
 // not range-checked. Returns an empty list when the character is valid.
 std::vector<std::string> validateCharacter(const Character& character);
 

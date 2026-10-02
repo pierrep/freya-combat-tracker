@@ -2,10 +2,14 @@
 
 #include "core/character_store.h"
 #include "core/uuid.h"
+#include "data/pdf_import.h"
 #include "ui/page_title.h"
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -24,6 +28,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <filesystem>
 #include <limits>
 
 namespace combat::ui {
@@ -134,12 +139,23 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
     listButtons->addWidget(m_addButton);
     listButtons->addWidget(m_deleteButton);
     left->addLayout(listButtons);
+    auto* importRow = new QHBoxLayout;
+    m_importButton = new QPushButton(tr("Import PDF"));
+    m_importButton->setObjectName(QStringLiteral("importPdf"));
+    importRow->addWidget(m_importButton);
+    left->addLayout(importRow);
     columns->addLayout(left);
 
     m_form = new QWidget;
     auto* formLayout = new QVBoxLayout(m_form);
     formLayout->setContentsMargins(0, 0, 0, 0);
     formLayout->setSpacing(12);
+
+    m_importLabel = new QLabel;
+    m_importLabel->setObjectName(QStringLiteral("importSource"));
+    m_importLabel->setWordWrap(true);
+    m_importLabel->hide();
+    formLayout->addWidget(m_importLabel);
 
     auto* basics = new QFormLayout;
     m_name = new QLineEdit;
@@ -360,6 +376,7 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
 
     connect(m_list, &QListWidget::currentRowChanged, this, &CharactersPage::showSelected);
     connect(m_addButton, &QPushButton::clicked, this, &CharactersPage::addCharacter);
+    connect(m_importButton, &QPushButton::clicked, this, &CharactersPage::importPdf);
     connect(m_deleteButton, &QPushButton::clicked, this, &CharactersPage::deleteSelected);
     connect(m_name, &QLineEdit::textEdited, this, &CharactersPage::onNameEdited);
     connect(m_name, &QLineEdit::editingFinished, this, &CharactersPage::onNameEditingFinished);
@@ -401,6 +418,7 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
         m_list->setEnabled(false);
         m_addButton->setEnabled(false);
         m_deleteButton->setEnabled(false);
+        m_importButton->setEnabled(false);
         m_emptyHint->hide();
         m_form->hide();
         return;
@@ -501,6 +519,100 @@ void CharactersPage::addCharacter()
     m_name->selectAll();
 }
 
+void CharactersPage::importPdf()
+{
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import a character PDF"), QString(),
+                                                      tr("PDF files (*.pdf);;All files (*)"));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    PdfImportResult imported;
+    try {
+        imported = importCharacterPdf(std::filesystem::path(path.toStdString()), m_spells);
+    } catch (const PdfImportError& error) {
+        QMessageBox::warning(this, tr("Could not import PDF"), QString::fromStdString(error.what()));
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Review PDF import"));
+    dialog.resize(560, 460);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* report = new QPlainTextEdit(QString::fromStdString(formatPdfImportReport(imported.report)));
+    report->setObjectName(QStringLiteral("importReport"));
+    report->setReadOnly(true);
+    layout->addWidget(report);
+
+    auto* picker = new QComboBox;
+    picker->setObjectName(QStringLiteral("replaceCharacter"));
+    for (const Character& character : m_characters) {
+        picker->addItem(listLabel(character));
+    }
+    if (!m_characters.empty()) {
+        layout->addWidget(new QLabel(tr("Replace this character")));
+        layout->addWidget(picker);
+    }
+
+    auto* buttons = new QDialogButtonBox;
+    auto* createButton = buttons->addButton(tr("Create new character"), QDialogButtonBox::AcceptRole);
+    createButton->setObjectName(QStringLiteral("createImportedCharacter"));
+    auto* replaceButton = buttons->addButton(tr("Replace"), QDialogButtonBox::ActionRole);
+    replaceButton->setObjectName(QStringLiteral("replaceImportedCharacter"));
+    replaceButton->setEnabled(!m_characters.empty());
+    buttons->addButton(QDialogButtonBox::Cancel);
+    layout->addWidget(buttons);
+
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(replaceButton, &QPushButton::clicked, &dialog, [this, &dialog, picker] {
+        const int row = picker->currentIndex();
+        if (row < 0 || row >= count()) {
+            return;
+        }
+        const auto answer = QMessageBox::question(
+            &dialog, tr("Replace character"),
+            tr("Replace the imported fields on %1? Its id stays the same. Encounters are not changed.")
+                .arg(listLabel(m_characters[static_cast<std::size_t>(row)])));
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+        dialog.done(2);
+    });
+
+    const int choice = dialog.exec();
+    if (choice == QDialog::Accepted) {
+        Character character = imported.character;
+        character.id = generateUuidV4([this] { return m_rng(); });
+        if (character.name.empty()) {
+            character.name = tr("Imported character").toStdString();
+        }
+        m_characters.push_back(std::move(character));
+        m_list->addItem(listLabel(m_characters.back()));
+        persist();
+        emit countChanged(count());
+        m_list->setCurrentRow(count() - 1);
+        return;
+    }
+    if (choice != 2) {
+        return;
+    }
+
+    const int row = picker->currentIndex();
+    if (row < 0 || row >= count()) {
+        return;
+    }
+    Character& target = m_characters[static_cast<std::size_t>(row)];
+    applyImportedCharacter(target, imported);
+    m_list->item(row)->setText(listLabel(target));
+    persist();
+    if (m_list->currentRow() == row) {
+        showSelected();
+    } else {
+        m_list->setCurrentRow(row);
+    }
+}
+
 void CharactersPage::deleteSelected()
 {
     const Character* character = selected();
@@ -542,6 +654,14 @@ void CharactersPage::showSelected()
     m_populating = true;
     m_name->setText(QString::fromStdString(character->name));
     m_nameError->hide();
+    if (character->external.has_value()) {
+        const QString fileName = QString::fromStdString(character->external->fileName);
+        m_importLabel->setText(fileName.isEmpty() ? tr("Imported from a PDF.")
+                                                  : tr("Imported from a PDF (%1).").arg(fileName));
+        m_importLabel->show();
+    } else {
+        m_importLabel->hide();
+    }
     m_species->setCurrentText(QString::fromStdString(character->species));
     const bool knownSpecies = character->species.empty() ||
                               std::find(m_speciesNames.begin(), m_speciesNames.end(), character->species) !=

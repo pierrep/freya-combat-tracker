@@ -237,6 +237,19 @@ Character characterFromJsonV2(const json& value, std::size_t index)
     character.deathSaves.failures = readInt(deathSaves, "failures", deathContext);
     character.notes = readString(value, "notes", context);
 
+    const auto external = value.find("external");
+    if (external != value.end() && !external->is_null()) {
+        const std::string externalContext = context + " external";
+        requireObject(*external, externalContext);
+        CharacterImport info;
+        info.source = readOptionalString(*external, "source", externalContext);
+        info.importedAt = readOptionalString(*external, "importedAt", externalContext);
+        info.fileName = readOptionalString(*external, "fileName", externalContext);
+        if (!info.source.empty() || !info.importedAt.empty() || !info.fileName.empty()) {
+            character.external = std::move(info);
+        }
+    }
+
     const auto problems = validateCharacter(character);
     if (!problems.empty()) {
         throw CharacterStoreError(context + ": " + problems.front());
@@ -314,7 +327,7 @@ json characterToJson(const Character& character)
         conditions.push_back(id);
     }
 
-    return json{
+    json object = json{
         {"id", character.id},
         {"name", character.name},
         {"hp", {{"current", character.hp.current}, {"max", character.hp.max}}},
@@ -336,6 +349,14 @@ json characterToJson(const Character& character)
         {"deathSaves", {{"successes", character.deathSaves.successes}, {"failures", character.deathSaves.failures}}},
         {"notes", character.notes},
     };
+    if (character.external.has_value()) {
+        object["external"] = json{
+            {"source", character.external->source},
+            {"importedAt", character.external->importedAt},
+            {"fileName", character.external->fileName},
+        };
+    }
+    return object;
 }
 
 std::filesystem::path version1BackupPath(const std::filesystem::path& path)
@@ -418,7 +439,7 @@ std::vector<Character> parseCharactersDocument(const std::string& text)
     }
     const std::string context = "Characters file";
     const int version = readInt(document, "schemaVersion", context);
-    if (version != 1 && version != kCharactersSchemaVersion) {
+    if (version != 1 && version != 2 && version != kCharactersSchemaVersion) {
         throw CharacterStoreError("The characters file has schemaVersion " + std::to_string(version) +
                                   ", which this version of the app cannot read.");
     }

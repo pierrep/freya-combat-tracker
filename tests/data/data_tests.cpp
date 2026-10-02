@@ -116,13 +116,13 @@ TEST_CASE("save then load round-trips every field")
     CHECK(reopened.loadAll() == roster);
 }
 
-TEST_CASE("saved file has schemaVersion 2 and no derived modifiers")
+TEST_CASE("saved file has schemaVersion 3 and no derived modifiers")
 {
     TempDir dir;
     JsonCharacterStore store(dir.path() / "characters.json");
     store.saveAll({aria()});
     const std::string text = readFile(store.path());
-    CHECK(text.find("\"schemaVersion\": 2") != std::string::npos);
+    CHECK(text.find("\"schemaVersion\": 3") != std::string::npos);
     CHECK(text.find("\"current\": 32") != std::string::npos);
     CHECK(text.find("\"max\": 32") != std::string::npos);
     CHECK(text.find("modifier") == std::string::npos);
@@ -198,12 +198,13 @@ TEST_CASE("unparseable file throws and is not overwritten by load")
     CHECK_EQ(readFile(path), garbage);
 }
 
-TEST_CASE("unknown schemaVersion is refused and version 2 empty roster loads")
+TEST_CASE("unknown schemaVersion is refused and version 2 and 3 empty rosters load")
 {
-    CHECK_THROWS(CharacterStoreError, parseCharactersDocument(R"({"schemaVersion": 3, "characters": []})"));
+    CHECK_THROWS(CharacterStoreError, parseCharactersDocument(R"({"schemaVersion": 4, "characters": []})"));
     CHECK_THROWS(CharacterStoreError, parseCharactersDocument(R"({"characters": []})"));
     CHECK_THROWS(CharacterStoreError, parseCharactersDocument(R"({"schemaVersion": "1", "characters": []})"));
     CHECK(parseCharactersDocument(R"({"schemaVersion": 2, "characters": []})").empty());
+    CHECK(parseCharactersDocument(R"({"schemaVersion": 3, "characters": []})").empty());
 }
 
 TEST_CASE("non-integer numeric fields are rejected")
@@ -286,7 +287,7 @@ TEST_CASE("version 1 hp migrates in memory and the file is not rewritten")
     CHECK(!fs::exists(dir.path() / "characters.v1.json"));
 }
 
-TEST_CASE("saving over a version 1 file keeps one copy and writes version 2")
+TEST_CASE("saving over a version 1 file keeps one copy and writes version 3")
 {
     TempDir dir;
     const fs::path path = dir.path() / "characters.json";
@@ -298,7 +299,7 @@ TEST_CASE("saving over a version 1 file keeps one copy and writes version 2")
     const fs::path backup = dir.path() / "characters.v1.json";
     CHECK_EQ(readFile(backup), std::string(kPlanExample));
     const std::string saved = readFile(path);
-    CHECK(saved.find("\"schemaVersion\": 2") != std::string::npos);
+    CHECK(saved.find("\"schemaVersion\": 3") != std::string::npos);
     CHECK(saved.find("\"current\": 32") != std::string::npos);
     CHECK(saved.find("\"max\": 32") != std::string::npos);
 

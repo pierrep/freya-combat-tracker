@@ -51,6 +51,7 @@ signals:
 
 private:
     void addCharacter();
+    void importPdf();
     void deleteSelected();
     void showSelected();
     void onNameEdited(const QString& text);
@@ -110,6 +111,8 @@ private:
     QListWidget* m_list = nullptr;
     QPushButton* m_addButton = nullptr;
     QPushButton* m_deleteButton = nullptr;
+    QPushButton* m_importButton = nullptr;
+    QLabel* m_importLabel = nullptr;
     QWidget* m_form = nullptr;
     QLabel* m_emptyHint = nullptr;
     QLabel* m_nameError = nullptr;
