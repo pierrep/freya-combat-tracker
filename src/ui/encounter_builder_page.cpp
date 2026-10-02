@@ -76,8 +76,11 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     auto* listButtons = new QHBoxLayout;
     m_addEncounterButton = new QPushButton(tr("Add"));
     m_deleteEncounterButton = new QPushButton(tr("Delete"));
+    m_resetEncounterButton = new QPushButton(tr("Reset"));
+    m_resetEncounterButton->setObjectName(QStringLiteral("resetEncounter"));
     listButtons->addWidget(m_addEncounterButton);
     listButtons->addWidget(m_deleteEncounterButton);
+    listButtons->addWidget(m_resetEncounterButton);
     left->addLayout(listButtons);
     columns->addLayout(left);
 
@@ -154,6 +157,7 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     connect(m_encounterList, &QListWidget::currentRowChanged, this, &EncounterBuilderPage::showEncounter);
     connect(m_addEncounterButton, &QPushButton::clicked, this, &EncounterBuilderPage::addEncounter);
     connect(m_deleteEncounterButton, &QPushButton::clicked, this, &EncounterBuilderPage::deleteEncounter);
+    connect(m_resetEncounterButton, &QPushButton::clicked, this, &EncounterBuilderPage::resetEncounter);
     connect(m_encounterName, &QLineEdit::textEdited, this, &EncounterBuilderPage::onEncounterNameEdited);
     connect(m_encounterName, &QLineEdit::editingFinished, this, &EncounterBuilderPage::onEncounterNameEditingFinished);
     connect(m_addCharacterButton, &QPushButton::clicked, this, &EncounterBuilderPage::addCharacter);
@@ -168,6 +172,7 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
         m_encounterList->setEnabled(false);
         m_addEncounterButton->setEnabled(false);
         m_deleteEncounterButton->setEnabled(false);
+        m_resetEncounterButton->setEnabled(false);
         m_emptyHint->hide();
         m_editor->hide();
         return;
@@ -334,11 +339,23 @@ void EncounterBuilderPage::deleteEncounter()
     showEncounter();
 }
 
+void EncounterBuilderPage::resetEncounter()
+{
+    Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr || hasLoadError()) {
+        return;
+    }
+    resetMonsterHitPoints(*encounter);
+    persist();
+    rebuildRoster();
+}
+
 void EncounterBuilderPage::showEncounter()
 {
     Encounter* encounter = selectedEncounter();
     const bool canEdit = encounter != nullptr && !hasLoadError();
     m_deleteEncounterButton->setEnabled(canEdit);
+    m_resetEncounterButton->setEnabled(canEdit);
     m_editor->setVisible(canEdit);
     m_emptyHint->setVisible(encounter == nullptr && !hasLoadError());
     const bool canAddCharacter = canEdit && m_characterLoadError.isEmpty() && !m_characters.empty();

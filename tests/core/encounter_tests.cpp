@@ -285,6 +285,62 @@ TEST_CASE("a character combatant copies hp and ac and is not given a bonus")
     CHECK(!combatant.initiativeBonus.has_value());
 }
 
+TEST_CASE("reset restores monster hp and a later encounter copies the carried character hp")
+{
+    Character aria;
+    aria.id = "aria";
+    aria.name = "Aria";
+    aria.hp.current = 30;
+    aria.hp.max = 30;
+    aria.ac = 16;
+
+    Monster monster;
+    monster.id = "goblin-warrior";
+    monster.name = "Goblin Warrior";
+    monster.hp = 10;
+    monster.ac = 15;
+
+    Encounter first;
+    first.id = "fight-1";
+    first.name = "First";
+    first.combatants.push_back(makeCharacterCombatant(aria, "aria-row"));
+    first.combatants.push_back(makeMonsterCombatant(monster, first.combatants, "goblin-row"));
+    first.combatants[0].hp = 12;
+    first.combatants[1].hp = 3;
+
+    std::vector<Character> roster{aria};
+    CHECK(carryCharacterHitPoints(roster, first.combatants[0]));
+    CHECK_EQ(roster[0].hp.current, 12);
+    CHECK_EQ(roster[0].hp.max, 30);
+    CHECK(!carryCharacterHitPoints(roster, first.combatants[1]));
+    CHECK_EQ(roster[0].hp.current, 12);
+
+    Encounter second;
+    second.combatants.push_back(makeCharacterCombatant(roster[0], "aria-again"));
+    CHECK_EQ(second.combatants[0].hp, 12);
+    CHECK(second.combatants[0].maxHp.has_value());
+    CHECK_EQ(*second.combatants[0].maxHp, 30);
+
+    resetMonsterHitPoints(first);
+    CHECK_EQ(first.combatants[1].hp, 10);
+    CHECK_EQ(*first.combatants[1].maxHp, 10);
+    CHECK_EQ(first.combatants[0].hp, 12);
+    CHECK_EQ(roster[0].hp.current, 12);
+
+    Combatant legacy;
+    legacy.source = kCombatantSourceMonster;
+    legacy.hp = 4;
+    Encounter oldFight;
+    oldFight.combatants.push_back(legacy);
+    resetMonsterHitPoints(oldFight);
+    CHECK_EQ(oldFight.combatants[0].hp, 4);
+
+    Combatant missing = first.combatants[0];
+    missing.sourceId = "not-on-the-roster";
+    CHECK(!carryCharacterHitPoints(roster, missing));
+    CHECK_EQ(roster[0].hp.current, 12);
+}
+
 TEST_CASE("encounter checks reject a blank name, a bad turn, and a character bonus")
 {
     Encounter encounter = fightWith({fighter("a", "Aria", 1)});

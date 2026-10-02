@@ -671,6 +671,9 @@ void CombatPage::onHpChanged(int value)
         return;
     }
     combatant->hp = value;
+    if (carryCharacterHitPoints(m_characters, *combatant)) {
+        saveCharacters();
+    }
     updateCombatantItemText(m_combatantList->currentRow());
     persist();
 }
@@ -745,6 +748,9 @@ void CombatPage::applySelectedDamage()
     if (!applyDamage(*combatant, m_damageAmount->value())) {
         return;
     }
+    if (carryCharacterHitPoints(m_characters, *combatant)) {
+        saveCharacters();
+    }
     m_damageAmount->setValue(0);
     const std::string id = combatant->id;
     rebuildCombatantList(id);
@@ -759,6 +765,9 @@ void CombatPage::applySelectedHealing()
     }
     if (!applyHealing(*combatant, m_healAmount->value())) {
         return;
+    }
+    if (carryCharacterHitPoints(m_characters, *combatant)) {
+        saveCharacters();
     }
     m_healAmount->setValue(0);
     const std::string id = combatant->id;

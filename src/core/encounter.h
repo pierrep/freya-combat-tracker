@@ -13,9 +13,11 @@ namespace combat {
 inline constexpr const char* kCombatantSourceCharacter = "character";
 inline constexpr const char* kCombatantSourceMonster = "monster";
 
-// One row in a fight. HP, AC, and a monster's initiative bonus are copies taken
-// when the combatant was added. Later edits to the sheet or the monster do not
-// change this row, and edits here do not write back.
+// One row in a fight. AC, temporary HP, maximum HP, and a monster's initiative
+// bonus are copies taken when the combatant was added. A character's current
+// HP is the same number as the sheet: edits here write that number back, and
+// the next encounter copies it. Monster hit points stay on this row. Later
+// edits to the monster catalog do not change this row.
 struct Combatant {
     std::string id;
     std::string source;
@@ -68,6 +70,16 @@ std::string nextMonsterCopyName(const std::string& monsterName, const std::strin
 Combatant makeCharacterCombatant(const Character& character, const std::string& combatantId);
 Combatant makeMonsterCombatant(const Monster& monster, const std::vector<Combatant>& existing,
                                const std::string& combatantId);
+
+// Sets each monster's current HP to the maximum stored on that row. A monster
+// with no stored maximum is left as it is. Characters, temporary HP,
+// conditions, and initiative are unchanged. The monster catalog is not read.
+void resetMonsterHitPoints(Encounter& encounter);
+
+// Writes a character combatant's current HP onto the matching sheet. Returns
+// false for a monster, or when no roster row has that source id. Maximum HP
+// and temporary HP on the sheet are left alone.
+bool carryCharacterHitPoints(std::vector<Character>& characters, const Combatant& combatant);
 
 // Highest initiative first. Equal initiatives keep their previous order.
 // Returns the new index of the combatant who was at activeIndex. An empty list

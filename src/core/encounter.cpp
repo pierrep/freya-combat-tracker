@@ -155,6 +155,31 @@ Combatant makeCharacterCombatant(const Character& character, const std::string& 
     return combatant;
 }
 
+void resetMonsterHitPoints(Encounter& encounter)
+{
+    for (Combatant& combatant : encounter.combatants) {
+        if (!isMonsterCombatant(combatant) || !combatant.maxHp.has_value()) {
+            continue;
+        }
+        combatant.hp = *combatant.maxHp;
+    }
+}
+
+bool carryCharacterHitPoints(std::vector<Character>& characters, const Combatant& combatant)
+{
+    if (combatant.source != kCombatantSourceCharacter) {
+        return false;
+    }
+    for (Character& character : characters) {
+        if (character.id != combatant.sourceId) {
+            continue;
+        }
+        character.hp.current = combatant.hp;
+        return true;
+    }
+    return false;
+}
+
 Combatant makeMonsterCombatant(const Monster& monster, const std::vector<Combatant>& existing,
                                const std::string& combatantId)
 {

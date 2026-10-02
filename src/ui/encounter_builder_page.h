@@ -45,6 +45,7 @@ private:
     void refreshMonsterChoices();
     void addEncounter();
     void deleteEncounter();
+    void resetEncounter();
     void showEncounter();
     void onEncounterNameEdited(const QString& text);
     void onEncounterNameEditingFinished();
@@ -68,6 +69,7 @@ private:
     QListWidget* m_encounterList = nullptr;
     QPushButton* m_addEncounterButton = nullptr;
     QPushButton* m_deleteEncounterButton = nullptr;
+    QPushButton* m_resetEncounterButton = nullptr;
     QWidget* m_editor = nullptr;
     QLabel* m_emptyHint = nullptr;
     QLineEdit* m_encounterName = nullptr;
