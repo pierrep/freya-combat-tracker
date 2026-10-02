@@ -109,7 +109,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     fightLayout->setSpacing(12);
 
     auto* hpNote = new QLabel(tr("Hit points, temporary HP, conditions, concentration, and death saves in this fight "
-                                 "are a separate copy. Spell slots and Finish rest are saved on the character."));
+                                 "are kept with the encounter. Spell slots are saved on the character."));
     hpNote->setObjectName(QStringLiteral("fightHpNote"));
     hpNote->setWordWrap(true);
     fightLayout->addWidget(hpNote);
@@ -159,6 +159,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
 
     m_combatantForm = new QWidget;
     auto* form = new QFormLayout(m_combatantForm);
+    m_combatantFormLayout = form;
 
     m_damageAmount = makeNumberBox();
     m_damageAmount->setRange(0, std::numeric_limits<int>::max());
@@ -277,7 +278,9 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
 
     m_deathSuccessLabel = new QLabel(QStringLiteral("0"));
     m_deathFailureLabel = new QLabel(QStringLiteral("0"));
-    auto* deathRow = new QHBoxLayout;
+    m_deathSavesHost = new QWidget;
+    auto* deathRow = new QHBoxLayout(m_deathSavesHost);
+    deathRow->setContentsMargins(0, 0, 0, 0);
     auto* successUp = new QPushButton(tr("Success +"));
     auto* successDown = new QPushButton(tr("Success -"));
     auto* failureUp = new QPushButton(tr("Failure +"));
@@ -292,7 +295,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     deathRow->addWidget(m_deathFailureLabel);
     deathRow->addWidget(failureUp);
     deathRow->addStretch(1);
-    form->addRow(tr("Death saves"), deathRow);
+    form->addRow(tr("Death saves"), m_deathSavesHost);
 
     m_derivedLabel = new QLabel;
     m_derivedLabel->setObjectName(QStringLiteral("derivedModifiers"));
@@ -303,9 +306,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_slotLayout = new QVBoxLayout(m_slotHost);
     m_slotLayout->setContentsMargins(0, 0, 0, 0);
     form->addRow(tr("Spell slots"), m_slotHost);
-    m_restButton = new QPushButton(tr("Finish rest"));
-    m_restButton->setObjectName(QStringLiteral("finishRest"));
-    form->addRow(QString(), m_restButton);
 
     fightLayout->addWidget(m_combatantForm);
 
@@ -340,7 +340,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(successDown, &QPushButton::clicked, this, [this] { adjustSelectedDeathSave(true, -1); });
     connect(failureUp, &QPushButton::clicked, this, [this] { adjustSelectedDeathSave(false, 1); });
     connect(failureDown, &QPushButton::clicked, this, [this] { adjustSelectedDeathSave(false, -1); });
-    connect(m_restButton, &QPushButton::clicked, this, &CombatPage::restSelectedCharacter);
     connect(m_rollAllButton, &QPushButton::clicked, this, &CombatPage::rollAll);
     connect(m_rerollButton, &QPushButton::clicked, this, &CombatPage::rerollSelected);
     connect(m_moveUpButton, &QPushButton::clicked, this, [this] { moveSelected(-1); });
@@ -571,7 +570,7 @@ void CombatPage::showCombatant()
     if (m_populating) {
         return;
     }
-    const Combatant* combatant = selectedCombatant();
+    Combatant* combatant = selectedCombatant();
     const Encounter* encounter = selectedEncounter();
     m_combatantForm->setVisible(combatant != nullptr);
     m_noCombatantHint->setVisible(encounter != nullptr && combatant == nullptr);
@@ -580,6 +579,7 @@ void CombatPage::showCombatant()
     m_moveUpButton->setEnabled(combatant != nullptr && row > 0);
     m_moveDownButton->setEnabled(combatant != nullptr && row >= 0 && row + 1 < count);
     m_removeButton->setEnabled(combatant != nullptr);
+    setCharacterSheetControlsVisible(combatant != nullptr && !isMonsterCombatant(*combatant));
     if (combatant == nullptr) {
         m_rerollButton->setEnabled(false);
         showAttacks();
@@ -601,6 +601,8 @@ void CombatPage::showCombatant()
     }
     m_initiative->setValue(combatant->initiative);
     m_acLabel->setText(QString::number(combatant->ac));
+    const int hpBefore = combatant->hp;
+    clampAndCarryHitPoints(*combatant);
     m_hp->setValue(combatant->hp);
     m_tempHp->setValue(combatant->tempHp);
     if (combatant->maxHp.has_value()) {
@@ -639,6 +641,10 @@ void CombatPage::showCombatant()
     m_deathSuccessLabel->setText(QString::number(combatant->deathSaves.successes));
     m_deathFailureLabel->setText(QString::number(combatant->deathSaves.failures));
     m_populating = false;
+    if (combatant->hp != hpBefore) {
+        updateCombatantItemText(m_combatantList->currentRow());
+        persist();
+    }
     showAttacks();
     showConditionText();
     updateDerivedModifiers();
@@ -676,8 +682,10 @@ void CombatPage::onHpChanged(int value)
         return;
     }
     combatant->hp = value;
-    if (carryCharacterHitPoints(m_characters, *combatant)) {
-        saveCharacters();
+    clampAndCarryHitPoints(*combatant);
+    if (m_hp->value() != combatant->hp) {
+        const QSignalBlocker blocker(m_hp);
+        m_hp->setValue(combatant->hp);
     }
     updateCombatantItemText(m_combatantList->currentRow());
     persist();
@@ -713,6 +721,30 @@ void CombatPage::saveCharacters()
         m_charactersStore.saveAll(m_characters);
     } catch (const CharacterStoreError& error) {
         QMessageBox::warning(this, tr("Could not save characters"), QString::fromStdString(error.what()));
+    }
+}
+
+void CombatPage::setCharacterSheetControlsVisible(bool visible)
+{
+    if (m_combatantFormLayout == nullptr) {
+        return;
+    }
+    m_combatantFormLayout->setRowVisible(m_deathSavesHost, visible);
+    m_combatantFormLayout->setRowVisible(m_derivedLabel, visible);
+    m_combatantFormLayout->setRowVisible(m_slotHost, visible);
+}
+
+void CombatPage::clampAndCarryHitPoints(Combatant& combatant)
+{
+    combatant.hp = cappedHitPoints(combatant.hp, combatant.maxHp);
+    Character* character = characterFor(combatant);
+    const int sheetBefore = character == nullptr ? 0 : character->hp.current;
+    if (!carryCharacterHitPoints(m_characters, combatant) || character == nullptr) {
+        return;
+    }
+    combatant.hp = character->hp.current;
+    if (character->hp.current != sheetBefore) {
+        saveCharacters();
     }
 }
 
@@ -780,9 +812,7 @@ void CombatPage::applySelectedDamage()
     if (!applyDamage(*combatant, m_damageAmount->value())) {
         return;
     }
-    if (carryCharacterHitPoints(m_characters, *combatant)) {
-        saveCharacters();
-    }
+    clampAndCarryHitPoints(*combatant);
     m_damageAmount->setValue(0);
     const std::string id = combatant->id;
     rebuildCombatantList(id);
@@ -798,9 +828,7 @@ void CombatPage::applySelectedHealing()
     if (!applyHealing(*combatant, m_healAmount->value())) {
         return;
     }
-    if (carryCharacterHitPoints(m_characters, *combatant)) {
-        saveCharacters();
-    }
+    clampAndCarryHitPoints(*combatant);
     m_healAmount->setValue(0);
     const std::string id = combatant->id;
     rebuildCombatantList(id);
@@ -920,7 +948,6 @@ void CombatPage::rebuildSlotButtons()
         delete item;
     }
     const Combatant* combatant = selectedCombatant();
-    m_restButton->setEnabled(false);
     if (combatant == nullptr || isMonsterCombatant(*combatant)) {
         auto* note = new QLabel(tr("Spell slots are on a character sheet."));
         note->setWordWrap(true);
@@ -940,7 +967,6 @@ void CombatPage::rebuildSlotButtons()
         m_slotLayout->addWidget(note);
         return;
     }
-    m_restButton->setEnabled(true);
     for (const SpellSlot& slot : character->spellSlots) {
         auto* row = new QWidget;
         auto* layout = new QHBoxLayout(row);
@@ -976,21 +1002,6 @@ void CombatPage::spendSelectedSlot()
     // Rebuild after this click returns. The Spend button lives in the slot
     // layout, and rebuilding deletes it.
     QTimer::singleShot(0, this, [this] { rebuildSlotButtons(); });
-}
-
-void CombatPage::restSelectedCharacter()
-{
-    Combatant* combatant = selectedCombatant();
-    if (combatant == nullptr) {
-        return;
-    }
-    Character* character = characterFor(*combatant);
-    if (character == nullptr) {
-        return;
-    }
-    finishRest(*character);
-    saveCharacters();
-    rebuildSlotButtons();
 }
 
 void CombatPage::updateDerivedModifiers()

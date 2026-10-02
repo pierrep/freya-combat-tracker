@@ -71,10 +71,27 @@ TEST_CASE("healing does not pass the stored maximum or change temporary HP")
 
     combatant.maxHp = 10;
     CHECK(applyHealing(combatant, 3));
-    CHECK_EQ(combatant.hp, 16);
+    CHECK_EQ(combatant.hp, 10);
 
     CHECK(!applyHealing(combatant, -2));
-    CHECK_EQ(combatant.hp, 16);
+    CHECK_EQ(combatant.hp, 10);
+}
+
+TEST_CASE("healing and a typed hit point value both stop at the stored maximum")
+{
+    Combatant combatant;
+    combatant.hp = 28;
+    combatant.maxHp = 30;
+    CHECK(applyHealing(combatant, 5));
+    CHECK_EQ(combatant.hp, 30);
+    CHECK_EQ(cappedHitPoints(45, combatant.maxHp), 30);
+    combatant.hp = cappedHitPoints(45, combatant.maxHp);
+    CHECK_EQ(combatant.hp, 30);
+
+    combatant.maxHp.reset();
+    CHECK(applyHealing(combatant, 8));
+    CHECK_EQ(combatant.hp, 38);
+    CHECK_EQ(cappedHitPoints(50, std::nullopt), 50);
 }
 
 TEST_CASE("conditions are unique ids and concentration is set by the user")

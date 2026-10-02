@@ -1,5 +1,7 @@
 #include "core/encounter.h"
 
+#include "core/combat_rules.h"
+
 #include <algorithm>
 #include <cctype>
 #include <limits>
@@ -148,8 +150,8 @@ Combatant makeCharacterCombatant(const Character& character, const std::string& 
     combatant.sourceId = character.id;
     combatant.name = character.name;
     combatant.initiative = 0;
-    combatant.hp = character.hp.current;
     combatant.maxHp = character.hp.max;
+    combatant.hp = cappedHitPoints(character.hp.current, combatant.maxHp);
     combatant.tempHp = character.tempHp;
     combatant.ac = character.ac;
     return combatant;
@@ -174,7 +176,7 @@ bool carryCharacterHitPoints(std::vector<Character>& characters, const Combatant
         if (character.id != combatant.sourceId) {
             continue;
         }
-        character.hp.current = combatant.hp;
+        character.hp.current = cappedHitPoints(combatant.hp, character.hp.max);
         return true;
     }
     return false;

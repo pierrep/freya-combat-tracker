@@ -1,6 +1,7 @@
 #include "ui/characters_page.h"
 
 #include "core/character_store.h"
+#include "core/combat_rules.h"
 #include "core/uuid.h"
 #include "data/pdf_import.h"
 #include "ui/page_title.h"
@@ -151,12 +152,6 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
     auto* formLayout = new QVBoxLayout(m_form);
     formLayout->setContentsMargins(0, 0, 0, 0);
     formLayout->setSpacing(12);
-
-    m_importLabel = new QLabel;
-    m_importLabel->setObjectName(QStringLiteral("importSource"));
-    m_importLabel->setWordWrap(true);
-    m_importLabel->hide();
-    formLayout->addWidget(m_importLabel);
 
     auto* basics = new QFormLayout;
     m_name = new QLineEdit;
@@ -655,14 +650,6 @@ void CharactersPage::showSelected()
     m_populating = true;
     m_name->setText(QString::fromStdString(character->name));
     m_nameError->hide();
-    if (character->external.has_value()) {
-        const QString fileName = QString::fromStdString(character->external->fileName);
-        m_importLabel->setText(fileName.isEmpty() ? tr("Imported from a PDF.")
-                                                  : tr("Imported from a PDF (%1).").arg(fileName));
-        m_importLabel->show();
-    } else {
-        m_importLabel->hide();
-    }
     m_species->setCurrentText(QString::fromStdString(character->species));
     const bool knownSpecies = character->species.empty() ||
                               std::find(m_speciesNames.begin(), m_speciesNames.end(), character->species) !=
@@ -740,8 +727,12 @@ void CharactersPage::onNumberChanged()
     if (m_populating || character == nullptr) {
         return;
     }
-    character->hp.current = m_hpCurrent->value();
     character->hp.max = m_hpMax->value();
+    character->hp.current = cappedHitPoints(m_hpCurrent->value(), character->hp.max);
+    if (m_hpCurrent->value() != character->hp.current) {
+        const QSignalBlocker blocker(m_hpCurrent);
+        m_hpCurrent->setValue(character->hp.current);
+    }
     character->tempHp = m_tempHp->value();
     character->ac = m_ac->value();
     character->initiativeBonus = m_initiative->value();

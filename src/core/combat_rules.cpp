@@ -42,15 +42,20 @@ bool applyHealing(Combatant& combatant, int amount)
     if (amount < 0) {
         return false;
     }
-    if (combatant.maxHp.has_value() && combatant.hp >= *combatant.maxHp) {
-        return true;
-    }
     long long next = static_cast<long long>(combatant.hp) + amount;
     if (combatant.maxHp.has_value()) {
         next = std::min(next, static_cast<long long>(*combatant.maxHp));
     }
     combatant.hp = clampToInt(next);
     return true;
+}
+
+int cappedHitPoints(int current, std::optional<int> maximum)
+{
+    if (!maximum.has_value() || current <= *maximum) {
+        return current;
+    }
+    return *maximum;
 }
 
 bool addCondition(Combatant& combatant, const std::string& conditionId)

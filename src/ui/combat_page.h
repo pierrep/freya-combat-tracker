@@ -12,6 +12,7 @@
 #include <vector>
 
 class QComboBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -60,6 +61,8 @@ private:
     void applySelectedHealing();
     void showAttacks();
     void clearAttackRows();
+    void setCharacterSheetControlsVisible(bool visible);
+    void clampAndCarryHitPoints(Combatant& combatant);
     void addSelectedCondition();
     void removeListedCondition();
     void showConditionText();
@@ -68,7 +71,6 @@ private:
     void clearSelectedConcentration();
     void adjustSelectedDeathSave(bool success, int delta);
     void spendSelectedSlot();
-    void restSelectedCharacter();
     void rebuildSlotButtons();
     void updateDerivedModifiers();
     Character* characterFor(const Combatant& combatant);
@@ -109,6 +111,8 @@ private:
     QLabel* m_rollNote = nullptr;
     QListWidget* m_combatantList = nullptr;
     QWidget* m_combatantForm = nullptr;
+    QFormLayout* m_combatantFormLayout = nullptr;
+    QWidget* m_deathSavesHost = nullptr;
     QLabel* m_noCombatantHint = nullptr;
     QWidget* m_attacksSection = nullptr;
     QVBoxLayout* m_attackRows = nullptr;
@@ -133,7 +137,6 @@ private:
     QLabel* m_deathFailureLabel = nullptr;
     QWidget* m_slotHost = nullptr;
     QVBoxLayout* m_slotLayout = nullptr;
-    QPushButton* m_restButton = nullptr;
     QLabel* m_derivedLabel = nullptr;
     QPushButton* m_moveUpButton = nullptr;
     QPushButton* m_moveDownButton = nullptr;

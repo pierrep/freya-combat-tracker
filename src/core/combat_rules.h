@@ -11,10 +11,13 @@ namespace combat {
 bool applyDamage(Combatant& combatant, int amount);
 
 // Healing raises current HP and does not change temporary HP. When a maximum
-// is stored, current HP is not raised above it. A current HP already above
-// that maximum is left as it is. Returns false, and changes nothing, when
-// amount is negative.
+// is stored, current HP is brought down to it if it is already higher, and is
+// not raised above it. No maximum is invented. Returns false, and changes
+// nothing, when amount is negative.
 bool applyHealing(Combatant& combatant, int amount);
+
+// A typed current HP. When maximum is empty, current is returned unchanged.
+int cappedHitPoints(int current, std::optional<int> maximum);
 
 // Conditions are ids. An empty id or a duplicate is refused.
 bool addCondition(Combatant& combatant, const std::string& conditionId);
