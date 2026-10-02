@@ -59,6 +59,7 @@ private:
     void applySelectedDamage();
     void applySelectedHealing();
     void showAttacks();
+    void clearAttackRows();
     void addSelectedCondition();
     void removeListedCondition();
     void showConditionText();
@@ -109,10 +110,8 @@ private:
     QListWidget* m_combatantList = nullptr;
     QWidget* m_combatantForm = nullptr;
     QLabel* m_noCombatantHint = nullptr;
-    QLabel* m_combatantName = nullptr;
-    QLabel* m_combatantSource = nullptr;
     QWidget* m_attacksSection = nullptr;
-    QLabel* m_attacks = nullptr;
+    QVBoxLayout* m_attackRows = nullptr;
     QSpinBox* m_initiative = nullptr;
     QLabel* m_bonusLabel = nullptr;
     QPushButton* m_rerollButton = nullptr;

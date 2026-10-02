@@ -1,7 +1,9 @@
+#include "core/attack_damage.h"
 #include "core/monster_catalog.h"
 #include "data/json_monsters.h"
 #include "test_harness.h"
 
+#include <optional>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -243,6 +245,32 @@ TEST_CASE("an SRD monster exposes its attacks, including a multiattack count")
         CHECK_EQ(rend->count, 3);
         CHECK(rend->effect.find("2d10 + 6") != std::string::npos);
         CHECK(rend->effect.find("Fire") != std::string::npos);
+        const std::optional<int> rolled = rollAttackDamage(rend->effect, [](int) { return 1; });
+        CHECK(rolled.has_value());
+        CHECK_EQ(*rolled, 1 + 1 + 6 + 1);
+    }
+
+    const MonsterAttack* sleep = nullptr;
+    const MonsterAttack* breath = nullptr;
+    for (const MonsterAttack& attack : dragon->attacks) {
+        if (attack.name == "Sleep Breath") {
+            sleep = &attack;
+        } else if (attack.name == "Fire Breath (Recharge 5–6)") {
+            breath = &attack;
+        }
+    }
+    CHECK(sleep != nullptr);
+    CHECK(breath != nullptr);
+    if (sleep != nullptr) {
+        CHECK(damageExpressions(sleep->effect).empty());
+    }
+    if (breath != nullptr) {
+        const std::vector<DamageExpression> dice = damageExpressions(breath->effect);
+        CHECK_EQ(dice.size(), std::size_t{1});
+        CHECK_EQ(dice[0], (DamageExpression{10, 8, 0}));
+    }
+    if (multiattack != nullptr) {
+        CHECK(damageExpressions(multiattack->effect).empty());
     }
 }
 

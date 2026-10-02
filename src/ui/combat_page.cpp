@@ -1,5 +1,6 @@
 #include "ui/combat_page.h"
 
+#include "core/attack_damage.h"
 #include "core/character_store.h"
 #include "core/combat_rules.h"
 #include "core/encounter_store.h"
@@ -29,6 +30,17 @@
 namespace combat::ui {
 
 namespace {
+
+void clearLayout(QLayout* layout)
+{
+    if (layout == nullptr) {
+        return;
+    }
+    while (QLayoutItem* item = layout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+}
 
 QSpinBox* makeNumberBox()
 {
@@ -176,12 +188,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     divider->setFrameShadow(QFrame::Sunken);
     form->addRow(divider);
 
-    m_combatantName = new QLabel;
-    m_combatantName->setObjectName(QStringLiteral("combatantName"));
-    form->addRow(tr("Name"), m_combatantName);
-    m_combatantSource = new QLabel;
-    form->addRow(tr("From"), m_combatantSource);
-
     m_attacksSection = new QWidget;
     m_attacksSection->setObjectName(QStringLiteral("combatantAttacks"));
     auto* attacksLayout = new QVBoxLayout(m_attacksSection);
@@ -191,11 +197,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     QFont attacksFont = attacksHeading->font();
     attacksFont.setBold(true);
     attacksHeading->setFont(attacksFont);
-    m_attacks = new QLabel;
-    m_attacks->setWordWrap(true);
-    m_attacks->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_attackRows = new QVBoxLayout;
+    m_attackRows->setContentsMargins(0, 0, 0, 0);
+    m_attackRows->setSpacing(8);
     attacksLayout->addWidget(attacksHeading);
-    attacksLayout->addWidget(m_attacks);
+    attacksLayout->addLayout(m_attackRows);
     form->addRow(m_attacksSection);
 
     m_initiative = makeNumberBox();
@@ -581,9 +587,7 @@ void CombatPage::showCombatant()
     }
 
     m_populating = true;
-    m_combatantName->setText(QString::fromStdString(combatant->name));
     if (isMonsterCombatant(*combatant)) {
-        m_combatantSource->setText(tr("Monster"));
         m_rerollButton->setEnabled(true);
         if (combatant->initiativeBonus.has_value()) {
             m_bonusLabel->setText(tr("Initiative bonus %1")
@@ -592,7 +596,6 @@ void CombatPage::showCombatant()
             m_bonusLabel->setText(tr("The initiative bonus was missing. Rolls use +0."));
         }
     } else {
-        m_combatantSource->setText(tr("Character"));
         m_rerollButton->setEnabled(false);
         m_bonusLabel->setText(tr("Type this character's initiative. Characters are not rolled."));
     }
@@ -713,8 +716,14 @@ void CombatPage::saveCharacters()
     }
 }
 
+void CombatPage::clearAttackRows()
+{
+    clearLayout(m_attackRows);
+}
+
 void CombatPage::showAttacks()
 {
+    clearAttackRows();
     const Encounter* encounter = selectedEncounter();
     const Combatant* turn = nullptr;
     if (encounter != nullptr && encounter->turnIndex >= 0 &&
@@ -725,21 +734,41 @@ void CombatPage::showAttacks()
     const bool monster = turn != nullptr && selected == turn && isMonsterCombatant(*turn);
     m_attacksSection->setVisible(monster);
     if (!monster) {
-        m_attacks->clear();
         return;
     }
     const std::optional<Monster> lookedUp = m_catalog.findById(turn->sourceId);
     if (!lookedUp.has_value() || lookedUp->attacks.empty()) {
-        m_attacks->setText(tr("No attacks are stored for this monster."));
+        auto* empty = new QLabel(tr("No attacks are stored for this monster."));
+        empty->setWordWrap(true);
+        m_attackRows->addWidget(empty);
         return;
     }
-    QStringList lines;
     for (const MonsterAttack& attack : lookedUp->attacks) {
-        lines << tr("%1 × %2").arg(QString::fromStdString(attack.name)).arg(attack.count);
-        lines << QString::fromStdString(attack.effect);
-        lines << QString();
+        const QString title = tr("%1 × %2").arg(QString::fromStdString(attack.name)).arg(attack.count);
+        if (damageExpressions(attack.effect).empty()) {
+            auto* name = new QLabel(title);
+            name->setWordWrap(true);
+            m_attackRows->addWidget(name);
+        } else {
+            auto* button = new QPushButton(title);
+            button->setObjectName(QStringLiteral("rollAttackDamage"));
+            const std::string effect = attack.effect;
+            connect(button, &QPushButton::clicked, this, [this, effect] {
+                const std::optional<int> total = rollAttackDamage(effect, [this](int sides) {
+                    std::uniform_int_distribution<int> face(1, sides);
+                    return face(m_dice);
+                });
+                if (total.has_value()) {
+                    m_damageAmount->setValue(*total);
+                }
+            });
+            m_attackRows->addWidget(button);
+        }
+        auto* effectLabel = new QLabel(QString::fromStdString(attack.effect));
+        effectLabel->setWordWrap(true);
+        effectLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        m_attackRows->addWidget(effectLabel);
     }
-    m_attacks->setText(lines.join(QStringLiteral("\n")).trimmed());
 }
 
 void CombatPage::applySelectedDamage()

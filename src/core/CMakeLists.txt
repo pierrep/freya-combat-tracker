@@ -1,4 +1,5 @@
 add_library(combat_core STATIC
+    attack_damage.cpp
     character.cpp
     uuid.cpp
     monster.cpp
