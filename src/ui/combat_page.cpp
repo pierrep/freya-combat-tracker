@@ -230,9 +230,25 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_undoButton = new QPushButton(tr("Undo"));
     m_undoButton->setObjectName(QStringLiteral("undoFight"));
     m_undoButton->setEnabled(false);
+    m_damageAmount = makeNumberBox();
+    m_damageAmount->setRange(0, std::numeric_limits<int>::max());
+    m_damageAmount->setValue(0);
+    m_damageButton = new QPushButton(tr("Apply damage to the selected combatant"));
+    m_damageButton->setObjectName(QStringLiteral("applyDamage"));
+    m_healAmount = makeNumberBox();
+    m_healAmount->setRange(0, std::numeric_limits<int>::max());
+    m_healAmount->setValue(0);
+    m_healButton = new QPushButton(tr("Apply healing to the selected combatant"));
+    m_healButton->setObjectName(QStringLiteral("applyHealing"));
     turnButtons->addWidget(m_previousTurnButton);
     turnButtons->addWidget(m_nextTurnButton);
     turnButtons->addWidget(m_undoButton);
+    turnButtons->addSpacing(24);
+    turnButtons->addWidget(m_damageAmount);
+    turnButtons->addWidget(m_damageButton);
+    turnButtons->addSpacing(16);
+    turnButtons->addWidget(m_healAmount);
+    turnButtons->addWidget(m_healButton);
     turnButtons->addStretch(1);
     fightLayout->addLayout(turnButtons);
 
@@ -261,34 +277,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_combatantForm = new QWidget;
     auto* form = new QFormLayout(m_combatantForm);
     m_combatantFormLayout = form;
-
-    m_damageAmount = makeNumberBox();
-    m_damageAmount->setRange(0, std::numeric_limits<int>::max());
-    m_damageAmount->setValue(0);
-    m_damageButton = new QPushButton(tr("Apply damage to the selected combatant"));
-    m_damageButton->setObjectName(QStringLiteral("applyDamage"));
-    auto* damageRow = new QHBoxLayout;
-    damageRow->addWidget(m_damageAmount);
-    damageRow->addWidget(m_damageButton);
-    damageRow->addStretch(1);
-    form->addRow(tr("Damage"), damageRow);
-
-    m_healAmount = makeNumberBox();
-    m_healAmount->setRange(0, std::numeric_limits<int>::max());
-    m_healAmount->setValue(0);
-    m_healButton = new QPushButton(tr("Apply healing to the selected combatant"));
-    m_healButton->setObjectName(QStringLiteral("applyHealing"));
-    auto* healRow = new QHBoxLayout;
-    healRow->addWidget(m_healAmount);
-    healRow->addWidget(m_healButton);
-    healRow->addStretch(1);
-    form->addRow(tr("Healing"), healRow);
-
-    auto* divider = new QFrame;
-    divider->setObjectName(QStringLiteral("combatantDivider"));
-    divider->setFrameShape(QFrame::HLine);
-    divider->setFrameShadow(QFrame::Sunken);
-    form->addRow(divider);
 
     m_attacksSection = new QWidget;
     m_attacksSection->setObjectName(QStringLiteral("combatantAttacks"));
