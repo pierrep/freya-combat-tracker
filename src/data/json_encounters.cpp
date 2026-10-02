@@ -73,7 +73,40 @@ void throwProblems(const std::vector<std::string>& problems, const std::string& 
     }
 }
 
-Combatant combatantFromJson(const json& value, std::size_t index)
+void readBookkeeping(Combatant& combatant, const json& value, const std::string& context, int schemaVersion)
+{
+    if (schemaVersion == 1) {
+        return;
+    }
+    combatant.tempHp = readInt(value, "tempHp", context);
+    const json& maxHp = requireField(value, "maxHp", context);
+    if (maxHp.is_null()) {
+        combatant.maxHp = std::nullopt;
+    } else {
+        combatant.maxHp = integerFromJson(maxHp, "maxHp", context);
+    }
+
+    const json& conditions = requireField(value, "conditions", context);
+    if (!conditions.is_array()) {
+        throw EncounterStoreError(context + ": field \"conditions\" must be an array.");
+    }
+    for (std::size_t i = 0; i < conditions.size(); ++i) {
+        if (!conditions[i].is_string()) {
+            throw EncounterStoreError(context + " condition " + std::to_string(i + 1) + ": must be a string.");
+        }
+        combatant.conditions.push_back(conditions[i].get<std::string>());
+    }
+    combatant.concentration = readString(value, "concentration", context);
+    const json& deathSaves = requireField(value, "deathSaves", context);
+    if (!deathSaves.is_object()) {
+        throw EncounterStoreError(context + ": field \"deathSaves\" must be an object.");
+    }
+    const std::string deathContext = context + " deathSaves";
+    combatant.deathSaves.successes = readInt(deathSaves, "successes", deathContext);
+    combatant.deathSaves.failures = readInt(deathSaves, "failures", deathContext);
+}
+
+Combatant combatantFromJson(const json& value, std::size_t index, int schemaVersion)
 {
     const std::string context = "Combatant " + std::to_string(index + 1);
     if (!value.is_object()) {
@@ -94,6 +127,7 @@ Combatant combatantFromJson(const json& value, std::size_t index)
     }
     combatant.hp = readInt(value, "hp", context);
     combatant.ac = readInt(value, "ac", context);
+    readBookkeeping(combatant, value, context, schemaVersion);
     throwProblems(validateCombatant(combatant), context);
     return combatant;
 }
@@ -111,11 +145,27 @@ json combatantToJson(const Combatant& combatant)
         value["initiativeBonus"] = *combatant.initiativeBonus;
     }
     value["hp"] = combatant.hp;
+    if (combatant.maxHp.has_value()) {
+        value["maxHp"] = *combatant.maxHp;
+    } else {
+        value["maxHp"] = nullptr;
+    }
+    value["tempHp"] = combatant.tempHp;
     value["ac"] = combatant.ac;
+    json conditions = json::array();
+    for (const std::string& id : combatant.conditions) {
+        conditions.push_back(id);
+    }
+    value["conditions"] = std::move(conditions);
+    value["concentration"] = combatant.concentration;
+    value["deathSaves"] = {
+        {"successes", combatant.deathSaves.successes},
+        {"failures", combatant.deathSaves.failures},
+    };
     return value;
 }
 
-Encounter encounterFromJson(const json& value, std::size_t index)
+Encounter encounterFromJson(const json& value, std::size_t index, int schemaVersion)
 {
     const std::string context = "Encounter " + std::to_string(index + 1);
     if (!value.is_object()) {
@@ -134,7 +184,7 @@ Encounter encounterFromJson(const json& value, std::size_t index)
     }
     encounter.combatants.reserve(list.size());
     for (std::size_t i = 0; i < list.size(); ++i) {
-        encounter.combatants.push_back(combatantFromJson(list[i], i));
+        encounter.combatants.push_back(combatantFromJson(list[i], i, schemaVersion));
     }
     throwProblems(validateEncounter(encounter), context);
     return encounter;
@@ -181,7 +231,7 @@ std::vector<Encounter> parseEncountersDocument(const std::string& text)
     }
     const std::string context = "Encounters file";
     const int version = readInt(document, "schemaVersion", context);
-    if (version != kEncounterSchemaVersion) {
+    if (version != 1 && version != kEncounterSchemaVersion) {
         throw EncounterStoreError("The encounters file has schemaVersion " + std::to_string(version) +
                                   ", which this version of the app cannot read.");
     }
@@ -194,7 +244,7 @@ std::vector<Encounter> parseEncountersDocument(const std::string& text)
     std::vector<Encounter> encounters;
     encounters.reserve(list.size());
     for (std::size_t i = 0; i < list.size(); ++i) {
-        encounters.push_back(encounterFromJson(list[i], i));
+        encounters.push_back(encounterFromJson(list[i], i, version));
     }
     rejectDuplicateEncounterIds(encounters);
     return encounters;

@@ -26,7 +26,16 @@ struct Combatant {
     // missing: rolls use +0, and the UI says so. Characters leave this empty.
     std::optional<int> initiativeBonus;
     int hp = 0;
+    // Empty when a version 1 fight did not store a maximum. Healing is not
+    // capped in that case. New combatants snapshot the maximum they had when
+    // they were added.
+    std::optional<int> maxHp;
+    int tempHp = 0;
     int ac = 10;
+    std::vector<std::string> conditions;
+    // An SRD spell id, or empty when the combatant is not concentrating.
+    std::string concentration;
+    DeathSaves deathSaves;
 
     bool operator==(const Combatant&) const = default;
 };

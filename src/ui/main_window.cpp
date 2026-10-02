@@ -40,7 +40,7 @@ MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, Cus
     m_pages->insertWidget(DashboardIndex, m_dashboard);
     m_pages->insertWidget(CharactersIndex, m_characters);
     m_pages->insertWidget(MonstersIndex, new MonstersPage(catalog, customStore, attribution, catalogError));
-    m_pages->insertWidget(CombatIndex, new CombatPage(store, catalog, encounters));
+    m_pages->insertWidget(CombatIndex, new CombatPage(store, catalog, encounters, spells, conditions));
 
     auto* central = new QWidget;
     auto* layout = new QHBoxLayout(central);

@@ -2,6 +2,7 @@
 
 #include "core/character.h"
 #include "core/encounter.h"
+#include "core/sheet.h"
 
 #include <QString>
 #include <QWidget>
@@ -17,6 +18,7 @@ class QListWidget;
 class QPushButton;
 class QSpinBox;
 class QShowEvent;
+class QVBoxLayout;
 
 namespace combat {
 class CharacterStore;
@@ -33,7 +35,7 @@ class CombatPage : public QWidget {
 
 public:
     CombatPage(CharacterStore& characters, MonsterCatalog& catalog, EncounterStore& encounters,
-               QWidget* parent = nullptr);
+               std::vector<Spell> spells, std::vector<Condition> conditions, QWidget* parent = nullptr);
 
     bool hasLoadError() const { return !m_loadError.isEmpty(); }
     QString loadError() const { return m_loadError; }
@@ -57,6 +59,23 @@ private:
     void onInitiativeChanged(int value);
     void onInitiativeEditingFinished();
     void onHpChanged(int value);
+    void onTempHpChanged(int value);
+    void applyActiveDamage();
+    void applyActiveHealing();
+    void addSelectedCondition();
+    void removeListedCondition();
+    void showConditionText();
+    void refreshConcentrationChoices(const QString& text);
+    void setSelectedConcentration();
+    void clearSelectedConcentration();
+    void adjustSelectedDeathSave(bool success, int delta);
+    void spendSelectedSlot();
+    void restSelectedCharacter();
+    void rebuildSlotButtons();
+    void updateDerivedModifiers();
+    Character* characterFor(const Combatant& combatant);
+    void saveCharacters();
+    Combatant* activeCombatant();
     void rollAll();
     void rerollSelected();
     void moveSelected(int direction);
@@ -76,6 +95,8 @@ private:
     EncounterStore& m_encountersStore;
     std::vector<Character> m_characters;
     std::vector<Encounter> m_encounters;
+    std::vector<Spell> m_spells;
+    std::vector<Condition> m_conditions;
     QString m_loadError;
     QString m_characterLoadError;
     std::mt19937 m_dice;
@@ -107,6 +128,25 @@ private:
     QPushButton* m_rerollButton = nullptr;
     QLabel* m_acLabel = nullptr;
     QSpinBox* m_hp = nullptr;
+    QLabel* m_maxHpLabel = nullptr;
+    QSpinBox* m_tempHp = nullptr;
+    QSpinBox* m_damageAmount = nullptr;
+    QPushButton* m_damageButton = nullptr;
+    QSpinBox* m_healAmount = nullptr;
+    QPushButton* m_healButton = nullptr;
+    QLabel* m_healNote = nullptr;
+    QComboBox* m_conditionPicker = nullptr;
+    QListWidget* m_conditionList = nullptr;
+    QLabel* m_conditionText = nullptr;
+    QLabel* m_concentrationLabel = nullptr;
+    QLineEdit* m_spellSearch = nullptr;
+    QListWidget* m_spellMatches = nullptr;
+    QLabel* m_deathSuccessLabel = nullptr;
+    QLabel* m_deathFailureLabel = nullptr;
+    QWidget* m_slotHost = nullptr;
+    QVBoxLayout* m_slotLayout = nullptr;
+    QPushButton* m_restButton = nullptr;
+    QLabel* m_derivedLabel = nullptr;
     QPushButton* m_moveUpButton = nullptr;
     QPushButton* m_moveDownButton = nullptr;
     QPushButton* m_removeButton = nullptr;

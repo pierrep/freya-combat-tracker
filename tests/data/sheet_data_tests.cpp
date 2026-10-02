@@ -46,6 +46,11 @@ TEST_CASE("packaged condition catalog loads the fifteen SRD conditions")
     CHECK(blinded.has_value());
     CHECK(blinded->description.find("Can't See") != std::string::npos);
     CHECK(blinded->description.find("Advantage") != std::string::npos);
+    CHECK_EQ(blinded->tags.size(), std::size_t{2});
+    CHECK(blinded->tags[0].find("Advantage") != std::string::npos);
+    CHECK(blinded->tags[0].find("Disadvantage") != std::string::npos);
+    CHECK(findConditionById(conditions, "charmed")->tags.empty());
+    CHECK(findConditionById(conditions, "frightened")->tags.empty());
     CHECK(findConditionById(conditions, "exhaustion").has_value());
     const auto listed = searchConditions(conditions, "");
     CHECK_EQ(listed.front().name, std::string("Blinded"));

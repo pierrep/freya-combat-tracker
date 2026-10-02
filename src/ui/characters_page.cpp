@@ -17,6 +17,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTimer>
@@ -414,6 +415,48 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
 int CharactersPage::count() const
 {
     return static_cast<int>(m_characters.size());
+}
+
+void CharactersPage::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    reloadRoster();
+}
+
+void CharactersPage::reloadRoster()
+{
+    if (hasLoadError() || m_list == nullptr) {
+        return;
+    }
+    std::vector<Character> loaded;
+    try {
+        loaded = m_store.loadAll();
+    } catch (const CharacterStoreError& error) {
+        QMessageBox::warning(this, tr("Could not read characters"), QString::fromStdString(error.what()));
+        return;
+    }
+    std::string selectedId;
+    if (const Character* character = selected()) {
+        selectedId = character->id;
+    }
+    const int previousCount = count();
+    m_characters = std::move(loaded);
+    m_list->clear();
+    int selectRow = m_characters.empty() ? -1 : 0;
+    for (int i = 0; i < count(); ++i) {
+        m_list->addItem(listLabel(m_characters[static_cast<std::size_t>(i)]));
+        if (m_characters[static_cast<std::size_t>(i)].id == selectedId) {
+            selectRow = i;
+        }
+    }
+    if (selectRow >= 0) {
+        m_list->setCurrentRow(selectRow);
+    } else {
+        showSelected();
+    }
+    if (count() != previousCount) {
+        emit countChanged(count());
+    }
 }
 
 QSpinBox* CharactersPage::makeNumberBox(int minimum, int maximum)

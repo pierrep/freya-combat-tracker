@@ -1,4 +1,4 @@
-add_executable(core_tests core/core_tests.cpp core/monster_tests.cpp core/encounter_tests.cpp core/sheet_tests.cpp)
+add_executable(core_tests core/core_tests.cpp core/monster_tests.cpp core/encounter_tests.cpp core/sheet_tests.cpp core/combat_rules_tests.cpp)
 target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(core_tests PRIVATE combat_core)
 combat_tracker_set_warnings(core_tests)

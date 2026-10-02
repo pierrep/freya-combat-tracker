@@ -6,6 +6,8 @@
 #include <QString>
 #include <QWidget>
 
+class QShowEvent;
+
 #include <random>
 #include <vector>
 
@@ -40,6 +42,9 @@ public:
     int count() const;
     bool hasLoadError() const { return !m_loadError.isEmpty(); }
     QString loadError() const { return m_loadError; }
+
+protected:
+    void showEvent(QShowEvent* event) override;
 
 signals:
     void countChanged(int count);
@@ -86,6 +91,7 @@ private:
     void removeSelectedCondition();
     void refreshConditions(int selectRow);
     void persist();
+    void reloadRoster();
     Character* selected();
     const Character* selected() const;
 

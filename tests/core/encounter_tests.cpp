@@ -278,6 +278,8 @@ TEST_CASE("a character combatant copies hp and ac and is not given a bonus")
     CHECK_EQ(combatant.sourceId, character.id);
     CHECK_EQ(combatant.name, std::string("Aria"));
     CHECK_EQ(combatant.hp, 32);
+    CHECK(combatant.maxHp.has_value());
+    CHECK_EQ(*combatant.maxHp, 40);
     CHECK_EQ(combatant.ac, 16);
     CHECK_EQ(combatant.initiative, 0);
     CHECK(!combatant.initiativeBonus.has_value());

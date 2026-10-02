@@ -83,11 +83,11 @@ json parseObject(const std::string& text, const char* what)
     return document;
 }
 
-void readCatalogHeader(const json& document, const char* what)
+void readCatalogHeader(const json& document, const char* what, int expectedVersion)
 {
     const std::string context = std::string(what) + " file";
     const int version = readInt(document, "schemaVersion", context);
-    if (version != kCatalogSchemaVersion) {
+    if (version != expectedVersion) {
         throw CatalogError(context + " has schemaVersion " + std::to_string(version) +
                             ", which this version of the app cannot read.");
     }
@@ -133,7 +133,7 @@ std::string readFile(const std::filesystem::path& path)
 std::vector<Spell> parseSpellCatalog(const std::string& text)
 {
     const json document = parseObject(text, "spell catalog");
-    readCatalogHeader(document, "Spell catalog");
+    readCatalogHeader(document, "Spell catalog", kCatalogSchemaVersion);
     const json& list = requireArray(document, "spells", "Spell catalog");
 
     std::vector<Spell> spells;
@@ -177,7 +177,7 @@ std::vector<Spell> loadSpellCatalog(const std::filesystem::path& path)
 std::vector<Condition> parseConditionCatalog(const std::string& text)
 {
     const json document = parseObject(text, "condition catalog");
-    readCatalogHeader(document, "Condition catalog");
+    readCatalogHeader(document, "Condition catalog", kConditionCatalogSchemaVersion);
     const json& list = requireArray(document, "conditions", "Condition catalog");
 
     std::vector<Condition> conditions;
@@ -193,6 +193,22 @@ std::vector<Condition> parseConditionCatalog(const std::string& text)
         condition.id = readString(value, "id", context);
         condition.name = readString(value, "name", context);
         condition.description = readString(value, "description", context);
+        const auto tags = value.find("tags");
+        if (tags != value.end()) {
+            if (!tags->is_array()) {
+                throw CatalogError(context + ": field \"tags\" must be an array.");
+            }
+            for (std::size_t tagIndex = 0; tagIndex < tags->size(); ++tagIndex) {
+                if (!(*tags)[tagIndex].is_string()) {
+                    throw CatalogError(context + " tag " + std::to_string(tagIndex + 1) + ": must be a string.");
+                }
+                const std::string tag = (*tags)[tagIndex].get<std::string>();
+                if (isBlank(tag)) {
+                    throw CatalogError(context + " tag " + std::to_string(tagIndex + 1) + ": text is required.");
+                }
+                condition.tags.push_back(tag);
+            }
+        }
         if (condition.id.empty() || isBlank(condition.name) || isBlank(condition.description)) {
             throw CatalogError(context + ": id, name, and description are required.");
         }
@@ -212,7 +228,7 @@ std::vector<Condition> loadConditionCatalog(const std::filesystem::path& path)
 std::vector<std::string> parseSpeciesCatalog(const std::string& text)
 {
     const json document = parseObject(text, "species catalog");
-    readCatalogHeader(document, "Species catalog");
+    readCatalogHeader(document, "Species catalog", kCatalogSchemaVersion);
     const json& list = requireArray(document, "species", "Species catalog");
 
     std::vector<std::string> species;

@@ -108,6 +108,12 @@ TEST_CASE("plan example encounter parses and keeps the snapshotted fields")
     CHECK_EQ(aria.initiative, 18);
     CHECK(!aria.initiativeBonus.has_value());
     CHECK_EQ(aria.hp, 32);
+    CHECK(!aria.maxHp.has_value());
+    CHECK_EQ(aria.tempHp, 0);
+    CHECK(aria.conditions.empty());
+    CHECK(aria.concentration.empty());
+    CHECK_EQ(aria.deathSaves.successes, 0);
+    CHECK_EQ(aria.deathSaves.failures, 0);
     CHECK_EQ(aria.ac, 16);
 
     const Combatant& goblin = encounter.combatants[1];
@@ -153,7 +159,7 @@ TEST_CASE("encounters round-trip and a tie keeps the saved order")
 
     store.saveAll({encounter});
     const std::string text = readFile(path);
-    CHECK(text.find("\"schemaVersion\": 1") != std::string::npos);
+    CHECK(text.find("\"schemaVersion\": 2") != std::string::npos);
     CHECK(text.find("\"initiativeBonus\"") != std::string::npos);
     const auto bonus = text.find("\"initiativeBonus\"");
     const auto aria = text.find("\"Aria\"");
@@ -200,9 +206,10 @@ TEST_CASE("unparseable encounters file throws and is not overwritten by load")
     CHECK_EQ(readFile(path), original);
 }
 
-TEST_CASE("unknown encounters schemaVersion is refused")
+TEST_CASE("unknown encounters schemaVersion is refused and version 2 empty list loads")
 {
-    CHECK_THROWS(EncounterStoreError, parseEncountersDocument(R"({"schemaVersion": 2, "encounters": []})"));
+    CHECK_THROWS(EncounterStoreError, parseEncountersDocument(R"({"schemaVersion": 3, "encounters": []})"));
+    CHECK(parseEncountersDocument(R"({"schemaVersion": 2, "encounters": []})").empty());
 }
 
 TEST_CASE("a character initiative bonus and a bad turn index are refused")

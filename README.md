@@ -2,7 +2,7 @@
 
 A local desktop combat tracker for fifth edition (2024 rules), built with C++20 and Qt 6 Widgets. 5E compatible.
 
-Phase 4 records the character sheet: species, classes, spells, gear, conditions, and the supporting numbers (current and maximum HP, temporary HP, speed, typed proficiency and initiative bonuses, saves, skills, death saves, and notes). Spell and condition text comes from the packaged SRD 5.2.1 catalogs. A fight still keeps its own single HP value, copied from the character's current HP when they are added.
+Phase 5 keeps the fight's bookkeeping on the Combat page. You apply damage and healing to the active combatant, add or remove SRD conditions, set or clear concentration, and count death saves. Temporary HP is spent before current HP. A character's spell slots can be spent, and Finish rest puts them back to the maximum stored on the sheet. The page also shows ability modifiers, the proficiency bonus from total level, save bonuses, and the Dexterity initiative modifier. The initiative number on the combatant is still the one turn order uses.
 
 ## Layout
 
@@ -42,9 +42,11 @@ The sheet stores spell ids (or a name, when the spell is not in the catalog) and
 
 Monsters come from two files with the same stat-block shape:
 
-- `data/srd/monsters.json` is the packaged SRD 5.2.1 catalog (`source` `srd-5.2.1`), opened read-only, with `data/srd/ATTRIBUTION.txt`. The Monsters page and the character sheet show that attribution. `data/srd/spells.json`, `data/srd/conditions.json`, and `data/srd/species.json` are the same kind of read-only catalog (`schemaVersion` 1, `source` `srd-5.2.1`). Spell and condition search is a case-insensitive name substring; a blank search lists every row by name.
+- `data/srd/monsters.json` is the packaged SRD 5.2.1 catalog (`source` `srd-5.2.1`), opened read-only, with `data/srd/ATTRIBUTION.txt`. The Monsters page and the character sheet show that attribution. `data/srd/spells.json` and `data/srd/species.json` are schemaVersion 1. `data/srd/conditions.json` is schemaVersion 2 and may include a `tags` list of short mechanical notes taken from that condition's SRD text. Spell and condition search is a case-insensitive name substring; a blank search lists every row by name.
 - `custom-monsters.json` sits next to `characters.json`. A missing file means no custom monsters. Custom ids are UUIDs. A row whose id matches an SRD slug, or whose source is `srd-5.2.1`, is skipped and reported instead of replacing the SRD monster.
 
 Search is offline: a case-insensitive substring of the name, plus optional exact creature-type and challenge-rating filters. A blank search lists every monster by name. When two rows share a name, the SRD row comes first. Custom rows are badged Custom.
 
-Encounters are saved to `encounters.json` (`schemaVersion` 1) in that same app-data folder. A missing file means no encounters. Each combatant keeps a copy of the name, AC, HP, and, for a monster, the initiative bonus from the moment they were added. Changing the fight does not change `characters.json` or either monster file. Monster initiative is `d20 +` that stored bonus. Characters are typed, not rolled. Equal initiatives keep their order, including after a save.
+Encounters are saved to `encounters.json` (`schemaVersion` 2) in that same app-data folder. A missing file means no encounters. A schemaVersion 1 file still opens: each combatant gets temporary HP 0, no stored maximum, no conditions, no concentration, and death saves at 0. Opening it does not rewrite the file. The next save writes version 2.
+
+Each combatant keeps a copy of the name, AC, current HP, maximum HP, temporary HP, and, for a monster, the initiative bonus from the moment they were added. Damage and healing change that copy. Healing does not raise current HP above the stored maximum, and it does not change temporary HP. Conditions, concentration (an SRD spell id, or empty), and death-save counters also belong to the fight. Spending a spell slot or finishing a rest writes `characters.json`. Monster initiative is `d20 +` the stored bonus. Characters are typed, not rolled. Equal initiatives keep their order, including after a save. The typed initiative total on the combatant is the one the turn order uses.

@@ -70,6 +70,18 @@ std::vector<std::string> validateCombatant(const Combatant& combatant)
     if (combatant.source == kCombatantSourceCharacter && combatant.initiativeBonus.has_value()) {
         problems.emplace_back("Characters do not store an initiative bonus.");
     }
+    std::vector<std::string> conditionIds;
+    for (const std::string& id : combatant.conditions) {
+        if (id.empty()) {
+            problems.emplace_back("Condition id is required.");
+            break;
+        }
+        if (std::find(conditionIds.begin(), conditionIds.end(), id) != conditionIds.end()) {
+            problems.emplace_back("Duplicate condition id.");
+            break;
+        }
+        conditionIds.push_back(id);
+    }
     return problems;
 }
 
@@ -137,6 +149,8 @@ Combatant makeCharacterCombatant(const Character& character, const std::string& 
     combatant.name = character.name;
     combatant.initiative = 0;
     combatant.hp = character.hp.current;
+    combatant.maxHp = character.hp.max;
+    combatant.tempHp = character.tempHp;
     combatant.ac = character.ac;
     return combatant;
 }
@@ -152,6 +166,7 @@ Combatant makeMonsterCombatant(const Monster& monster, const std::vector<Combata
     combatant.initiative = 0;
     combatant.initiativeBonus = monster.initiativeBonus;
     combatant.hp = monster.hp;
+    combatant.maxHp = monster.hp;
     combatant.ac = monster.ac;
     return combatant;
 }

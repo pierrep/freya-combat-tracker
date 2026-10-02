@@ -8,12 +8,15 @@
 
 namespace combat {
 
-inline constexpr int kEncounterSchemaVersion = 1;
+inline constexpr int kEncounterSchemaVersion = 2;
 
 // Reads and writes encounters.json. The caller chooses the path; this class
 // never looks up platform folders.
 //
 // - A missing file loads as an empty list.
+// - schemaVersion 1 still loads. Those combatants get tempHp 0, no maximum
+//   HP, no conditions, no concentration, and death saves at 0. Loading does
+//   not rewrite the file.
 // - A file that cannot be parsed, or has an unknown schemaVersion, throws
 //   EncounterStoreError and is left untouched.
 // - saveAll writes a temporary file in the same folder and then renames it over

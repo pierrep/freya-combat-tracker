@@ -51,8 +51,9 @@ TEST_CASE("findSpellById returns the row or nothing")
 
 TEST_CASE("condition and species search match the monster catalog rule")
 {
-    const std::vector<Condition> conditions{Condition{"stunned", "Stunned", "A stunned creature."},
-                                            Condition{"blinded", "Blinded", "A blinded creature."}};
+    const std::vector<Condition> conditions{
+        Condition{"stunned", "Stunned", "A stunned creature.", std::vector<std::string>{}},
+        Condition{"blinded", "Blinded", "A blinded creature.", std::vector<std::string>{}}};
     const auto found = searchConditions(conditions, "blind");
     CHECK_EQ(found.size(), std::size_t{1});
     CHECK_EQ(found[0].id, std::string("blinded"));

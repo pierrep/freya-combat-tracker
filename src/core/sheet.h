@@ -14,6 +14,7 @@ public:
 };
 
 inline constexpr int kCatalogSchemaVersion = 1;
+inline constexpr int kConditionCatalogSchemaVersion = 2;
 
 struct Spell {
     std::string id;
@@ -33,6 +34,10 @@ struct Condition {
     std::string id;
     std::string name;
     std::string description;
+    // Short mechanical notes copied from the SRD entry. Empty when the effect
+    // depends on something this app does not track, or when the wording is
+    // not a single unconditional result.
+    std::vector<std::string> tags;
 
     bool operator==(const Condition&) const = default;
 };
