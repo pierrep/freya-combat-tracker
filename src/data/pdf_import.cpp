@@ -4,11 +4,13 @@
 #include <qpdf/QPDFAcroFormDocumentHelper.hh>
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFFormFieldObjectHelper.hh>
+#include <qpdf/QPDFPageDocumentHelper.hh>
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <ctime>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -108,19 +110,40 @@ std::string utcNow()
 
 bool isDroppedField(const std::string& name)
 {
-    return std::find(std::begin(kDroppedFields), std::end(kDroppedFields), name) != std::end(kDroppedFields);
+    const std::string key = trim(name);
+    if (std::find(std::begin(kDroppedFields), std::end(kDroppedFields), key) != std::end(kDroppedFields)) {
+        return true;
+    }
+    if (key.rfind("FeaturesTraits", 0) == 0 || key.rfind("AdditionalNotes", 0) == 0) {
+        return true;
+    }
+    return key == "AlliesOrganizations" || key == "Appearance";
 }
 
-bool isSpellNameField(const std::string& name)
+bool fieldIndex(const std::string& name, std::string_view prefix, int& index)
 {
-    constexpr std::string_view prefix = "Spells ";
-    return name.size() > prefix.size() && name.compare(0, prefix.size(), prefix) == 0;
+    if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0) {
+        return false;
+    }
+    const std::optional<int> parsed = parseInteger(name.substr(prefix.size()));
+    if (!parsed.has_value()) {
+        return false;
+    }
+    index = *parsed;
+    return true;
 }
 
-std::optional<int> spellFieldOrder(const std::string& name)
+bool spellFieldOrder(const std::string& name, int& order)
 {
-    constexpr std::string_view prefix = "Spells ";
-    return parseInteger(name.substr(prefix.size()));
+    if (fieldIndex(name, "Spells ", order) || fieldIndex(name, "SpellName", order)) {
+        return true;
+    }
+    return false;
+}
+
+bool isPlaceholder(const std::string& value)
+{
+    return !value.empty() && value.find_first_not_of('-') == std::string::npos;
 }
 
 const Spell* findSpellByName(const std::vector<Spell>& catalog, const std::string& name)
@@ -261,6 +284,43 @@ bool takeInteger(const std::map<std::string, std::string>& values, const char* f
     return true;
 }
 
+void collectTextField(QPDFFormFieldObjectHelper field, std::map<std::string, std::string>& values, PdfImportReport& report)
+{
+    const std::string name = field.getFullyQualifiedName();
+    if (name.empty()) {
+        return;
+    }
+    if (field.isCheckbox() || field.isRadioButton() || field.isPushbutton()) {
+        ++report.skippedButtons;
+        return;
+    }
+    if (!field.isText()) {
+        report.fieldsUnused.push_back(name);
+        return;
+    }
+    const std::string value = trim(field.getValueAsString());
+    if (value.empty() || isPlaceholder(value)) {
+        return;
+    }
+    values.emplace(name, value);
+}
+
+std::vector<QPDFFormFieldObjectHelper> fieldsFromWidgetAnnotations(QPDF& pdf)
+{
+    std::vector<QPDFFormFieldObjectHelper> fields;
+    QPDFPageDocumentHelper pages(pdf);
+    for (QPDFPageObjectHelper page : pages.getAllPages()) {
+        for (QPDFAnnotationObjectHelper annot : page.getAnnotations("/Widget")) {
+            QPDFFormFieldObjectHelper field(annot.getObjectHandle());
+            if (!field.getObjectHandle().isDictionary()) {
+                continue;
+            }
+            fields.push_back(field);
+        }
+    }
+    return fields;
+}
+
 std::map<std::string, std::string> readTextFields(const std::filesystem::path& path, PdfImportReport& report)
 {
     QPDF pdf;
@@ -271,33 +331,20 @@ std::map<std::string, std::string> readTextFields(const std::filesystem::path& p
     }
 
     QPDFAcroFormDocumentHelper forms(pdf);
-    if (!forms.hasAcroForm()) {
-        throw PdfImportError(kFlattenedMessage);
+    std::vector<QPDFFormFieldObjectHelper> fields;
+    if (forms.hasAcroForm()) {
+        fields = forms.getFormFields();
     }
-    const std::vector<QPDFFormFieldObjectHelper> fields = forms.getFormFields();
+    if (fields.empty()) {
+        fields = fieldsFromWidgetAnnotations(pdf);
+    }
     if (fields.empty()) {
         throw PdfImportError(kFlattenedMessage);
     }
 
     std::map<std::string, std::string> values;
     for (QPDFFormFieldObjectHelper field : fields) {
-        const std::string name = field.getFullyQualifiedName();
-        if (name.empty()) {
-            continue;
-        }
-        if (field.isCheckbox() || field.isRadioButton() || field.isPushbutton()) {
-            ++report.skippedButtons;
-            continue;
-        }
-        if (!field.isText()) {
-            report.fieldsUnused.push_back(name);
-            continue;
-        }
-        const std::string value = trim(field.getValueAsString());
-        if (value.empty()) {
-            continue;
-        }
-        values.emplace(name, value);
+        collectTextField(field, values, report);
     }
     return values;
 }
@@ -305,10 +352,11 @@ std::map<std::string, std::string> readTextFields(const std::filesystem::path& p
 bool hasMappedValue(const std::map<std::string, std::string>& values)
 {
     constexpr const char* names[] = {
-        "CharacterName", "STR",        "DEX",        "CON",         "INT",        "WIS",
-        "CHA",           "AC",         "HPCurrent",  "HPMax",       "HPTemp",     "Passive",
-        "Initiative",    "Speed",      "ProfBonus",  "ClassLevel",  "Race ",      "Race",
-        "Wpn Name",      "Wpn Name 2", "Wpn Name 3", "Equipment",
+        "CharacterName", "STR",         "DEX",        "CON",        "INT",         "WIS",
+        "CHA",           "AC",          "HPCurrent",  "HPMax",      "HPTemp",      "CurrentHP",
+        "MaxHP",         "TempHP",      "Passive",    "Passive1",   "Initiative",  "Init",
+        "Speed",         "ProfBonus",   "ClassLevel", "CLASS  LEVEL", "Race ",    "Race",
+        "RACE",          "Wpn Name",    "Equipment",
     };
     for (const char* name : names) {
         if (values.find(name) != values.end()) {
@@ -317,7 +365,8 @@ bool hasMappedValue(const std::map<std::string, std::string>& values)
     }
     for (const auto& [name, value] : values) {
         (void)value;
-        if (isSpellNameField(name)) {
+        int index = 0;
+        if (spellFieldOrder(name, index) || fieldIndex(name, "Wpn Name ", index) || fieldIndex(name, "Eq Name", index)) {
             return true;
         }
         if (name.rfind("SlotsTotal ", 0) == 0 || name.rfind("SlotsRemaining ", 0) == 0) {
@@ -366,14 +415,28 @@ PdfImportResult importCharacterPdf(const std::filesystem::path& path, const std:
         }
     }
 
-    takeInteger(values, "AC", result.character.ac, result.presence.ac, result.report);
-    takeInteger(values, "HPCurrent", result.character.hp.current, result.presence.hpCurrent, result.report);
-    takeInteger(values, "HPMax", result.character.hp.max, result.presence.hpMax, result.report);
-    takeInteger(values, "HPTemp", result.character.tempHp, result.presence.tempHp, result.report);
-    takeInteger(values, "Passive", result.character.passivePerception, result.presence.passivePerception, result.report);
-    takeInteger(values, "Initiative", result.character.initiativeBonus, result.presence.initiative, result.report);
-    takeInteger(values, "ProfBonus", result.character.proficiencyBonus, result.presence.proficiency, result.report);
-    for (const char* field : {"AC", "HPCurrent", "HPMax", "HPTemp", "Passive", "Initiative", "ProfBonus"}) {
+    auto takeFirstInteger = [&](std::initializer_list<const char*> fields, int& destination, bool& present) {
+        for (const char* field : fields) {
+            if (findValue(values, field) == nullptr) {
+                continue;
+            }
+            takeInteger(values, field, destination, present, result.report);
+            return;
+        }
+    };
+    takeFirstInteger({"AC"}, result.character.ac, result.presence.ac);
+    takeFirstInteger({"HPCurrent", "CurrentHP"}, result.character.hp.current, result.presence.hpCurrent);
+    takeFirstInteger({"HPMax", "MaxHP"}, result.character.hp.max, result.presence.hpMax);
+    takeFirstInteger({"HPTemp", "TempHP"}, result.character.tempHp, result.presence.tempHp);
+    takeFirstInteger({"Passive", "Passive1"}, result.character.passivePerception, result.presence.passivePerception);
+    takeFirstInteger({"Initiative", "Init"}, result.character.initiativeBonus, result.presence.initiative);
+    takeFirstInteger({"ProfBonus"}, result.character.proficiencyBonus, result.presence.proficiency);
+    if (result.presence.hpMax && !result.presence.hpCurrent) {
+        result.character.hp.current = result.character.hp.max;
+        result.presence.hpCurrent = true;
+    }
+    for (const char* field : {"AC", "HPCurrent", "CurrentHP", "HPMax", "MaxHP", "HPTemp", "TempHP", "Passive",
+                              "Passive1", "Initiative", "Init", "ProfBonus"}) {
         if (values.find(field) != values.end()) {
             consume(field);
         }
@@ -386,9 +449,16 @@ PdfImportResult importCharacterPdf(const std::filesystem::path& path, const std:
         consume("Speed");
     }
 
-    if (const std::string* classes = findValue(values, "ClassLevel")) {
-        consume("ClassLevel");
-        result.report.fieldsUsed.emplace_back("ClassLevel");
+    const char* classField = nullptr;
+    if (findValue(values, "ClassLevel") != nullptr) {
+        classField = "ClassLevel";
+    } else if (findValue(values, "CLASS  LEVEL") != nullptr) {
+        classField = "CLASS  LEVEL";
+    }
+    if (classField != nullptr) {
+        const std::string* classes = findValue(values, classField);
+        consume(classField);
+        result.report.fieldsUsed.emplace_back(classField);
         result.presence.classes = true;
         if (!parseClasses(*classes, result.character.classes)) {
             result.character.classes.clear();
@@ -398,35 +468,113 @@ PdfImportResult importCharacterPdf(const std::filesystem::path& path, const std:
         }
     }
 
-    if (const std::string* spacedSpecies = findValue(values, "Race ")) {
-        result.character.species = *spacedSpecies;
+    const char* speciesField = nullptr;
+    if (findValue(values, "Race ") != nullptr) {
+        speciesField = "Race ";
+    } else if (findValue(values, "Race") != nullptr) {
+        speciesField = "Race";
+    } else if (findValue(values, "RACE") != nullptr) {
+        speciesField = "RACE";
+    }
+    if (speciesField != nullptr) {
+        result.character.species = *findValue(values, speciesField);
         result.presence.species = true;
-        result.report.fieldsUsed.emplace_back("Race ");
-        consume("Race ");
-    } else if (const std::string* plainSpecies = findValue(values, "Race")) {
-        result.character.species = *plainSpecies;
-        result.presence.species = true;
-        result.report.fieldsUsed.emplace_back("Race");
-        consume("Race");
+        result.report.fieldsUsed.emplace_back(speciesField);
+        consume(speciesField);
     }
 
-    for (const char* field : {"Wpn Name", "Wpn Name 2", "Wpn Name 3", "Equipment"}) {
-        if (const std::string* text = findValue(values, field)) {
+    std::vector<SpellField> weaponFields;
+    if (const std::string* firstWeapon = findValue(values, "Wpn Name")) {
+        weaponFields.push_back(SpellField{1, "Wpn Name", *firstWeapon});
+    }
+    std::map<int, SpellField> equipmentRows;
+    std::map<int, int> equipmentQuantities;
+    for (const auto& [name, value] : values) {
+        int index = 0;
+        if (fieldIndex(name, "Wpn Name ", index)) {
+            weaponFields.push_back(SpellField{index, name, value});
+        } else if (fieldIndex(name, "Eq Name", index)) {
+            equipmentRows.emplace(index, SpellField{index, name, value});
+        } else if (fieldIndex(name, "Eq Qty", index)) {
+            const std::optional<int> quantity = parseInteger(value);
+            consume(name);
+            if (!quantity.has_value() || *quantity < 1) {
+                result.report.parseFailures.push_back(name + " is not a whole number.");
+            } else {
+                equipmentQuantities.emplace(index, *quantity);
+                result.report.fieldsUsed.push_back(name);
+            }
+        }
+    }
+    std::sort(weaponFields.begin(), weaponFields.end(), [](const SpellField& left, const SpellField& right) {
+        if (left.order != right.order) {
+            return left.order < right.order;
+        }
+        return left.fieldName < right.fieldName;
+    });
+
+    auto gearNameTaken = [&](const std::string& name) {
+        return std::any_of(result.character.gear.begin(), result.character.gear.end(),
+                           [&](const GearItem& item) { return equalFold(item.name, name); });
+    };
+    auto appendGearLine = [&](const std::string& line) {
+        const GearItem item = gearFromLine(line);
+        if (item.name.empty() || gearNameTaken(item.name)) {
+            return;
+        }
+        result.character.gear.push_back(item);
+        result.presence.gear = true;
+    };
+
+    if (equipmentRows.empty()) {
+        for (const SpellField& field : weaponFields) {
+            addGearLines(result.character.gear, field.value);
+            result.presence.gear = true;
+            result.report.fieldsUsed.push_back(field.fieldName);
+            consume(field.fieldName);
+        }
+        if (const std::string* text = findValue(values, "Equipment")) {
             addGearLines(result.character.gear, *text);
             result.presence.gear = true;
-            result.report.fieldsUsed.emplace_back(field);
-            consume(field);
+            result.report.fieldsUsed.emplace_back("Equipment");
+            consume("Equipment");
+        }
+    } else {
+        for (const auto& [index, field] : equipmentRows) {
+            GearItem item = gearFromLine(field.value);
+            const auto quantity = equipmentQuantities.find(index);
+            if (quantity != equipmentQuantities.end()) {
+                item.quantity = quantity->second;
+            }
+            if (!item.name.empty()) {
+                result.character.gear.push_back(item);
+                result.presence.gear = true;
+            }
+            result.report.fieldsUsed.push_back(field.fieldName);
+            consume(field.fieldName);
+        }
+        for (const SpellField& field : weaponFields) {
+            result.report.fieldsUsed.push_back(field.fieldName);
+            consume(field.fieldName);
+            appendGearLine(field.value);
+        }
+        if (const std::string* text = findValue(values, "Equipment")) {
+            for (const std::string& line : splitLines(*text)) {
+                appendGearLine(line);
+            }
+            result.report.fieldsUsed.emplace_back("Equipment");
+            consume("Equipment");
         }
     }
 
     std::vector<SpellField> spellFields;
     for (const auto& [name, value] : values) {
-        if (!isSpellNameField(name)) {
+        int order = 0;
+        if (!spellFieldOrder(name, order)) {
             continue;
         }
         SpellField field;
-        const std::optional<int> order = spellFieldOrder(name);
-        field.order = order.has_value() ? *order : 1000000;
+        field.order = order;
         field.fieldName = name;
         field.value = value;
         spellFields.push_back(std::move(field));

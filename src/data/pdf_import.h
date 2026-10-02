@@ -12,8 +12,8 @@ namespace combat {
 
 inline constexpr char kPdfImportSource[] = "dndbeyond-pdf";
 
-// The file has no AcroForm, or the named fields are empty. The message asks
-// for a fresh Export to PDF. Page text is not read.
+// The file has no filled form fields. The message asks for a fresh Export to
+// PDF. Page text is not read.
 class PdfImportError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
@@ -62,8 +62,10 @@ struct PdfImportResult {
     PdfImportPresence presence;
 };
 
-// Reads AcroForm values and maps the classic fillable field names. Does not
-// log in, call a network service, or keep the PDF.
+// Reads AcroForm values. When the catalog has no AcroForm, reads widget
+// annotations instead (the current D&D Beyond export). Maps the classic
+// fillable names and that export's names. Does not log in, call a network
+// service, or keep the PDF. Page text is not read.
 PdfImportResult importCharacterPdf(const std::filesystem::path& path, const std::vector<Spell>& catalog);
 
 // Copies the fields the PDF actually contained. target.id is unchanged.

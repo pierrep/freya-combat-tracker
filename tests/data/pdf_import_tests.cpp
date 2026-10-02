@@ -348,6 +348,156 @@ TEST_CASE("replace keeps the id and leaves skills and death saves")
     CHECK_EQ(target.external->fileName, std::string("a.pdf"));
 }
 
+QPDFObjectHandle blankPage(QPDF& pdf)
+{
+    QPDFObjectHandle page = pdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    page.replaceKey("/Type", QPDFObjectHandle::newName("/Page"));
+    QPDFObjectHandle box = QPDFObjectHandle::newArray();
+    box.appendItem(QPDFObjectHandle::newInteger(0));
+    box.appendItem(QPDFObjectHandle::newInteger(0));
+    box.appendItem(QPDFObjectHandle::newInteger(612));
+    box.appendItem(QPDFObjectHandle::newInteger(792));
+    page.replaceKey("/MediaBox", box);
+    pdf.addPage(page, true);
+    return page;
+}
+
+void addOrphanWidget(QPDF& pdf, QPDFObjectHandle page, QPDFObjectHandle annots, const std::string& name,
+                     const std::string& value, bool button)
+{
+    QPDFObjectHandle field = pdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    field.replaceKey("/Type", QPDFObjectHandle::newName("/Annot"));
+    field.replaceKey("/FT", QPDFObjectHandle::newName(button ? "/Btn" : "/Tx"));
+    field.replaceKey("/T", QPDFObjectHandle::newString(name));
+    if (button) {
+        field.replaceKey("/V", QPDFObjectHandle::newName("/Yes"));
+    } else if (!value.empty()) {
+        field.replaceKey("/V", QPDFObjectHandle::newString(value));
+    }
+    markWidget(field);
+    annots.appendItem(field);
+    page.replaceKey("/Annots", annots);
+}
+
+TEST_CASE("widget annotations without an AcroForm map the current export names")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "widgets.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    QPDFObjectHandle page = blankPage(pdf);
+    QPDFObjectHandle annots = QPDFObjectHandle::newArray();
+    addOrphanWidget(pdf, page, annots, "CharacterName", "Widget", false);
+    addOrphanWidget(pdf, page, annots, "CharacterName2", "Widget", false);
+    addOrphanWidget(pdf, page, annots, "CLASS  LEVEL", "Barbarian 3", false);
+    addOrphanWidget(pdf, page, annots, "RACE", "Human", false);
+    addOrphanWidget(pdf, page, annots, "PLAYER NAME", "Someone", false);
+    addOrphanWidget(pdf, page, annots, "STR", "17", false);
+    addOrphanWidget(pdf, page, annots, "DEX", "13", false);
+    addOrphanWidget(pdf, page, annots, "CON", "15", false);
+    addOrphanWidget(pdf, page, annots, "INT", "8", false);
+    addOrphanWidget(pdf, page, annots, "WIS", "10", false);
+    addOrphanWidget(pdf, page, annots, "CHA", "12", false);
+    addOrphanWidget(pdf, page, annots, "AC", "13", false);
+    addOrphanWidget(pdf, page, annots, "MaxHP", "38", false);
+    addOrphanWidget(pdf, page, annots, "TempHP", "--", false);
+    addOrphanWidget(pdf, page, annots, "Init", "+1", false);
+    addOrphanWidget(pdf, page, annots, "ProfBonus", "+2", false);
+    addOrphanWidget(pdf, page, annots, "Speed", "30 ft. (Walking)", false);
+    addOrphanWidget(pdf, page, annots, "Passive1", "12", false);
+    addOrphanWidget(pdf, page, annots, "Wpn Name", "Greataxe", false);
+    addOrphanWidget(pdf, page, annots, "Wpn Name 2", "Unarmed Strike", false);
+    addOrphanWidget(pdf, page, annots, "Eq Name0", "Greataxe", false);
+    addOrphanWidget(pdf, page, annots, "Eq Qty0", "1", false);
+    addOrphanWidget(pdf, page, annots, "Eq Name1", "Handaxe", false);
+    addOrphanWidget(pdf, page, annots, "Eq Qty1", "1", false);
+    addOrphanWidget(pdf, page, annots, "Eq Name2", "Handaxe", false);
+    addOrphanWidget(pdf, page, annots, "Eq Qty2", "1", false);
+    addOrphanWidget(pdf, page, annots, "SpellName0", "Bless", false);
+    addOrphanWidget(pdf, page, annots, "FeaturesTraits1", "Secret feature essay", false);
+    addOrphanWidget(pdf, page, annots, "PersonalityTraits ", "Secret personality", false);
+    addOrphanWidget(pdf, page, annots, "Check Box 12", "", true);
+    writePdf(pdf, pdfPath);
+
+    {
+        QPDF check;
+        check.processFile(pdfPath.string().c_str());
+        CHECK(!QPDFAcroFormDocumentHelper(check).hasAcroForm());
+    }
+
+    const PdfImportResult imported = importCharacterPdf(pdfPath, spellCatalog());
+    const Character& character = imported.character;
+    CHECK_EQ(character.name, std::string("Widget"));
+    CHECK_EQ(character.species, std::string("Human"));
+    CHECK_EQ(character.classes.size(), std::size_t{1});
+    CHECK_EQ(character.classes[0].name, std::string("Barbarian"));
+    CHECK_EQ(character.classes[0].level, 3);
+    CHECK_EQ(character.abilities.strength, 17);
+    CHECK_EQ(character.abilities.dexterity, 13);
+    CHECK_EQ(character.abilities.constitution, 15);
+    CHECK_EQ(character.abilities.intelligence, 8);
+    CHECK_EQ(character.abilities.wisdom, 10);
+    CHECK_EQ(character.abilities.charisma, 12);
+    CHECK_EQ(character.ac, 13);
+    CHECK_EQ(character.hp.max, 38);
+    CHECK_EQ(character.hp.current, 38);
+    CHECK_EQ(character.tempHp, 0);
+    CHECK_EQ(character.initiativeBonus, 1);
+    CHECK_EQ(character.proficiencyBonus, 2);
+    CHECK_EQ(character.speed, std::string("30 ft. (Walking)"));
+    CHECK_EQ(character.passivePerception, 12);
+    CHECK_EQ(character.gear.size(), std::size_t{4});
+    CHECK_EQ(character.gear[0].name, std::string("Greataxe"));
+    CHECK_EQ(character.gear[0].quantity, 1);
+    CHECK_EQ(character.gear[1].name, std::string("Handaxe"));
+    CHECK_EQ(character.gear[1].quantity, 1);
+    CHECK_EQ(character.gear[2].name, std::string("Handaxe"));
+    CHECK_EQ(character.gear[2].quantity, 1);
+    CHECK_EQ(character.gear[3].name, std::string("Unarmed Strike"));
+    CHECK_EQ(character.gear[3].quantity, 1);
+    CHECK_EQ(character.spells.size(), std::size_t{1});
+    CHECK_EQ(character.spells[0].id, std::string("bless"));
+    CHECK(!character.skills.perception);
+    CHECK(!character.savingThrows.strength);
+    CHECK(character.notes.empty());
+    CHECK(contains(imported.report.fieldsUsed, "RACE"));
+    CHECK(contains(imported.report.fieldsUsed, "CLASS  LEVEL"));
+    CHECK(contains(imported.report.fieldsUsed, "MaxHP"));
+    CHECK(contains(imported.report.fieldsUsed, "Passive1"));
+    CHECK(contains(imported.report.fieldsDropped, "FeaturesTraits1"));
+    CHECK(contains(imported.report.fieldsDropped, "PersonalityTraits "));
+    CHECK(contains(imported.report.fieldsUnused, "PLAYER NAME"));
+    CHECK(contains(imported.report.fieldsUnused, "CharacterName2"));
+    CHECK(imported.report.skippedButtons >= 1);
+    const std::string report = formatPdfImportReport(imported.report);
+    CHECK(report.find("Secret feature essay") == std::string::npos);
+    CHECK(report.find("Secret personality") == std::string::npos);
+    CHECK(report.find("Someone") == std::string::npos);
+}
+
+TEST_CASE("widget prose without a mapped field does not import")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "widget-prose.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    QPDFObjectHandle page = blankPage(pdf);
+    QPDFObjectHandle annots = QPDFObjectHandle::newArray();
+    addOrphanWidget(pdf, page, annots, "FeaturesTraits1", "Secret feature essay", false);
+    writePdf(pdf, pdfPath);
+
+    bool threw = false;
+    try {
+        (void)importCharacterPdf(pdfPath, {});
+    } catch (const PdfImportError& error) {
+        threw = true;
+        const std::string message = error.what();
+        CHECK(message.find("Secret feature essay") == std::string::npos);
+        CHECK(message.find("Export to PDF") != std::string::npos);
+    }
+    CHECK(threw);
+}
+
 TEST_CASE("schema version 2 loads with no external and saves as version 3")
 {
     Character character;
