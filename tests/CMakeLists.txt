@@ -1,0 +1,11 @@
+add_executable(core_tests core/core_tests.cpp)
+target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(core_tests PRIVATE combat_core)
+combat_tracker_set_warnings(core_tests)
+add_test(NAME core_tests COMMAND core_tests)
+
+add_executable(data_tests data/data_tests.cpp)
+target_include_directories(data_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(data_tests PRIVATE combat_data)
+combat_tracker_set_warnings(data_tests)
+add_test(NAME data_tests COMMAND data_tests)
