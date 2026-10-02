@@ -17,6 +17,7 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QTreeWidget;
 class QSpinBox;
 class QShowEvent;
 class QVBoxLayout;
@@ -51,8 +52,7 @@ private:
     void rebuildCombatantList(const std::string& selectId);
     void showCombatant();
     void updateTurnLabels();
-    void updateCombatantItemText(int row);
-    QString combatantLabel(const Combatant& combatant, bool active) const;
+    void refreshListedHitPoints(const Combatant& combatant);
     void onInitiativeChanged(int value);
     void onInitiativeEditingFinished();
     void onHpChanged(int value);
@@ -109,7 +109,8 @@ private:
     QPushButton* m_nextRoundButton = nullptr;
     QPushButton* m_rollAllButton = nullptr;
     QLabel* m_rollNote = nullptr;
-    QListWidget* m_combatantList = nullptr;
+    QTreeWidget* m_initiativeList = nullptr;
+    QTreeWidget* m_zeroHpList = nullptr;
     QWidget* m_combatantForm = nullptr;
     QFormLayout* m_combatantFormLayout = nullptr;
     QWidget* m_deathSavesHost = nullptr;

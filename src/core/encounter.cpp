@@ -231,9 +231,18 @@ MoveResult moveCombatant(std::vector<Combatant>& combatants, int index, int dire
     if (index < 0 || index >= count) {
         return result;
     }
-    const int destination = index + direction;
-    if (destination < 0 || destination >= count) {
+    if (combatants[static_cast<std::size_t>(index)].hp <= 0) {
         return result;
+    }
+    int destination = index;
+    for (;;) {
+        destination += direction;
+        if (destination < 0 || destination >= count) {
+            return result;
+        }
+        if (combatants[static_cast<std::size_t>(destination)].hp > 0) {
+            break;
+        }
     }
     std::swap(combatants[static_cast<std::size_t>(index)], combatants[static_cast<std::size_t>(destination)]);
     result.movedTo = destination;
@@ -310,44 +319,115 @@ bool rerollMonsterInitiative(Encounter& encounter, const std::string& combatantI
     return true;
 }
 
-void advanceTurn(Encounter& encounter)
+std::vector<int> initiativeOrder(const std::vector<Combatant>& combatants)
 {
+    std::vector<int> order;
+    const int count = combatantCount(combatants);
+    order.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        if (combatants[static_cast<std::size_t>(i)].hp > 0) {
+            order.push_back(i);
+        }
+    }
+    return order;
+}
+
+void keepTurnInInitiative(Encounter& encounter)
+{
+    const std::vector<int> order = initiativeOrder(encounter.combatants);
+    if (order.empty()) {
+        return;
+    }
     const int count = combatantCount(encounter.combatants);
-    if (count <= 0) {
+    if (encounter.turnIndex >= 0 && encounter.turnIndex < count &&
+        encounter.combatants[static_cast<std::size_t>(encounter.turnIndex)].hp > 0) {
         return;
     }
     if (encounter.turnIndex < 0 || encounter.turnIndex >= count) {
-        encounter.turnIndex = 0;
+        encounter.turnIndex = order.front();
         return;
     }
-    if (encounter.turnIndex + 1 >= count) {
-        encounter.turnIndex = 0;
-        if (encounter.round < std::numeric_limits<int>::max()) {
-            ++encounter.round;
+    for (int step = 1; step <= count; ++step) {
+        const int index = (encounter.turnIndex + step) % count;
+        if (encounter.combatants[static_cast<std::size_t>(index)].hp > 0) {
+            encounter.turnIndex = index;
+            return;
         }
+    }
+}
+
+namespace {
+
+int livingPosition(const std::vector<int>& order, int turnIndex)
+{
+    for (int i = 0; i < static_cast<int>(order.size()); ++i) {
+        if (order[static_cast<std::size_t>(i)] == turnIndex) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+}  // namespace
+
+void advanceTurn(Encounter& encounter)
+{
+    const std::vector<int> order = initiativeOrder(encounter.combatants);
+    if (order.empty()) {
         return;
     }
-    ++encounter.turnIndex;
+    const int count = combatantCount(encounter.combatants);
+    if (encounter.turnIndex < 0 || encounter.turnIndex >= count) {
+        encounter.turnIndex = order.front();
+        return;
+    }
+    const int position = livingPosition(order, encounter.turnIndex);
+    if (position >= 0 && position + 1 < static_cast<int>(order.size())) {
+        encounter.turnIndex = order[static_cast<std::size_t>(position + 1)];
+        return;
+    }
+    if (position < 0) {
+        for (const int index : order) {
+            if (index > encounter.turnIndex) {
+                encounter.turnIndex = index;
+                return;
+            }
+        }
+    }
+    encounter.turnIndex = order.front();
+    if (encounter.round < std::numeric_limits<int>::max()) {
+        ++encounter.round;
+    }
 }
 
 void retreatTurn(Encounter& encounter)
 {
+    const std::vector<int> order = initiativeOrder(encounter.combatants);
+    if (order.empty()) {
+        return;
+    }
     const int count = combatantCount(encounter.combatants);
-    if (count <= 0) {
-        return;
-    }
     if (encounter.turnIndex < 0 || encounter.turnIndex >= count) {
-        encounter.turnIndex = 0;
+        encounter.turnIndex = order.front();
         return;
     }
-    if (encounter.turnIndex == 0) {
-        encounter.turnIndex = count - 1;
-        if (encounter.round > 1) {
-            --encounter.round;
+    const int position = livingPosition(order, encounter.turnIndex);
+    if (position > 0) {
+        encounter.turnIndex = order[static_cast<std::size_t>(position - 1)];
+        return;
+    }
+    if (position < 0) {
+        for (int i = static_cast<int>(order.size()) - 1; i >= 0; --i) {
+            if (order[static_cast<std::size_t>(i)] < encounter.turnIndex) {
+                encounter.turnIndex = order[static_cast<std::size_t>(i)];
+                return;
+            }
         }
-        return;
     }
-    --encounter.turnIndex;
+    encounter.turnIndex = order.back();
+    if (encounter.round > 1) {
+        --encounter.round;
+    }
 }
 
 void advanceRound(Encounter& encounter)
@@ -358,7 +438,8 @@ void advanceRound(Encounter& encounter)
     if (encounter.round < std::numeric_limits<int>::max()) {
         ++encounter.round;
     }
-    encounter.turnIndex = 0;
+    const std::vector<int> order = initiativeOrder(encounter.combatants);
+    encounter.turnIndex = order.empty() ? 0 : order.front();
 }
 
 }  // namespace combat

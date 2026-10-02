@@ -7,10 +7,12 @@
 #include "core/monster_catalog.h"
 #include "ui/page_title.h"
 
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -21,6 +23,7 @@
 #include <QSpinBox>
 #include <QStringList>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 #include <array>
@@ -48,6 +51,75 @@ QSpinBox* makeNumberBox()
     box->setRange(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
     box->setMaximumWidth(140);
     return box;
+}
+
+QTreeWidget* makeCombatantTree(const QStringList& headers)
+{
+    auto* tree = new QTreeWidget;
+    tree->setColumnCount(static_cast<int>(headers.size()));
+    tree->setHeaderLabels(headers);
+    tree->setRootIsDecorated(false);
+    tree->setIndentation(0);
+    tree->setSelectionMode(QAbstractItemView::SingleSelection);
+    tree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tree->setAllColumnsShowFocus(true);
+    tree->setUniformRowHeights(true);
+    tree->setMinimumHeight(140);
+    tree->header()->setStretchLastSection(false);
+    tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int column = 1; column < tree->columnCount(); ++column) {
+        tree->header()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+        tree->headerItem()->setTextAlignment(column, Qt::AlignRight | Qt::AlignVCenter);
+    }
+    return tree;
+}
+
+int indexOfId(const Encounter& encounter, const std::string& id)
+{
+    for (int i = 0; i < static_cast<int>(encounter.combatants.size()); ++i) {
+        if (encounter.combatants[static_cast<std::size_t>(i)].id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool hasLivingNeighbor(const Encounter& encounter, int index, int direction)
+{
+    const int count = static_cast<int>(encounter.combatants.size());
+    for (int i = index + direction; i >= 0 && i < count; i += direction) {
+        if (encounter.combatants[static_cast<std::size_t>(i)].hp > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QTreeWidgetItem* addCombatantRow(QTreeWidget* tree, const Combatant& combatant, bool active, bool initiativeColumns)
+{
+    auto* item = new QTreeWidgetItem;
+    item->setText(0, QString::fromStdString(combatant.name));
+    item->setData(0, Qt::UserRole, QString::fromStdString(combatant.id));
+    const QString hp = QString::fromStdString(formatHitPoints(combatant.hp, combatant.maxHp));
+    if (initiativeColumns) {
+        item->setText(1, QString::number(combatant.ac));
+        item->setText(2, hp);
+        item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+        item->setTextAlignment(2, Qt::AlignRight | Qt::AlignVCenter);
+        if (active) {
+            QFont font = item->font(0);
+            font.setBold(true);
+            item->setFont(0, font);
+            item->setFont(1, font);
+            item->setFont(2, font);
+        }
+    } else {
+        item->setText(1, hp);
+        item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+    }
+    tree->addTopLevelItem(item);
+    return item;
 }
 
 }  // namespace
@@ -149,10 +221,25 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_rollNote->hide();
     fightLayout->addWidget(m_rollNote);
 
-    m_combatantList = new QListWidget;
-    m_combatantList->setObjectName(QStringLiteral("combatantList"));
-    m_combatantList->setMinimumHeight(140);
-    fightLayout->addWidget(m_combatantList);
+    auto* lists = new QHBoxLayout;
+    lists->setSpacing(16);
+    auto* initiativeColumn = new QVBoxLayout;
+    auto* initiativeHeading = new QLabel(tr("Initiative"));
+    initiativeHeading->setObjectName(QStringLiteral("initiativeHeading"));
+    m_initiativeList = makeCombatantTree({tr("Name"), tr("AC"), tr("HP")});
+    m_initiativeList->setObjectName(QStringLiteral("initiativeList"));
+    initiativeColumn->addWidget(initiativeHeading);
+    initiativeColumn->addWidget(m_initiativeList, 1);
+    auto* zeroColumn = new QVBoxLayout;
+    auto* zeroHeading = new QLabel(tr("0 HP"));
+    zeroHeading->setObjectName(QStringLiteral("zeroHpHeading"));
+    m_zeroHpList = makeCombatantTree({tr("Name"), tr("HP")});
+    m_zeroHpList->setObjectName(QStringLiteral("zeroHpList"));
+    zeroColumn->addWidget(zeroHeading);
+    zeroColumn->addWidget(m_zeroHpList, 1);
+    lists->addLayout(initiativeColumn, 3);
+    lists->addLayout(zeroColumn, 2);
+    fightLayout->addLayout(lists);
 
     m_noCombatantHint = new QLabel(tr("No one is in this fight yet. Add characters and monsters in Encounter Builder."));
     fightLayout->addWidget(m_noCombatantHint);
@@ -323,7 +410,28 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     right->addWidget(m_fight, 1);
 
     connect(m_encounterCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &CombatPage::showEncounter);
-    connect(m_combatantList, &QListWidget::currentRowChanged, this, &CombatPage::showCombatant);
+    connect(m_initiativeList, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
+                if (m_populating) {
+                    return;
+                }
+                if (current != nullptr) {
+                    const QSignalBlocker blocker(m_zeroHpList);
+                    m_zeroHpList->setCurrentItem(nullptr);
+                }
+                showCombatant();
+            });
+    connect(m_zeroHpList, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
+                if (m_populating) {
+                    return;
+                }
+                if (current != nullptr) {
+                    const QSignalBlocker blocker(m_initiativeList);
+                    m_initiativeList->setCurrentItem(nullptr);
+                }
+                showCombatant();
+            });
     connect(m_initiative, &QSpinBox::valueChanged, this, &CombatPage::onInitiativeChanged);
     connect(m_initiative, &QSpinBox::editingFinished, this, &CombatPage::onInitiativeEditingFinished);
     connect(m_hp, &QSpinBox::valueChanged, this, &CombatPage::onHpChanged);
@@ -445,37 +553,41 @@ Encounter* CombatPage::selectedEncounter()
 Combatant* CombatPage::selectedCombatant()
 {
     Encounter* encounter = selectedEncounter();
-    if (encounter == nullptr || m_combatantList == nullptr) {
+    if (encounter == nullptr) {
         return nullptr;
     }
-    const int row = m_combatantList->currentRow();
-    if (row < 0 || row >= static_cast<int>(encounter->combatants.size())) {
+    QTreeWidgetItem* item = nullptr;
+    if (m_initiativeList != nullptr && m_initiativeList->currentItem() != nullptr) {
+        item = m_initiativeList->currentItem();
+    } else if (m_zeroHpList != nullptr) {
+        item = m_zeroHpList->currentItem();
+    }
+    if (item == nullptr) {
         return nullptr;
     }
-    return &encounter->combatants[static_cast<std::size_t>(row)];
-}
-
-QString CombatPage::combatantLabel(const Combatant& combatant, bool active) const
-{
-    const QString marker = active ? QStringLiteral("● ") : QStringLiteral("   ");
-    QString label = marker + QString::number(combatant.initiative) + QStringLiteral("    ") +
-                    QString::fromStdString(combatant.name) + QStringLiteral("    AC ") +
-                    QString::number(combatant.ac) + QStringLiteral("    HP ") +
-                    QString::fromStdString(formatHitPoints(combatant.hp, combatant.maxHp));
-    if (combatant.tempHp != 0) {
-        label += tr("    temp %1").arg(combatant.tempHp);
+    const int index = indexOfId(*encounter, item->data(0, Qt::UserRole).toString().toStdString());
+    if (index < 0) {
+        return nullptr;
     }
-    return label;
+    return &encounter->combatants[static_cast<std::size_t>(index)];
 }
 
-void CombatPage::updateCombatantItemText(int row)
+void CombatPage::refreshListedHitPoints(const Combatant& combatant)
 {
-    Encounter* encounter = selectedEncounter();
-    if (encounter == nullptr || row < 0 || row >= m_combatantList->count()) {
+    const QString id = QString::fromStdString(combatant.id);
+    const QString hp = QString::fromStdString(formatHitPoints(combatant.hp, combatant.maxHp));
+    QTreeWidget* list = combatant.hp > 0 ? m_initiativeList : m_zeroHpList;
+    const int column = combatant.hp > 0 ? 2 : 1;
+    if (list == nullptr) {
         return;
     }
-    const bool active = row == encounter->turnIndex;
-    m_combatantList->item(row)->setText(combatantLabel(encounter->combatants[static_cast<std::size_t>(row)], active));
+    for (int i = 0; i < list->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* item = list->topLevelItem(i);
+        if (item->data(0, Qt::UserRole).toString() == id) {
+            item->setText(column, hp);
+            return;
+        }
+    }
 }
 
 void CombatPage::updateTurnLabels()
@@ -485,18 +597,22 @@ void CombatPage::updateTurnLabels()
         return;
     }
     m_roundLabel->setText(tr("Round %1").arg(encounter->round));
-    const bool hasCombatants = !encounter->combatants.empty();
-    if (!hasCombatants) {
+    const int count = static_cast<int>(encounter->combatants.size());
+    const bool hasLiving = !initiativeOrder(encounter->combatants).empty();
+    const int index = encounter->turnIndex;
+    const bool livingTurn =
+        index >= 0 && index < count && encounter->combatants[static_cast<std::size_t>(index)].hp > 0;
+    if (count == 0) {
         m_activeLabel->setText(tr("No one is in this fight yet."));
+    } else if (!livingTurn) {
+        m_activeLabel->setText(tr("No one is above 0 HP."));
     } else {
-        const int index = encounter->turnIndex;
-        const QString name =
-            QString::fromStdString(encounter->combatants[static_cast<std::size_t>(index)].name);
+        const QString name = QString::fromStdString(encounter->combatants[static_cast<std::size_t>(index)].name);
         m_activeLabel->setText(tr("%1's turn").arg(name));
     }
-    m_previousTurnButton->setEnabled(hasCombatants);
-    m_nextTurnButton->setEnabled(hasCombatants);
-    m_nextRoundButton->setEnabled(hasCombatants);
+    m_previousTurnButton->setEnabled(hasLiving);
+    m_nextTurnButton->setEnabled(hasLiving);
+    m_nextRoundButton->setEnabled(hasLiving);
 
     bool anyMonster = false;
     for (const Combatant& combatant : encounter->combatants) {
@@ -539,25 +655,35 @@ void CombatPage::rebuildCombatantList(const std::string& selectId)
     if (encounter == nullptr) {
         return;
     }
-    int selectRow = encounter->combatants.empty() ? -1 : encounter->turnIndex;
-    if (!selectId.empty()) {
-        for (int i = 0; i < static_cast<int>(encounter->combatants.size()); ++i) {
-            if (encounter->combatants[static_cast<std::size_t>(i)].id == selectId) {
-                selectRow = i;
-                break;
-            }
+    keepTurnInInitiative(*encounter);
+    std::string id = selectId;
+    if (id.empty() && !encounter->combatants.empty()) {
+        const int turn = encounter->turnIndex;
+        if (turn >= 0 && turn < static_cast<int>(encounter->combatants.size())) {
+            id = encounter->combatants[static_cast<std::size_t>(turn)].id;
         }
     }
     m_populating = true;
     {
-        QSignalBlocker blocker(m_combatantList);
-        m_combatantList->clear();
+        const QSignalBlocker initiativeBlocker(m_initiativeList);
+        const QSignalBlocker zeroBlocker(m_zeroHpList);
+        m_initiativeList->clear();
+        m_zeroHpList->clear();
+        QTreeWidgetItem* selectItem = nullptr;
+        QTreeWidget* selectList = nullptr;
         for (int i = 0; i < static_cast<int>(encounter->combatants.size()); ++i) {
             const Combatant& combatant = encounter->combatants[static_cast<std::size_t>(i)];
-            m_combatantList->addItem(combatantLabel(combatant, i == encounter->turnIndex));
+            const bool down = combatant.hp <= 0;
+            QTreeWidget* list = down ? m_zeroHpList : m_initiativeList;
+            QTreeWidgetItem* item =
+                addCombatantRow(list, combatant, !down && i == encounter->turnIndex, !down);
+            if (combatant.id == id) {
+                selectItem = item;
+                selectList = list;
+            }
         }
-        if (selectRow >= 0) {
-            m_combatantList->setCurrentRow(selectRow);
+        if (selectItem != nullptr && selectList != nullptr) {
+            selectList->setCurrentItem(selectItem);
         }
     }
     m_populating = false;
@@ -574,10 +700,10 @@ void CombatPage::showCombatant()
     const Encounter* encounter = selectedEncounter();
     m_combatantForm->setVisible(combatant != nullptr);
     m_noCombatantHint->setVisible(encounter != nullptr && combatant == nullptr);
-    const int row = m_combatantList->currentRow();
-    const int count = encounter == nullptr ? 0 : static_cast<int>(encounter->combatants.size());
-    m_moveUpButton->setEnabled(combatant != nullptr && row > 0);
-    m_moveDownButton->setEnabled(combatant != nullptr && row >= 0 && row + 1 < count);
+    const int index = encounter == nullptr || combatant == nullptr ? -1 : indexOfId(*encounter, combatant->id);
+    const bool living = combatant != nullptr && combatant->hp > 0 && index >= 0;
+    m_moveUpButton->setEnabled(living && hasLivingNeighbor(*encounter, index, -1));
+    m_moveDownButton->setEnabled(living && hasLivingNeighbor(*encounter, index, 1));
     m_removeButton->setEnabled(combatant != nullptr);
     setCharacterSheetControlsVisible(combatant != nullptr && !isMonsterCombatant(*combatant));
     if (combatant == nullptr) {
@@ -642,8 +768,13 @@ void CombatPage::showCombatant()
     m_deathFailureLabel->setText(QString::number(combatant->deathSaves.failures));
     m_populating = false;
     if (combatant->hp != hpBefore) {
-        updateCombatantItemText(m_combatantList->currentRow());
         persist();
+        if ((hpBefore > 0) != (combatant->hp > 0)) {
+            const std::string id = combatant->id;
+            rebuildCombatantList(id);
+            return;
+        }
+        refreshListedHitPoints(*combatant);
     }
     showAttacks();
     showConditionText();
@@ -658,7 +789,6 @@ void CombatPage::onInitiativeChanged(int value)
         return;
     }
     combatant->initiative = value;
-    updateCombatantItemText(m_combatantList->currentRow());
     persist();
 }
 
@@ -681,13 +811,19 @@ void CombatPage::onHpChanged(int value)
     if (m_populating || combatant == nullptr) {
         return;
     }
+    const bool wasUp = combatant->hp > 0;
     combatant->hp = value;
     clampAndCarryHitPoints(*combatant);
     if (m_hp->value() != combatant->hp) {
         const QSignalBlocker blocker(m_hp);
         m_hp->setValue(combatant->hp);
     }
-    updateCombatantItemText(m_combatantList->currentRow());
+    if (wasUp != (combatant->hp > 0)) {
+        const std::string id = combatant->id;
+        rebuildCombatantList(id);
+    } else {
+        refreshListedHitPoints(*combatant);
+    }
     persist();
 }
 
@@ -698,7 +834,6 @@ void CombatPage::onTempHpChanged(int value)
         return;
     }
     combatant->tempHp = value;
-    updateCombatantItemText(m_combatantList->currentRow());
     persist();
 }
 
@@ -1110,8 +1245,11 @@ void CombatPage::moveSelected(int direction)
         return;
     }
     const std::string id = combatant->id;
-    const MoveResult moved =
-        moveCombatant(encounter->combatants, m_combatantList->currentRow(), direction, encounter->turnIndex);
+    const int index = indexOfId(*encounter, id);
+    if (index < 0 || combatant->hp <= 0) {
+        return;
+    }
+    const MoveResult moved = moveCombatant(encounter->combatants, index, direction, encounter->turnIndex);
     encounter->turnIndex = moved.turnIndex;
     rebuildCombatantList(id);
     persist();
@@ -1131,7 +1269,7 @@ void CombatPage::removeSelected()
     if (answer != QMessageBox::Yes) {
         return;
     }
-    const int index = m_combatantList->currentRow();
+    const int index = indexOfId(*encounter, combatant->id);
     encounter->turnIndex = removeCombatant(encounter->combatants, index, encounter->turnIndex);
     rebuildCombatantList({});
     persist();

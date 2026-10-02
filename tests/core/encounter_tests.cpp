@@ -198,6 +198,59 @@ TEST_CASE("turn controls wrap the order and the round")
     CHECK_EQ(encounter.round, 2);
 }
 
+TEST_CASE("a combatant at 0 hp is out of turn order and returns to the same initiative slot")
+{
+    Encounter encounter = fightWith({
+        fighter("aria", "Aria", 20),
+        goblin("goblin", 15, 2),
+        fighter("bard", "Bard", 5),
+    });
+    encounter.combatants[0].hp = 12;
+    encounter.combatants[1].hp = 10;
+    encounter.combatants[2].hp = 8;
+
+    const std::vector<int> before = initiativeOrder(encounter.combatants);
+    CHECK_EQ(before.size(), 3U);
+    CHECK_EQ(before[0], 0);
+    CHECK_EQ(before[1], 1);
+    CHECK_EQ(before[2], 2);
+
+    encounter.combatants[1].hp = 0;
+    encounter.turnIndex = 1;
+    keepTurnInInitiative(encounter);
+    CHECK_EQ(encounter.turnIndex, 2);
+    CHECK_EQ(encounter.round, 1);
+    const std::vector<int> dropped = initiativeOrder(encounter.combatants);
+    CHECK_EQ(dropped.size(), 2U);
+    CHECK_EQ(dropped[0], 0);
+    CHECK_EQ(dropped[1], 2);
+
+    encounter.combatants[1].hp = 4;
+    const std::vector<int> healed = initiativeOrder(encounter.combatants);
+    CHECK_EQ(healed.size(), 3U);
+    CHECK_EQ(healed[0], 0);
+    CHECK_EQ(healed[1], 1);
+    CHECK_EQ(healed[2], 2);
+    CHECK_EQ(encounter.combatants[0].id, std::string("aria"));
+    CHECK_EQ(encounter.combatants[1].id, std::string("goblin"));
+    CHECK_EQ(encounter.combatants[2].id, std::string("bard"));
+
+    encounter.combatants[2].hp = 0;
+    encounter.turnIndex = 2;
+    keepTurnInInitiative(encounter);
+    CHECK_EQ(encounter.turnIndex, 0);
+    CHECK_EQ(encounter.round, 1);
+
+    encounter.combatants[2].hp = 8;
+    encounter.turnIndex = 0;
+    encounter.combatants[1].hp = 0;
+    keepTurnInInitiative(encounter);
+    CHECK_EQ(encounter.turnIndex, 0);
+    advanceTurn(encounter);
+    CHECK_EQ(encounter.turnIndex, 2);
+    CHECK_EQ(encounter.round, 1);
+}
+
 TEST_CASE("turn controls do nothing when the fight is empty")
 {
     Encounter encounter = fightWith({});
