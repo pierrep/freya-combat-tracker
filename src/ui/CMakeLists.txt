@@ -4,10 +4,10 @@ add_executable(combat_app
     main.cpp
     app_paths.cpp
     main_window.cpp
-    dashboard_page.cpp
     characters_page.cpp
     monsters_page.cpp
     combat_page.cpp
+    encounter_builder_page.cpp
 )
 
 # The SRD catalog is read from the source tree. v1 runs from the build directory.

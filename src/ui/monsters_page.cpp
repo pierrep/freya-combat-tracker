@@ -592,6 +592,7 @@ void MonstersPage::onNameEdited(const QString& text)
         return;
     }
     monster->name = text.toStdString();
+    m_catalog.updateCustomMonster(*monster);
     if (QListWidgetItem* item = m_list->currentItem()) {
         item->setText(listLabel(*monster));
     }
@@ -637,6 +638,7 @@ void MonstersPage::onFormEdited()
         monster->abilities.*kAbilities[i].member = m_scores[i]->value();
         m_modifiers[i]->setText(QString::fromStdString(formatModifier(abilityModifier(m_scores[i]->value()))));
     }
+    m_catalog.updateCustomMonster(*monster);
     if (Monster* visible = const_cast<Monster*>(selectedVisible())) {
         if (visible->id == monster->id) {
             *visible = *monster;

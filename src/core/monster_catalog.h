@@ -28,6 +28,11 @@ public:
 
     void setCustomMonsters(std::vector<Monster> custom);
 
+    // Replaces the custom row with this id. The name on monster is the one
+    // search and findById return afterward. Returns false if that id is not
+    // a custom row.
+    bool updateCustomMonster(const Monster& monster);
+
     const std::vector<Monster>& srdMonsters() const { return m_srd; }
     const std::vector<Monster>& customMonsters() const { return m_custom; }
     std::unordered_set<std::string> srdIds() const;

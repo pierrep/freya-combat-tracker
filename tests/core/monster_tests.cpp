@@ -1,3 +1,4 @@
+#include "core/encounter.h"
 #include "core/monster.h"
 #include "core/monster_catalog.h"
 #include "test_harness.h"
@@ -130,6 +131,36 @@ TEST_CASE("equal names put the SRD row before the custom row")
     CHECK(custom.has_value());
     CHECK_EQ(custom->hp, 30);
     CHECK(!catalog.findById("missing").has_value());
+}
+
+TEST_CASE("renaming a custom monster keeps that name when it is added")
+{
+    Monster monster = makeMonster("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "New monster", "Monstrosity", "3",
+                                  kCustomMonsterSource);
+    MergedMonsterCatalog catalog({}, {monster});
+    CHECK_EQ(catalog.findById(monster.id)->name, std::string("New monster"));
+
+    monster.name = "Cave Fisher";
+    monster.hp = 58;
+    CHECK(catalog.updateCustomMonster(monster));
+    const auto lookedUp = catalog.findById(monster.id);
+    CHECK(lookedUp.has_value());
+    CHECK_EQ(lookedUp->name, std::string("Cave Fisher"));
+    CHECK_EQ(lookedUp->hp, 58);
+
+    MonsterQuery query;
+    query.nameSubstring = "fisher";
+    const auto matches = catalog.search(query);
+    CHECK_EQ(matches.size(), std::size_t{1});
+    CHECK_EQ(matches[0].name, std::string("Cave Fisher"));
+
+    query.nameSubstring = "New monster";
+    CHECK(catalog.search(query).empty());
+
+    const Combatant added = makeMonsterCombatant(*lookedUp, {}, "combatant-1");
+    CHECK_EQ(added.name, std::string("Cave Fisher 1"));
+    CHECK_EQ(added.sourceId, monster.id);
+    CHECK(added.name.find("New monster") == std::string::npos);
 }
 
 TEST_CASE("findById prefers the SRD row when a custom id collides")

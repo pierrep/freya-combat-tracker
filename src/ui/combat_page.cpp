@@ -3,8 +3,6 @@
 #include "core/character_store.h"
 #include "core/combat_rules.h"
 #include "core/encounter_store.h"
-#include "core/monster_catalog.h"
-#include "core/uuid.h"
 #include "ui/page_title.h"
 
 #include <QComboBox>
@@ -29,11 +27,6 @@ namespace combat::ui {
 
 namespace {
 
-bool isBlank(const QString& text)
-{
-    return text.trimmed().isEmpty();
-}
-
 QSpinBox* makeNumberBox()
 {
     auto* box = new QSpinBox;
@@ -44,28 +37,25 @@ QSpinBox* makeNumberBox()
 
 }  // namespace
 
-CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, EncounterStore& encounters,
-                       std::vector<Spell> spells, std::vector<Condition> conditions, QWidget* parent)
+CombatPage::CombatPage(CharacterStore& characters, EncounterStore& encounters, std::vector<Spell> spells,
+                       std::vector<Condition> conditions, QWidget* parent)
     : QWidget(parent)
     , m_charactersStore(characters)
-    , m_catalog(catalog)
     , m_encountersStore(encounters)
     , m_spells(std::move(spells))
     , m_conditions(std::move(conditions))
     , m_dice(std::random_device{}())
-    , m_ids(std::random_device{}())
 {
     try {
         m_encounters = m_encountersStore.loadAll();
     } catch (const EncounterStoreError& error) {
         m_loadError = QString::fromStdString(error.what());
     }
-    reloadCharacters();
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(32, 24, 32, 24);
     outer->setSpacing(16);
-    outer->addWidget(makePageTitle(tr("Combat")));
+    outer->addWidget(makePageTitle(tr("Dashboard")));
 
     if (hasLoadError()) {
         auto* banner = new QLabel(tr("The encounters file could not be read, so it has not been changed.\n%1")
@@ -76,23 +66,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
         outer->addWidget(banner);
     }
 
-    auto* columns = new QHBoxLayout;
-    columns->setSpacing(24);
-    outer->addLayout(columns, 1);
-
-    auto* left = new QVBoxLayout;
-    m_encounterList = new QListWidget;
-    m_encounterList->setObjectName(QStringLiteral("encounterList"));
-    m_encounterList->setMinimumWidth(200);
-    m_encounterList->setMaximumWidth(260);
-    left->addWidget(m_encounterList, 1);
-    auto* listButtons = new QHBoxLayout;
-    m_addEncounterButton = new QPushButton(tr("Add"));
-    m_deleteEncounterButton = new QPushButton(tr("Delete"));
-    listButtons->addWidget(m_addEncounterButton);
-    listButtons->addWidget(m_deleteEncounterButton);
-    left->addLayout(listButtons);
-    columns->addLayout(left);
+    auto* encounterForm = new QFormLayout;
+    m_encounterCombo = new QComboBox;
+    m_encounterCombo->setObjectName(QStringLiteral("encounterCombo"));
+    encounterForm->addRow(tr("Encounter"), m_encounterCombo);
+    outer->addLayout(encounterForm);
 
     auto* scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
@@ -102,9 +80,9 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     right->setContentsMargins(0, 0, 0, 0);
     right->setSpacing(12);
     scroll->setWidget(rightHost);
-    columns->addWidget(scroll, 1);
+    outer->addWidget(scroll, 1);
 
-    m_emptyHint = new QLabel(tr("Add an encounter to start a fight."));
+    m_emptyHint = new QLabel(tr("Choose an encounter to run the fight. Create encounters in Encounter Builder."));
     m_emptyHint->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     right->addWidget(m_emptyHint);
 
@@ -113,20 +91,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     auto* fightLayout = new QVBoxLayout(m_fight);
     fightLayout->setContentsMargins(0, 0, 0, 0);
     fightLayout->setSpacing(12);
-
-    m_encounterName = new QLineEdit;
-    m_encounterName->setObjectName(QStringLiteral("encounterName"));
-    m_encounterName->setPlaceholderText(tr("Required"));
-    m_nameError = new QLabel(tr("Name is required."));
-    m_nameError->setStyleSheet(QStringLiteral("QLabel { color: #b00020; }"));
-    m_nameError->hide();
-    auto* nameColumn = new QVBoxLayout;
-    nameColumn->setSpacing(2);
-    nameColumn->addWidget(m_encounterName);
-    nameColumn->addWidget(m_nameError);
-    auto* nameForm = new QFormLayout;
-    nameForm->addRow(tr("Encounter"), nameColumn);
-    fightLayout->addLayout(nameForm);
 
     auto* hpNote = new QLabel(tr("Hit points, temporary HP, conditions, concentration, and death saves in this fight "
                                  "are a separate copy. Spell slots and Finish rest are saved on the character."));
@@ -174,7 +138,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_combatantList->setMinimumHeight(140);
     fightLayout->addWidget(m_combatantList);
 
-    m_noCombatantHint = new QLabel(tr("Add a character or a monster."));
+    m_noCombatantHint = new QLabel(tr("No one is in this fight yet. Add characters and monsters in Encounter Builder."));
     fightLayout->addWidget(m_noCombatantHint);
 
     m_combatantForm = new QWidget;
@@ -319,45 +283,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     orderButtons->addWidget(m_removeButton);
     orderButtons->addStretch(1);
     fightLayout->addLayout(orderButtons);
-
-    auto* addCharacterRow = new QHBoxLayout;
-    m_characterCombo = new QComboBox;
-    m_characterCombo->setObjectName(QStringLiteral("characterCombo"));
-    m_addCharacterButton = new QPushButton(tr("Add character"));
-    m_addCharacterButton->setObjectName(QStringLiteral("addCharacter"));
-    addCharacterRow->addWidget(m_characterCombo, 1);
-    addCharacterRow->addWidget(m_addCharacterButton);
-    fightLayout->addLayout(addCharacterRow);
-    if (!m_characterLoadError.isEmpty()) {
-        auto* characterError = new QLabel(tr("Characters could not be read, so none can be added.\n%1")
-                                              .arg(m_characterLoadError));
-        characterError->setWordWrap(true);
-        characterError->setStyleSheet(QStringLiteral("QLabel { color: #b00020; }"));
-        fightLayout->addWidget(characterError);
-    }
-
-    m_monsterSearch = new QLineEdit;
-    m_monsterSearch->setObjectName(QStringLiteral("monsterSearch"));
-    m_monsterSearch->setPlaceholderText(tr("Search monsters by name"));
-    fightLayout->addWidget(m_monsterSearch);
-    auto* addMonsterRow = new QHBoxLayout;
-    m_monsterChoices = new QListWidget;
-    m_monsterChoices->setObjectName(QStringLiteral("monsterChoices"));
-    m_monsterChoices->setMaximumHeight(140);
-    m_addMonsterButton = new QPushButton(tr("Add monster"));
-    m_addMonsterButton->setObjectName(QStringLiteral("addMonster"));
-    addMonsterRow->addWidget(m_monsterChoices, 1);
-    addMonsterRow->addWidget(m_addMonsterButton, 0, Qt::AlignTop);
-    fightLayout->addLayout(addMonsterRow);
     fightLayout->addStretch(1);
 
     right->addWidget(m_fight, 1);
 
-    connect(m_encounterList, &QListWidget::currentRowChanged, this, &CombatPage::showEncounter);
-    connect(m_addEncounterButton, &QPushButton::clicked, this, &CombatPage::addEncounter);
-    connect(m_deleteEncounterButton, &QPushButton::clicked, this, &CombatPage::deleteEncounter);
-    connect(m_encounterName, &QLineEdit::textEdited, this, &CombatPage::onEncounterNameEdited);
-    connect(m_encounterName, &QLineEdit::editingFinished, this, &CombatPage::onEncounterNameEditingFinished);
+    connect(m_encounterCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &CombatPage::showEncounter);
     connect(m_combatantList, &QListWidget::currentRowChanged, this, &CombatPage::showCombatant);
     connect(m_initiative, &QSpinBox::valueChanged, this, &CombatPage::onInitiativeChanged);
     connect(m_initiative, &QSpinBox::editingFinished, this, &CombatPage::onInitiativeEditingFinished);
@@ -381,38 +311,21 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(m_moveUpButton, &QPushButton::clicked, this, [this] { moveSelected(-1); });
     connect(m_moveDownButton, &QPushButton::clicked, this, [this] { moveSelected(1); });
     connect(m_removeButton, &QPushButton::clicked, this, &CombatPage::removeSelected);
-    connect(m_addCharacterButton, &QPushButton::clicked, this, &CombatPage::addCharacter);
-    connect(m_addMonsterButton, &QPushButton::clicked, this, &CombatPage::addSelectedMonster);
-    connect(m_monsterChoices, &QListWidget::itemDoubleClicked, this, [this] { addSelectedMonster(); });
-    connect(m_monsterSearch, &QLineEdit::textChanged, this, &CombatPage::refreshMonsterChoices);
-    connect(m_monsterChoices, &QListWidget::currentRowChanged, this, [this](int row) {
-        m_addMonsterButton->setEnabled(row >= 0 && selectedEncounter() != nullptr && !hasLoadError());
-    });
     connect(m_previousTurnButton, &QPushButton::clicked, this, &CombatPage::previousTurn);
     connect(m_nextTurnButton, &QPushButton::clicked, this, &CombatPage::nextTurn);
     connect(m_nextRoundButton, &QPushButton::clicked, this, &CombatPage::nextRound);
 
-    reloadCharacters();
-
-    for (const Encounter& encounter : m_encounters) {
-        m_encounterList->addItem(QString::fromStdString(encounter.name));
-    }
-    refreshMonsterChoices();
     refreshConcentrationChoices(QString());
 
     if (hasLoadError()) {
-        m_encounterList->setEnabled(false);
-        m_addEncounterButton->setEnabled(false);
-        m_deleteEncounterButton->setEnabled(false);
+        m_encounterCombo->setEnabled(false);
         m_emptyHint->hide();
         m_fight->hide();
         return;
     }
 
-    if (!m_encounters.empty()) {
-        m_encounterList->setCurrentRow(0);
-    }
-    showEncounter();
+    reloadCharacters();
+    reloadEncounters();
 }
 
 void CombatPage::showEvent(QShowEvent* event)
@@ -420,6 +333,7 @@ void CombatPage::showEvent(QShowEvent* event)
     QWidget::showEvent(event);
     if (!hasLoadError()) {
         reloadCharacters();
+        reloadEncounters();
     }
     if (m_reportedLoadError || !hasLoadError()) {
         return;
@@ -433,52 +347,47 @@ void CombatPage::showEvent(QShowEvent* event)
     });
 }
 
+void CombatPage::reloadEncounters()
+{
+    if (hasLoadError() || m_encounterCombo == nullptr) {
+        return;
+    }
+    const QString selectedId = m_encounterCombo->currentData().toString();
+    try {
+        m_encounters = m_encountersStore.loadAll();
+    } catch (const EncounterStoreError& error) {
+        QMessageBox::warning(this, tr("Could not read encounters"), QString::fromStdString(error.what()));
+        return;
+    }
+    int select = -1;
+    {
+        const QSignalBlocker blocker(m_encounterCombo);
+        m_encounterCombo->clear();
+        for (int i = 0; i < static_cast<int>(m_encounters.size()); ++i) {
+            const Encounter& encounter = m_encounters[static_cast<std::size_t>(i)];
+            const QString id = QString::fromStdString(encounter.id);
+            m_encounterCombo->addItem(QString::fromStdString(encounter.name), id);
+            if (!selectedId.isEmpty() && id == selectedId) {
+                select = i;
+            }
+        }
+        if (select < 0 && !m_encounters.empty()) {
+            select = 0;
+        }
+        if (select >= 0) {
+            m_encounterCombo->setCurrentIndex(select);
+        }
+    }
+    showEncounter();
+}
+
 void CombatPage::reloadCharacters()
 {
     try {
         m_characters = m_charactersStore.loadAll();
-        m_characterLoadError.clear();
-    } catch (const CharacterStoreError& error) {
-        m_characterLoadError = QString::fromStdString(error.what());
+    } catch (const CharacterStoreError&) {
         return;
     }
-    if (m_characterCombo == nullptr) {
-        return;
-    }
-    const QString previous = m_characterCombo->currentData().toString();
-    QSignalBlocker blocker(m_characterCombo);
-    m_characterCombo->clear();
-    for (const Character& character : m_characters) {
-        m_characterCombo->addItem(QString::fromStdString(character.name), QString::fromStdString(character.id));
-    }
-    const int row = m_characterCombo->findData(previous);
-    if (row >= 0) {
-        m_characterCombo->setCurrentIndex(row);
-    }
-    const bool canAdd = !m_characters.empty() && !hasLoadError();
-    m_characterCombo->setEnabled(canAdd);
-    m_addCharacterButton->setEnabled(canAdd && selectedEncounter() != nullptr);
-}
-
-void CombatPage::refreshMonsterChoices()
-{
-    if (m_monsterChoices == nullptr || m_monsterSearch == nullptr) {
-        return;
-    }
-    MonsterQuery query;
-    query.nameSubstring = m_monsterSearch->text().toStdString();
-    const std::vector<Monster> matches = m_catalog.search(query);
-    QSignalBlocker blocker(m_monsterChoices);
-    m_monsterChoices->clear();
-    for (const Monster& monster : matches) {
-        auto* item = new QListWidgetItem(QString::fromStdString(monster.name));
-        if (monster.source == kCustomMonsterSource) {
-            item->setText(item->text() + QStringLiteral("    Custom"));
-        }
-        item->setData(Qt::UserRole, QString::fromStdString(monster.id));
-        m_monsterChoices->addItem(item);
-    }
-    m_addMonsterButton->setEnabled(false);
 }
 
 int CombatPage::rollD20()
@@ -489,10 +398,10 @@ int CombatPage::rollD20()
 
 Encounter* CombatPage::selectedEncounter()
 {
-    if (m_encounterList == nullptr) {
+    if (m_encounterCombo == nullptr) {
         return nullptr;
     }
-    const int row = m_encounterList->currentRow();
+    const int row = m_encounterCombo->currentIndex();
     if (row < 0 || row >= static_cast<int>(m_encounters.size())) {
         return nullptr;
     }
@@ -576,86 +485,17 @@ void CombatPage::persist()
     }
 }
 
-void CombatPage::addEncounter()
-{
-    Encounter encounter;
-    encounter.id = generateUuidV4([this] { return m_ids(); });
-    encounter.name = tr("New encounter").toStdString();
-    m_encounters.push_back(encounter);
-    m_encounterList->addItem(QString::fromStdString(encounter.name));
-    persist();
-    m_encounterList->setCurrentRow(static_cast<int>(m_encounters.size()) - 1);
-    m_encounterName->setFocus();
-    m_encounterName->selectAll();
-}
-
-void CombatPage::deleteEncounter()
-{
-    Encounter* encounter = selectedEncounter();
-    if (encounter == nullptr) {
-        return;
-    }
-    const auto answer = QMessageBox::question(
-        this, tr("Delete encounter"),
-        tr("Delete %1? This cannot be undone.").arg(QString::fromStdString(encounter->name)));
-    if (answer != QMessageBox::Yes) {
-        return;
-    }
-    const int row = m_encounterList->currentRow();
-    m_encounters.erase(m_encounters.begin() + row);
-    delete m_encounterList->takeItem(row);
-    persist();
-    showEncounter();
-}
-
 void CombatPage::showEncounter()
 {
     Encounter* encounter = selectedEncounter();
-    m_deleteEncounterButton->setEnabled(encounter != nullptr && !hasLoadError());
     m_fight->setVisible(encounter != nullptr);
-    m_emptyHint->setVisible(encounter == nullptr);
-    m_addCharacterButton->setEnabled(encounter != nullptr && m_characterLoadError.isEmpty() && !m_characters.empty());
-    m_characterCombo->setEnabled(encounter != nullptr && m_characterLoadError.isEmpty() && !m_characters.empty());
-    m_monsterSearch->setEnabled(encounter != nullptr);
-    m_monsterChoices->setEnabled(encounter != nullptr);
-    m_addMonsterButton->setEnabled(encounter != nullptr && m_monsterChoices->currentRow() >= 0);
+    m_emptyHint->setVisible(encounter == nullptr && !hasLoadError());
     if (encounter == nullptr) {
         return;
     }
-    m_populating = true;
-    m_encounterName->setText(QString::fromStdString(encounter->name));
-    m_nameError->hide();
-    m_populating = false;
     m_rollNote->hide();
     m_rollNote->clear();
     rebuildCombatantList({});
-}
-
-void CombatPage::onEncounterNameEdited(const QString& text)
-{
-    Encounter* encounter = selectedEncounter();
-    if (m_populating || encounter == nullptr) {
-        return;
-    }
-    m_nameError->setVisible(isBlank(text));
-    if (isBlank(text)) {
-        return;
-    }
-    encounter->name = text.toStdString();
-    if (QListWidgetItem* item = m_encounterList->currentItem()) {
-        item->setText(text);
-    }
-    persist();
-}
-
-void CombatPage::onEncounterNameEditingFinished()
-{
-    const Encounter* encounter = selectedEncounter();
-    if (encounter == nullptr || !isBlank(m_encounterName->text())) {
-        return;
-    }
-    m_encounterName->setText(QString::fromStdString(encounter->name));
-    m_nameError->hide();
 }
 
 void CombatPage::rebuildCombatantList(const std::string& selectId)
@@ -1194,50 +1034,6 @@ void CombatPage::removeSelected()
     const int index = m_combatantList->currentRow();
     encounter->turnIndex = removeCombatant(encounter->combatants, index, encounter->turnIndex);
     rebuildCombatantList({});
-    persist();
-}
-
-void CombatPage::addCharacter()
-{
-    Encounter* encounter = selectedEncounter();
-    if (encounter == nullptr) {
-        return;
-    }
-    const QString id = m_characterCombo->currentData().toString();
-    const Character* character = nullptr;
-    for (const Character& candidate : m_characters) {
-        if (QString::fromStdString(candidate.id) == id) {
-            character = &candidate;
-            break;
-        }
-    }
-    if (character == nullptr) {
-        return;
-    }
-    Combatant combatant = makeCharacterCombatant(*character, generateUuidV4([this] { return m_ids(); }));
-    const std::string combatantId = combatant.id;
-    encounter->combatants.push_back(std::move(combatant));
-    encounter->turnIndex = sortByInitiative(encounter->combatants, encounter->turnIndex);
-    rebuildCombatantList(combatantId);
-    persist();
-}
-
-void CombatPage::addSelectedMonster()
-{
-    Encounter* encounter = selectedEncounter();
-    QListWidgetItem* item = m_monsterChoices->currentItem();
-    if (encounter == nullptr || item == nullptr) {
-        return;
-    }
-    const auto monster = m_catalog.findById(item->data(Qt::UserRole).toString().toStdString());
-    if (!monster.has_value()) {
-        return;
-    }
-    Combatant combatant = makeMonsterCombatant(*monster, encounter->combatants, generateUuidV4([this] { return m_ids(); }));
-    const std::string combatantId = combatant.id;
-    encounter->combatants.push_back(std::move(combatant));
-    encounter->turnIndex = sortByInitiative(encounter->combatants, encounter->turnIndex);
-    rebuildCombatantList(combatantId);
     persist();
 }
 

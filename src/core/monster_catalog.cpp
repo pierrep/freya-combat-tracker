@@ -37,6 +37,19 @@ void MergedMonsterCatalog::setCustomMonsters(std::vector<Monster> custom)
     m_custom = std::move(custom);
 }
 
+bool MergedMonsterCatalog::updateCustomMonster(const Monster& monster)
+{
+    for (Monster& existing : m_custom) {
+        if (existing.id != monster.id) {
+            continue;
+        }
+        existing = monster;
+        existing.source = kCustomMonsterSource;
+        return true;
+    }
+    return false;
+}
+
 std::unordered_set<std::string> MergedMonsterCatalog::srdIds() const
 {
     std::unordered_set<std::string> ids;
