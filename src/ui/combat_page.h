@@ -124,7 +124,6 @@ private:
     QPushButton* m_damageButton = nullptr;
     QSpinBox* m_healAmount = nullptr;
     QPushButton* m_healButton = nullptr;
-    QLabel* m_healNote = nullptr;
     QComboBox* m_conditionPicker = nullptr;
     QListWidget* m_conditionList = nullptr;
     QLabel* m_conditionText = nullptr;

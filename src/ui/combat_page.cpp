@@ -169,9 +169,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     healRow->addWidget(m_healButton);
     healRow->addStretch(1);
     form->addRow(tr("Healing"), healRow);
-    m_healNote = new QLabel;
-    m_healNote->setWordWrap(true);
-    form->addRow(QString(), m_healNote);
 
     auto* divider = new QFrame;
     divider->setObjectName(QStringLiteral("combatantDivider"));
@@ -600,10 +597,8 @@ void CombatPage::showCombatant()
     m_tempHp->setValue(combatant->tempHp);
     if (combatant->maxHp.has_value()) {
         m_maxHpLabel->setText(QString::number(*combatant->maxHp));
-        m_healNote->setText(tr("Healing does not raise current HP above the maximum."));
     } else {
         m_maxHpLabel->setText(tr("Not stored"));
-        m_healNote->setText(tr("No maximum HP was stored with this combatant, so healing is not capped."));
     }
     {
         const QSignalBlocker blocker(m_conditionList);
