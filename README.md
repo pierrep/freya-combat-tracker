@@ -2,7 +2,7 @@
 
 A local desktop combat tracker for fifth edition (2024 rules), built with C++20 and Qt 6 Widgets. 5E compatible.
 
-Phase 3 runs a fight on the Combat page. You create encounters, add characters and monsters, type initiative, and roll initiative for every monster. Turn order, the round, and the fight's own hit points are saved in `encounters.json`. The character sheet and the monster catalog are not rewritten by the fight.
+Phase 4 records the character sheet: species, classes, spells, gear, conditions, and the supporting numbers (current and maximum HP, temporary HP, speed, typed proficiency and initiative bonuses, saves, skills, death saves, and notes). Spell and condition text comes from the packaged SRD 5.2.1 catalogs. A fight still keeps its own single HP value, copied from the character's current HP when they are added.
 
 ## Layout
 
@@ -28,7 +28,7 @@ To build only the Qt-free libraries and tests, pass `-DCOMBAT_TRACKER_BUILD_APP=
 
 ## Saved data
 
-Characters are saved to `characters.json` (`schemaVersion` 1) in the per-user app data folder:
+Characters are saved to `characters.json` (`schemaVersion` 2) in the per-user app data folder:
 
 - macOS: `~/Library/Application Support/CombatTracker/`
 - Linux: `$XDG_DATA_HOME/combat-tracker/` (or `~/.local/share/combat-tracker/`)
@@ -36,9 +36,13 @@ Characters are saved to `characters.json` (`schemaVersion` 1) in the per-user ap
 
 Every edit is saved right away by writing a temporary file and renaming it over the old one. If a file cannot be read, the app shows the error and leaves that file untouched.
 
+A `schemaVersion` 1 roster still opens. The old `hp` number becomes both `hp.current` and `hp.max`, temporary HP starts at 0, and the new lists start empty. Opening it does not rewrite the file. The first save copies those original bytes to `characters.v1.json` beside it (and does not replace that copy later), then writes version 2. An older build refuses a version 2 file.
+
+The sheet stores spell ids (or a name, when the spell is not in the catalog) and a prepared flag. It does not store spell or condition descriptions. Spell slots are typed per level as a current count and a maximum. Species may be any name; the picker lists the SRD species. Gear is a name, a quantity, and an equipped flag.
+
 Monsters come from two files with the same stat-block shape:
 
-- `data/srd/monsters.json` is the packaged SRD 5.2.1 catalog (`source` `srd-5.2.1`), opened read-only, with `data/srd/ATTRIBUTION.txt`. The Monsters page shows that attribution.
+- `data/srd/monsters.json` is the packaged SRD 5.2.1 catalog (`source` `srd-5.2.1`), opened read-only, with `data/srd/ATTRIBUTION.txt`. The Monsters page and the character sheet show that attribution. `data/srd/spells.json`, `data/srd/conditions.json`, and `data/srd/species.json` are the same kind of read-only catalog (`schemaVersion` 1, `source` `srd-5.2.1`). Spell and condition search is a case-insensitive name substring; a blank search lists every row by name.
 - `custom-monsters.json` sits next to `characters.json`. A missing file means no custom monsters. Custom ids are UUIDs. A row whose id matches an SRD slug, or whose source is `srd-5.2.1`, is skipped and reported instead of replacing the SRD monster.
 
 Search is offline: a case-insensitive substring of the name, plus optional exact creature-type and challenge-rating filters. A blank search lists every monster by name. When two rows share a name, the SRD row comes first. Custom rows are badged Custom.

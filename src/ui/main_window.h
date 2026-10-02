@@ -1,7 +1,11 @@
 #pragma once
 
+#include "core/sheet.h"
+
 #include <QMainWindow>
 #include <QString>
+
+#include <vector>
 
 class QListWidget;
 class QStackedWidget;
@@ -25,8 +29,9 @@ public:
     enum Page { DashboardIndex = 0, CharactersIndex, MonstersIndex, CombatIndex };
 
     MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, CustomMonsterStore& customStore,
-               EncounterStore& encounters, const QString& attribution, const QString& catalogError,
-               QWidget* parent = nullptr);
+               EncounterStore& encounters, const std::vector<Spell>& spells, const std::vector<Condition>& conditions,
+               const std::vector<std::string>& species, const QString& attribution, const QString& catalogError,
+               const QString& sheetCatalogError, QWidget* parent = nullptr);
 
     void showPage(int index);
 

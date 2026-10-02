@@ -15,7 +15,9 @@
 namespace combat::ui {
 
 MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, CustomMonsterStore& customStore,
-                       EncounterStore& encounters, const QString& attribution, const QString& catalogError,
+                       EncounterStore& encounters, const std::vector<Spell>& spells,
+                       const std::vector<Condition>& conditions, const std::vector<std::string>& species,
+                       const QString& attribution, const QString& catalogError, const QString& sheetCatalogError,
                        QWidget* parent)
     : QMainWindow(parent)
 {
@@ -32,7 +34,7 @@ MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, Cus
     m_sidebar->setFont(sidebarFont);
 
     m_dashboard = new DashboardPage;
-    m_characters = new CharactersPage(store);
+    m_characters = new CharactersPage(store, spells, conditions, species, attribution, sheetCatalogError);
 
     m_pages = new QStackedWidget;
     m_pages->insertWidget(DashboardIndex, m_dashboard);

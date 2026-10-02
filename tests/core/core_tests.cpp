@@ -56,7 +56,8 @@ TEST_CASE("validateCharacter allows unusual scores")
     Character c;
     c.id = "id-1";
     c.name = "Odd";
-    c.hp = -5;
+    c.hp.current = -5;
+    c.hp.max = -1;
     c.ac = 0;
     c.abilities.strength = 0;
     c.abilities.charisma = 40;

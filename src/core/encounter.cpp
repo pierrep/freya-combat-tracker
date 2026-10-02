@@ -136,7 +136,7 @@ Combatant makeCharacterCombatant(const Character& character, const std::string& 
     combatant.sourceId = character.id;
     combatant.name = character.name;
     combatant.initiative = 0;
-    combatant.hp = character.hp;
+    combatant.hp = character.hp.current;
     combatant.ac = character.ac;
     return combatant;
 }

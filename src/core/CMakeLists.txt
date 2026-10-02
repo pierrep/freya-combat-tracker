@@ -4,6 +4,7 @@ add_library(combat_core STATIC
     monster.cpp
     monster_catalog.cpp
     encounter.cpp
+    sheet.cpp
 )
 
 target_include_directories(combat_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

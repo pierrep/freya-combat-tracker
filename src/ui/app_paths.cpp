@@ -40,6 +40,21 @@ std::filesystem::path srdMonstersFilePath()
     return srdDirectory() / "monsters.json";
 }
 
+std::filesystem::path srdSpellsFilePath()
+{
+    return srdDirectory() / "spells.json";
+}
+
+std::filesystem::path srdConditionsFilePath()
+{
+    return srdDirectory() / "conditions.json";
+}
+
+std::filesystem::path srdSpeciesFilePath()
+{
+    return srdDirectory() / "species.json";
+}
+
 std::filesystem::path srdAttributionFilePath()
 {
     return srdDirectory() / "ATTRIBUTION.txt";

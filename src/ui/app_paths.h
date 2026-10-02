@@ -18,6 +18,9 @@ std::filesystem::path encountersFilePath();
 
 // Packaged SRD files. The build sets COMBAT_TRACKER_SRD_DIR to data/srd.
 std::filesystem::path srdMonstersFilePath();
+std::filesystem::path srdSpellsFilePath();
+std::filesystem::path srdConditionsFilePath();
+std::filesystem::path srdSpeciesFilePath();
 std::filesystem::path srdAttributionFilePath();
 
 }  // namespace combat::ui

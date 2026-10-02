@@ -2,10 +2,12 @@
 #include "data/json_character_store.h"
 #include "data/json_encounters.h"
 #include "data/json_monsters.h"
+#include "data/json_sheet.h"
 #include "ui/app_paths.h"
 #include "ui/main_window.h"
 
 #include <QApplication>
+#include <QStringList>
 
 #include <fstream>
 #include <sstream>
@@ -50,7 +52,28 @@ int main(int argc, char* argv[])
 
     combat::JsonEncounterStore encounters(combat::ui::encountersFilePath());
 
-    combat::ui::MainWindow window(store, catalog, customStore, encounters, attribution, catalogError);
+    std::vector<combat::Spell> spells;
+    std::vector<combat::Condition> conditions;
+    std::vector<std::string> species;
+    QStringList sheetErrors;
+    try {
+        spells = combat::loadSpellCatalog(combat::ui::srdSpellsFilePath());
+    } catch (const combat::CatalogError& error) {
+        sheetErrors.append(QString::fromStdString(error.what()));
+    }
+    try {
+        conditions = combat::loadConditionCatalog(combat::ui::srdConditionsFilePath());
+    } catch (const combat::CatalogError& error) {
+        sheetErrors.append(QString::fromStdString(error.what()));
+    }
+    try {
+        species = combat::loadSpeciesCatalog(combat::ui::srdSpeciesFilePath());
+    } catch (const combat::CatalogError& error) {
+        sheetErrors.append(QString::fromStdString(error.what()));
+    }
+
+    combat::ui::MainWindow window(store, catalog, customStore, encounters, spells, conditions, species, attribution,
+                                  catalogError, sheetErrors.join(QStringLiteral("\n")));
     window.resize(960, 640);
     window.show();
 

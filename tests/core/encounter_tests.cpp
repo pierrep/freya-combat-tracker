@@ -270,7 +270,8 @@ TEST_CASE("a character combatant copies hp and ac and is not given a bonus")
     Character character;
     character.id = "2f0a1c5e-7b34-4d1a-9c88-6e5b0a1d44f2";
     character.name = "Aria";
-    character.hp = 32;
+    character.hp.current = 32;
+    character.hp.max = 40;
     character.ac = 16;
     const Combatant combatant = makeCharacterCombatant(character, "combatant");
     CHECK_EQ(combatant.source, std::string(kCombatantSourceCharacter));
