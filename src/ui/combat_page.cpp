@@ -8,17 +8,25 @@
 #include "ui/page_title.h"
 
 #include <QAbstractItemView>
+#include <QApplication>
+#include <QColor>
 #include <QComboBox>
+#include <QCursor>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPixmap>
+#include <QPolygon>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStringList>
@@ -43,6 +51,28 @@ void clearLayout(QLayout* layout)
         delete item->widget();
         delete item;
     }
+}
+
+// Tip at the hotspot, so the click lands where the sword points.
+QCursor swordCursor()
+{
+    QPixmap pixmap(32, 32);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(QStringLiteral("#d9dde6")));
+    QPolygon blade;
+    blade << QPoint(16, 1) << QPoint(20, 8) << QPoint(17, 22) << QPoint(15, 22) << QPoint(12, 8);
+    painter.drawPolygon(blade);
+    painter.setBrush(QColor(QStringLiteral("#8a5a2b")));
+    painter.drawRect(QRect(8, 21, 16, 3));
+    painter.setBrush(QColor(QStringLiteral("#5c3a1e")));
+    painter.drawRect(QRect(15, 24, 3, 6));
+    painter.setBrush(QColor(QStringLiteral("#c2a15a")));
+    painter.drawEllipse(QRect(13, 29, 6, 3));
+    painter.end();
+    return QCursor(pixmap, 16, 1);
 }
 
 QSpinBox* makeNumberBox()
@@ -112,6 +142,11 @@ QTreeWidgetItem* addCombatantRow(QTreeWidget* tree, const Combatant& combatant, 
 }
 
 }  // namespace
+
+CombatPage::~CombatPage()
+{
+    disarmAttack();
+}
 
 CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, EncounterStore& encounters,
                        std::vector<Spell> spells, std::vector<Condition> conditions, QWidget* parent)
@@ -187,8 +222,12 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_previousTurnButton->setObjectName(QStringLiteral("previousTurn"));
     m_nextTurnButton = new QPushButton(tr("Next turn"));
     m_nextTurnButton->setObjectName(QStringLiteral("nextTurn"));
+    m_undoButton = new QPushButton(tr("Undo"));
+    m_undoButton->setObjectName(QStringLiteral("undoFight"));
+    m_undoButton->setEnabled(false);
     turnButtons->addWidget(m_previousTurnButton);
     turnButtons->addWidget(m_nextTurnButton);
+    turnButtons->addWidget(m_undoButton);
     turnButtons->addStretch(1);
     fightLayout->addLayout(turnButtons);
 
@@ -382,6 +421,8 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     right->addWidget(m_fight, 1);
 
     connect(m_encounterCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &CombatPage::showEncounter);
+    connect(m_initiativeList, &QTreeWidget::itemClicked, this, &CombatPage::applyArmedDamage);
+    connect(m_zeroHpList, &QTreeWidget::itemClicked, this, &CombatPage::applyArmedDamage);
     connect(m_initiativeList, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
                 if (m_populating) {
@@ -406,6 +447,8 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
             });
     connect(m_initiative, &QSpinBox::valueChanged, this, &CombatPage::onInitiativeChanged);
     connect(m_initiative, &QSpinBox::editingFinished, this, &CombatPage::onInitiativeEditingFinished);
+    connect(m_hp, &QSpinBox::editingFinished, this, [this] { closeFightEdit(FightEdit::HitPoints); });
+    connect(m_tempHp, &QSpinBox::editingFinished, this, [this] { closeFightEdit(FightEdit::TemporaryHp); });
     connect(m_hp, &QSpinBox::valueChanged, this, &CombatPage::onHpChanged);
     connect(m_tempHp, &QSpinBox::valueChanged, this, &CombatPage::onTempHpChanged);
     connect(m_damageButton, &QPushButton::clicked, this, &CombatPage::applySelectedDamage);
@@ -425,6 +468,10 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(m_removeButton, &QPushButton::clicked, this, &CombatPage::removeSelected);
     connect(m_previousTurnButton, &QPushButton::clicked, this, &CombatPage::previousTurn);
     connect(m_nextTurnButton, &QPushButton::clicked, this, &CombatPage::nextTurn);
+    connect(m_undoButton, &QPushButton::clicked, this, &CombatPage::undoLastChange);
+    auto* cancelAttack = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    cancelAttack->setContext(Qt::WindowShortcut);
+    connect(cancelAttack, &QShortcut::activated, this, &CombatPage::disarmAttack);
 
     refreshConcentrationChoices(QString());
 
@@ -611,7 +658,23 @@ void CombatPage::showEncounter()
     m_fight->setVisible(encounter != nullptr);
     m_emptyHint->setVisible(encounter == nullptr && !hasLoadError());
     if (encounter == nullptr) {
+        m_undo.reset();
+        m_openEdit = FightEdit::None;
+        m_undoEncounterId.clear();
+        if (m_undoButton != nullptr) {
+            m_undoButton->setEnabled(false);
+        }
+        disarmAttack();
         return;
+    }
+    if (m_undoEncounterId != encounter->id) {
+        if (!m_undoEncounterId.empty()) {
+            m_undo.reset();
+            m_openEdit = FightEdit::None;
+            m_undoButton->setEnabled(false);
+            disarmAttack();
+        }
+        m_undoEncounterId = encounter->id;
     }
     m_rollNote->hide();
     m_rollNote->clear();
@@ -765,6 +828,8 @@ void CombatPage::onInitiativeChanged(int value)
     if (m_populating || combatant == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Initiative, nullptr, snapshot);
     combatant->initiative = value;
     const QString id = QString::fromStdString(combatant->id);
     for (int i = 0; i < m_initiativeList->topLevelItemCount(); ++i) {
@@ -774,6 +839,9 @@ void CombatPage::onInitiativeChanged(int value)
             break;
         }
     }
+    if (fresh && fightChanged(snapshot, nullptr)) {
+        keepUndo(FightEdit::Initiative, std::move(snapshot));
+    }
     persist();
 }
 
@@ -782,10 +850,17 @@ void CombatPage::onInitiativeEditingFinished()
     Encounter* encounter = selectedEncounter();
     Combatant* combatant = selectedCombatant();
     if (m_populating || encounter == nullptr || combatant == nullptr) {
+        closeFightEdit(FightEdit::Initiative);
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Initiative, nullptr, snapshot);
     const std::string id = combatant->id;
     encounter->turnIndex = sortByInitiative(encounter->combatants, encounter->turnIndex);
+    if (fresh && fightChanged(snapshot, nullptr)) {
+        keepUndo(FightEdit::Initiative, std::move(snapshot));
+    }
+    closeFightEdit(FightEdit::Initiative);
     rebuildCombatantList(id);
     persist();
 }
@@ -796,6 +871,8 @@ void CombatPage::onHpChanged(int value)
     if (m_populating || combatant == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::HitPoints, combatant, snapshot);
     const bool wasIn = isInInitiative(*combatant);
     combatant->hp = value;
     clampAndCarryHitPoints(*combatant);
@@ -809,6 +886,9 @@ void CombatPage::onHpChanged(int value)
     } else {
         refreshListedHitPoints(*combatant);
     }
+    if (fresh && fightChanged(snapshot, combatant)) {
+        keepUndo(FightEdit::HitPoints, std::move(snapshot));
+    }
     persist();
 }
 
@@ -818,11 +898,16 @@ void CombatPage::onTempHpChanged(int value)
     if (m_populating || combatant == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::TemporaryHp, nullptr, snapshot);
     const bool wasIn = isInInitiative(*combatant);
     combatant->tempHp = value;
     if (wasIn != isInInitiative(*combatant)) {
         const std::string id = combatant->id;
         rebuildCombatantList(id);
+    }
+    if (fresh && fightChanged(snapshot, nullptr)) {
+        keepUndo(FightEdit::TemporaryHp, std::move(snapshot));
     }
     persist();
 }
@@ -911,12 +996,16 @@ void CombatPage::showAttacks()
             button->setObjectName(QStringLiteral("rollAttackDamage"));
             const std::string effect = attack.effect;
             connect(button, &QPushButton::clicked, this, [this, effect] {
+                if (m_armedDamage.has_value() && m_armedEffect == effect) {
+                    disarmAttack();
+                    return;
+                }
                 const std::optional<int> total = rollAttackDamage(effect, [this](int sides) {
                     std::uniform_int_distribution<int> face(1, sides);
                     return face(m_dice);
                 });
                 if (total.has_value()) {
-                    m_damageAmount->setValue(*total);
+                    armAttack(effect, *total);
                 }
             });
             m_attackRows->addWidget(button);
@@ -934,10 +1023,15 @@ void CombatPage::applySelectedDamage()
     if (combatant == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, isMonsterCombatant(*combatant) ? nullptr : combatant, snapshot);
     if (!applyDamage(*combatant, m_damageAmount->value())) {
         return;
     }
     clampAndCarryHitPoints(*combatant);
+    if (fresh && fightChanged(snapshot, isMonsterCombatant(*combatant) ? nullptr : combatant)) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     m_damageAmount->setValue(0);
     const std::string id = combatant->id;
     rebuildCombatantList(id);
@@ -950,10 +1044,15 @@ void CombatPage::applySelectedHealing()
     if (combatant == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, isMonsterCombatant(*combatant) ? nullptr : combatant, snapshot);
     if (!applyHealing(*combatant, m_healAmount->value())) {
         return;
     }
     clampAndCarryHitPoints(*combatant);
+    if (fresh && fightChanged(snapshot, isMonsterCombatant(*combatant) ? nullptr : combatant)) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     m_healAmount->setValue(0);
     const std::string id = combatant->id;
     rebuildCombatantList(id);
@@ -967,6 +1066,8 @@ void CombatPage::addSelectedCondition()
         return;
     }
     const std::string id = m_conditionPicker->currentData().toString().toStdString();
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     if (!addCondition(*combatant, id)) {
         for (int i = 0; i < m_conditionList->count(); ++i) {
             if (m_conditionList->item(i)->data(Qt::UserRole).toString().toStdString() == id) {
@@ -975,6 +1076,9 @@ void CombatPage::addSelectedCondition()
             }
         }
         return;
+    }
+    if (fresh) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
     }
     persist();
     showCombatant();
@@ -987,8 +1091,13 @@ void CombatPage::removeListedCondition()
     if (combatant == nullptr || item == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     if (!removeCondition(*combatant, item->data(Qt::UserRole).toString().toStdString())) {
         return;
+    }
+    if (fresh) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
     }
     persist();
     showCombatant();
@@ -1038,7 +1147,16 @@ void CombatPage::setSelectedConcentration()
     if (combatant == nullptr || item == nullptr) {
         return;
     }
-    setConcentration(*combatant, item->data(Qt::UserRole).toString().toStdString());
+    const std::string spellId = item->data(Qt::UserRole).toString().toStdString();
+    if (combatant->concentration == spellId) {
+        return;
+    }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
+    setConcentration(*combatant, spellId);
+    if (fresh) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     m_concentrationLabel->setText(item->text());
     persist();
 }
@@ -1046,10 +1164,15 @@ void CombatPage::setSelectedConcentration()
 void CombatPage::clearSelectedConcentration()
 {
     Combatant* combatant = selectedCombatant();
-    if (combatant == nullptr) {
+    if (combatant == nullptr || combatant->concentration.empty()) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     setConcentration(*combatant, "");
+    if (fresh) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     m_concentrationLabel->setText(tr("Not concentrating."));
     persist();
 }
@@ -1060,7 +1183,12 @@ void CombatPage::adjustSelectedDeathSave(bool success, int delta)
     if (combatant == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     adjustDeathSave(*combatant, success, delta);
+    if (fresh) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     m_deathSuccessLabel->setText(QString::number(combatant->deathSaves.successes));
     m_deathFailureLabel->setText(QString::number(combatant->deathSaves.failures));
     persist();
@@ -1120,8 +1248,13 @@ void CombatPage::spendSelectedSlot()
         return;
     }
     const int level = button->property("level").toInt();
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, combatant, snapshot);
     if (!spendSpellSlot(*character, level)) {
         return;
+    }
+    if (fresh) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
     }
     saveCharacters();
     // Rebuild after this click returns. The Spend button lives in the slot
@@ -1191,7 +1324,12 @@ void CombatPage::rollAll()
     if (encounter == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     const int missing = rollAllMonsterInitiatives(*encounter, [this] { return rollD20(); });
+    if (fresh && fightChanged(snapshot, nullptr)) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     if (missing == 0) {
         m_rollNote->hide();
         m_rollNote->clear();
@@ -1215,9 +1353,14 @@ void CombatPage::rerollSelected()
         return;
     }
     const std::string id = combatant->id;
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     bool missing = false;
     if (!rerollMonsterInitiative(*encounter, id, [this] { return rollD20(); }, &missing)) {
         return;
+    }
+    if (fresh && fightChanged(snapshot, nullptr)) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
     }
     if (missing) {
         m_rollNote->setText(tr("The initiative bonus was missing. That roll used +0."));
@@ -1254,7 +1397,12 @@ void CombatPage::previousTurn()
     if (encounter == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     retreatTurn(*encounter);
+    if (fresh && fightChanged(snapshot, nullptr)) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     rebuildCombatantList({});
     persist();
 }
@@ -1265,9 +1413,148 @@ void CombatPage::nextTurn()
     if (encounter == nullptr) {
         return;
     }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
     advanceTurn(*encounter);
+    if (fresh && fightChanged(snapshot, nullptr)) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
     rebuildCombatantList({});
     persist();
+}
+
+void CombatPage::applyArmedDamage(QTreeWidgetItem* item, int /*column*/)
+{
+    if (!m_armedDamage.has_value() || item == nullptr) {
+        return;
+    }
+    Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr) {
+        return;
+    }
+    const int index = indexOfId(*encounter, item->data(0, Qt::UserRole).toString().toStdString());
+    if (index < 0) {
+        return;
+    }
+    const int amount = *m_armedDamage;
+    Combatant& combatant = encounter->combatants[static_cast<std::size_t>(index)];
+    const Combatant* sheet = isMonsterCombatant(combatant) ? nullptr : &combatant;
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, sheet, snapshot);
+    disarmAttack();
+    if (!applyDamage(combatant, amount)) {
+        return;
+    }
+    clampAndCarryHitPoints(combatant);
+    if (fresh && fightChanged(snapshot, sheet)) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
+    const std::string id = combatant.id;
+    rebuildCombatantList(id);
+    persist();
+}
+
+void CombatPage::armAttack(const std::string& effect, int total)
+{
+    m_armedEffect = effect;
+    m_armedDamage = total;
+    if (!m_swordCursor) {
+        QApplication::setOverrideCursor(swordCursor());
+        m_swordCursor = true;
+    }
+}
+
+void CombatPage::disarmAttack()
+{
+    m_armedDamage.reset();
+    m_armedEffect.clear();
+    if (!m_swordCursor) {
+        return;
+    }
+    QApplication::restoreOverrideCursor();
+    m_swordCursor = false;
+}
+
+void CombatPage::undoLastChange()
+{
+    if (!m_undo.has_value()) {
+        return;
+    }
+    Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr || encounter->id != m_undo->encounter.id) {
+        m_undo.reset();
+        m_openEdit = FightEdit::None;
+        m_undoButton->setEnabled(false);
+        return;
+    }
+    const FightUndo undo = std::move(*m_undo);
+    m_undo.reset();
+    m_openEdit = FightEdit::None;
+    m_undoButton->setEnabled(false);
+    m_undoing = true;
+    const bool sheetRestored = restoreFightUndo(*encounter, m_characters, undo);
+    if (undo.sheet.has_value() && sheetRestored) {
+        saveCharacters();
+    }
+    std::string selectId;
+    if (const Combatant* selected = selectedCombatant()) {
+        selectId = selected->id;
+    }
+    rebuildCombatantList(selectId);
+    persist();
+    m_undoing = false;
+}
+
+bool CombatPage::beginUndo(FightEdit edit, const Combatant* sheetCombatant, FightUndo& snapshot)
+{
+    if (m_populating || m_undoing || edit == FightEdit::None) {
+        return false;
+    }
+    if (m_undo.has_value() && m_openEdit == edit && edit != FightEdit::Once) {
+        return false;
+    }
+    Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr) {
+        return false;
+    }
+    snapshot.encounter = *encounter;
+    snapshot.sheet.reset();
+    if (sheetCombatant != nullptr) {
+        if (const Character* character = characterFor(*sheetCombatant)) {
+            snapshot.sheet = *character;
+        }
+    }
+    return true;
+}
+
+void CombatPage::keepUndo(FightEdit edit, FightUndo snapshot)
+{
+    m_undo = std::move(snapshot);
+    m_openEdit = edit;
+    m_undoButton->setEnabled(true);
+}
+
+bool CombatPage::fightChanged(const FightUndo& snapshot, const Combatant* sheetCombatant)
+{
+    const Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr) {
+        return false;
+    }
+    if (*encounter != snapshot.encounter) {
+        return true;
+    }
+    if (!snapshot.sheet.has_value() || sheetCombatant == nullptr) {
+        return false;
+    }
+    const Character* character = characterFor(*sheetCombatant);
+    return character == nullptr || *character != *snapshot.sheet;
+}
+
+void CombatPage::closeFightEdit(FightEdit edit)
+{
+    if (m_openEdit == edit) {
+        m_openEdit = FightEdit::None;
+    }
 }
 
 }  // namespace combat::ui

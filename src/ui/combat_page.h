@@ -7,6 +7,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -18,6 +19,7 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QSpinBox;
 class QShowEvent;
 class QVBoxLayout;
@@ -41,11 +43,14 @@ public:
 
     bool hasLoadError() const { return !m_loadError.isEmpty(); }
     QString loadError() const { return m_loadError; }
+    ~CombatPage() override;
 
 protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    enum class FightEdit { None, Once, Initiative, HitPoints, TemporaryHp };
+
     void reloadEncounters();
     void reloadCharacters();
     void showEncounter();
@@ -59,6 +64,9 @@ private:
     void onTempHpChanged(int value);
     void applySelectedDamage();
     void applySelectedHealing();
+    void applyArmedDamage(QTreeWidgetItem* item, int column);
+    void armAttack(const std::string& effect, int total);
+    void disarmAttack();
     void showAttacks();
     void clearAttackRows();
     void setCharacterSheetControlsVisible(bool visible);
@@ -80,6 +88,11 @@ private:
     void removeSelected();
     void previousTurn();
     void nextTurn();
+    void undoLastChange();
+    bool beginUndo(FightEdit edit, const Combatant* sheetCombatant, FightUndo& snapshot);
+    void keepUndo(FightEdit edit, FightUndo snapshot);
+    bool fightChanged(const FightUndo& snapshot, const Combatant* sheetCombatant);
+    void closeFightEdit(FightEdit edit);
     void persist();
     int rollD20();
     Encounter* selectedEncounter();
@@ -95,7 +108,14 @@ private:
     QString m_loadError;
     std::mt19937 m_dice;
     bool m_populating = false;
+    bool m_undoing = false;
     bool m_reportedLoadError = false;
+    bool m_swordCursor = false;
+    FightEdit m_openEdit = FightEdit::None;
+    std::optional<FightUndo> m_undo;
+    std::optional<int> m_armedDamage;
+    std::string m_armedEffect;
+    std::string m_undoEncounterId;
 
     QComboBox* m_encounterCombo = nullptr;
     QWidget* m_fight = nullptr;
@@ -104,6 +124,7 @@ private:
     QLabel* m_activeLabel = nullptr;
     QPushButton* m_previousTurnButton = nullptr;
     QPushButton* m_nextTurnButton = nullptr;
+    QPushButton* m_undoButton = nullptr;
     QPushButton* m_rollAllButton = nullptr;
     QLabel* m_rollNote = nullptr;
     QTreeWidget* m_initiativeList = nullptr;

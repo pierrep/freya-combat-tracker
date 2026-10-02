@@ -150,4 +150,17 @@ void retreatTurn(Encounter& encounter);
 // An empty fight does nothing.
 void advanceRound(Encounter& encounter);
 
+// The fight, and the character sheet when that edit wrote one, as they were
+// before a single change. The page keeps one of these and drops it after
+// restore, so a second undo does nothing until another change.
+struct FightUndo {
+    Encounter encounter;
+    std::optional<Character> sheet;
+};
+
+// Copies the snapshot back onto the fight. When a sheet was stored, the
+// roster row with that id is replaced too. Returns false when a stored sheet
+// id is not in the roster; the fight is still restored.
+bool restoreFightUndo(Encounter& encounter, std::vector<Character>& characters, const FightUndo& undo);
+
 }  // namespace combat

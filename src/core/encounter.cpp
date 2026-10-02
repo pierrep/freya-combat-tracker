@@ -489,6 +489,21 @@ void retreatTurn(Encounter& encounter)
     }
 }
 
+bool restoreFightUndo(Encounter& encounter, std::vector<Character>& characters, const FightUndo& undo)
+{
+    encounter = undo.encounter;
+    if (!undo.sheet.has_value()) {
+        return true;
+    }
+    for (Character& character : characters) {
+        if (character.id == undo.sheet->id) {
+            character = *undo.sheet;
+            return true;
+        }
+    }
+    return false;
+}
+
 void advanceRound(Encounter& encounter)
 {
     if (encounter.combatants.empty()) {

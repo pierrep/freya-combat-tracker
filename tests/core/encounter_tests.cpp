@@ -3,6 +3,7 @@
 #include "test_harness.h"
 
 #include <climits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -370,6 +371,47 @@ TEST_CASE("a character combatant copies hp and ac and is not given a bonus")
     CHECK_EQ(combatant.ac, 16);
     CHECK_EQ(combatant.initiative, 0);
     CHECK(!combatant.initiativeBonus.has_value());
+}
+
+TEST_CASE("undo restores hit points on the fight and the sheet, one change only")
+{
+    Character aria;
+    aria.id = "aria";
+    aria.name = "Aria";
+    aria.hp.current = 30;
+    aria.hp.max = 30;
+
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Fight";
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "row"));
+    encounter.combatants[0].tempHp = 4;
+
+    std::vector<Character> roster{aria};
+    std::optional<FightUndo> undo = FightUndo{encounter, roster[0]};
+
+    CHECK(applyDamage(encounter.combatants[0], 10));
+    CHECK(carryCharacterHitPoints(roster, encounter.combatants[0]));
+    CHECK_EQ(encounter.combatants[0].tempHp, 0);
+    CHECK_EQ(encounter.combatants[0].hp, 24);
+    CHECK_EQ(roster[0].hp.current, 24);
+
+    undo = FightUndo{encounter, roster[0]};
+    CHECK(applyDamage(encounter.combatants[0], 4));
+    CHECK(carryCharacterHitPoints(roster, encounter.combatants[0]));
+    CHECK_EQ(encounter.combatants[0].hp, 20);
+    CHECK_EQ(roster[0].hp.current, 20);
+
+    CHECK(restoreFightUndo(encounter, roster, *undo));
+    CHECK_EQ(encounter.combatants[0].hp, 24);
+    CHECK_EQ(encounter.combatants[0].tempHp, 0);
+    CHECK_EQ(roster[0].hp.current, 24);
+    CHECK_EQ(roster[0].hp.max, 30);
+
+    undo.reset();
+    CHECK(applyDamage(encounter.combatants[0], 2));
+    CHECK_EQ(encounter.combatants[0].hp, 22);
+    CHECK(!undo.has_value());
 }
 
 TEST_CASE("reset restores monster hp and a later encounter copies the carried character hp")
