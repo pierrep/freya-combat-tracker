@@ -19,6 +19,17 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+// One entry from a monster's Actions. count is how many times Multiattack
+// grants that attack (1 when the SRD does not give it a number). The
+// Multiattack row's count is how many attacks that action makes.
+struct MonsterAttack {
+    std::string name;
+    std::string effect;
+    int count = 1;
+
+    bool operator==(const MonsterAttack&) const = default;
+};
+
 struct Monster {
     std::string id;
     std::string name;
@@ -33,6 +44,9 @@ struct Monster {
     int passivePerception = 10;
     std::string challengeRating;
     std::string source;
+    // Empty when the monster has no actions, including a custom monster that
+    // was saved before attacks were stored.
+    std::vector<MonsterAttack> attacks;
 
     bool operator==(const Monster&) const = default;
 };

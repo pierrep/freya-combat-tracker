@@ -36,7 +36,7 @@ MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, Cus
     m_characters = new CharactersPage(store, spells, conditions, species, attribution, sheetCatalogError);
 
     m_pages = new QStackedWidget;
-    m_pages->insertWidget(DashboardIndex, new CombatPage(store, encounters, spells, conditions));
+    m_pages->insertWidget(DashboardIndex, new CombatPage(store, catalog, encounters, spells, conditions));
     m_pages->insertWidget(CharactersIndex, m_characters);
     m_pages->insertWidget(MonstersIndex, new MonstersPage(catalog, customStore, attribution, catalogError));
     m_pages->insertWidget(EncounterBuilderIndex,

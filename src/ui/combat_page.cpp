@@ -3,6 +3,7 @@
 #include "core/character_store.h"
 #include "core/combat_rules.h"
 #include "core/encounter_store.h"
+#include "core/monster_catalog.h"
 #include "ui/page_title.h"
 
 #include <QComboBox>
@@ -22,6 +23,7 @@
 
 #include <array>
 #include <limits>
+#include <optional>
 
 namespace combat::ui {
 
@@ -37,10 +39,11 @@ QSpinBox* makeNumberBox()
 
 }  // namespace
 
-CombatPage::CombatPage(CharacterStore& characters, EncounterStore& encounters, std::vector<Spell> spells,
-                       std::vector<Condition> conditions, QWidget* parent)
+CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, EncounterStore& encounters,
+                       std::vector<Spell> spells, std::vector<Condition> conditions, QWidget* parent)
     : QWidget(parent)
     , m_charactersStore(characters)
+    , m_catalog(catalog)
     , m_encountersStore(encounters)
     , m_spells(std::move(spells))
     , m_conditions(std::move(conditions))
@@ -148,6 +151,23 @@ CombatPage::CombatPage(CharacterStore& characters, EncounterStore& encounters, s
     form->addRow(tr("Name"), m_combatantName);
     m_combatantSource = new QLabel;
     form->addRow(tr("From"), m_combatantSource);
+
+    m_attacksSection = new QWidget;
+    m_attacksSection->setObjectName(QStringLiteral("combatantAttacks"));
+    auto* attacksLayout = new QVBoxLayout(m_attacksSection);
+    attacksLayout->setContentsMargins(0, 0, 0, 0);
+    attacksLayout->setSpacing(4);
+    auto* attacksHeading = new QLabel(tr("Attacks"));
+    QFont attacksFont = attacksHeading->font();
+    attacksFont.setBold(true);
+    attacksHeading->setFont(attacksFont);
+    m_attacks = new QLabel;
+    m_attacks->setWordWrap(true);
+    m_attacks->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    attacksLayout->addWidget(attacksHeading);
+    attacksLayout->addWidget(m_attacks);
+    form->addRow(m_attacksSection);
+
     m_initiative = makeNumberBox();
     m_initiative->setObjectName(QStringLiteral("initiativeField"));
     form->addRow(tr("Initiative"), m_initiative);
@@ -173,7 +193,7 @@ CombatPage::CombatPage(CharacterStore& characters, EncounterStore& encounters, s
     m_damageAmount = makeNumberBox();
     m_damageAmount->setRange(0, std::numeric_limits<int>::max());
     m_damageAmount->setValue(0);
-    m_damageButton = new QPushButton(tr("Apply damage to the active combatant"));
+    m_damageButton = new QPushButton(tr("Apply damage to the selected combatant"));
     m_damageButton->setObjectName(QStringLiteral("applyDamage"));
     auto* damageRow = new QHBoxLayout;
     damageRow->addWidget(m_damageAmount);
@@ -184,7 +204,7 @@ CombatPage::CombatPage(CharacterStore& characters, EncounterStore& encounters, s
     m_healAmount = makeNumberBox();
     m_healAmount->setRange(0, std::numeric_limits<int>::max());
     m_healAmount->setValue(0);
-    m_healButton = new QPushButton(tr("Apply healing to the active combatant"));
+    m_healButton = new QPushButton(tr("Apply healing to the selected combatant"));
     m_healButton->setObjectName(QStringLiteral("applyHealing"));
     auto* healRow = new QHBoxLayout;
     healRow->addWidget(m_healAmount);
@@ -293,8 +313,8 @@ CombatPage::CombatPage(CharacterStore& characters, EncounterStore& encounters, s
     connect(m_initiative, &QSpinBox::editingFinished, this, &CombatPage::onInitiativeEditingFinished);
     connect(m_hp, &QSpinBox::valueChanged, this, &CombatPage::onHpChanged);
     connect(m_tempHp, &QSpinBox::valueChanged, this, &CombatPage::onTempHpChanged);
-    connect(m_damageButton, &QPushButton::clicked, this, &CombatPage::applyActiveDamage);
-    connect(m_healButton, &QPushButton::clicked, this, &CombatPage::applyActiveHealing);
+    connect(m_damageButton, &QPushButton::clicked, this, &CombatPage::applySelectedDamage);
+    connect(m_healButton, &QPushButton::clicked, this, &CombatPage::applySelectedHealing);
     connect(addConditionButton, &QPushButton::clicked, this, &CombatPage::addSelectedCondition);
     connect(removeConditionButton, &QPushButton::clicked, this, &CombatPage::removeListedCondition);
     connect(m_conditionList, &QListWidget::currentRowChanged, this, &CombatPage::showConditionText);
@@ -605,6 +625,7 @@ void CombatPage::showCombatant()
     m_deathSuccessLabel->setText(QString::number(combatant->deathSaves.successes));
     m_deathFailureLabel->setText(QString::number(combatant->deathSaves.failures));
     m_populating = false;
+    showAttacks(combatant);
     showConditionText();
     updateDerivedModifiers();
     rebuildSlotButtons();
@@ -656,18 +677,6 @@ void CombatPage::onTempHpChanged(int value)
     persist();
 }
 
-Combatant* CombatPage::activeCombatant()
-{
-    Encounter* encounter = selectedEncounter();
-    if (encounter == nullptr || encounter->combatants.empty()) {
-        return nullptr;
-    }
-    if (encounter->turnIndex < 0 || encounter->turnIndex >= static_cast<int>(encounter->combatants.size())) {
-        return nullptr;
-    }
-    return &encounter->combatants[static_cast<std::size_t>(encounter->turnIndex)];
-}
-
 Character* CombatPage::characterFor(const Combatant& combatant)
 {
     if (isMonsterCombatant(combatant)) {
@@ -690,9 +699,31 @@ void CombatPage::saveCharacters()
     }
 }
 
-void CombatPage::applyActiveDamage()
+void CombatPage::showAttacks(const Combatant* combatant)
 {
-    Combatant* combatant = activeCombatant();
+    const bool monster = combatant != nullptr && isMonsterCombatant(*combatant);
+    m_attacksSection->setVisible(monster);
+    if (!monster) {
+        m_attacks->clear();
+        return;
+    }
+    const std::optional<Monster> lookedUp = m_catalog.findById(combatant->sourceId);
+    if (!lookedUp.has_value() || lookedUp->attacks.empty()) {
+        m_attacks->setText(tr("No attacks are stored for this monster."));
+        return;
+    }
+    QStringList lines;
+    for (const MonsterAttack& attack : lookedUp->attacks) {
+        lines << tr("%1 × %2").arg(QString::fromStdString(attack.name)).arg(attack.count);
+        lines << QString::fromStdString(attack.effect);
+        lines << QString();
+    }
+    m_attacks->setText(lines.join(QStringLiteral("\n")).trimmed());
+}
+
+void CombatPage::applySelectedDamage()
+{
+    Combatant* combatant = selectedCombatant();
     if (combatant == nullptr) {
         return;
     }
@@ -704,9 +735,9 @@ void CombatPage::applyActiveDamage()
     persist();
 }
 
-void CombatPage::applyActiveHealing()
+void CombatPage::applySelectedHealing()
 {
-    Combatant* combatant = activeCombatant();
+    Combatant* combatant = selectedCombatant();
     if (combatant == nullptr) {
         return;
     }

@@ -197,6 +197,55 @@ TEST_CASE("packaged SRD catalog loads, and every row is srd-5.2.1")
     CHECK_EQ(attribution, std::string(kAttribution) + "\n");
 }
 
+TEST_CASE("an SRD monster exposes its attacks, including a multiattack count")
+{
+    const auto monsters = loadSrdMonsters(fs::path{COMBAT_TRACKER_SRD_DIR} / "monsters.json");
+    const Monster* goblin = nullptr;
+    const Monster* dragon = nullptr;
+    for (const Monster& monster : monsters) {
+        if (monster.id == "goblin-warrior") {
+            goblin = &monster;
+        } else if (monster.id == "adult-brass-dragon") {
+            dragon = &monster;
+        }
+    }
+    CHECK(goblin != nullptr);
+    CHECK(dragon != nullptr);
+    if (goblin == nullptr || dragon == nullptr) {
+        return;
+    }
+
+    CHECK_EQ(goblin->attacks.size(), std::size_t{2});
+    CHECK_EQ(goblin->attacks[0].name, std::string("Scimitar"));
+    CHECK_EQ(goblin->attacks[0].count, 1);
+    CHECK(goblin->attacks[0].effect.find("1d6 + 2") != std::string::npos);
+    CHECK(goblin->attacks[0].effect.find("Slashing") != std::string::npos);
+    CHECK_EQ(goblin->attacks[1].name, std::string("Shortbow"));
+    CHECK_EQ(goblin->attacks[1].count, 1);
+    CHECK(goblin->attacks[1].effect.find("80/320") != std::string::npos);
+
+    const MonsterAttack* multiattack = nullptr;
+    const MonsterAttack* rend = nullptr;
+    for (const MonsterAttack& attack : dragon->attacks) {
+        if (attack.name == "Multiattack") {
+            multiattack = &attack;
+        } else if (attack.name == "Rend") {
+            rend = &attack;
+        }
+    }
+    CHECK(multiattack != nullptr);
+    CHECK(rend != nullptr);
+    if (multiattack != nullptr) {
+        CHECK_EQ(multiattack->count, 3);
+        CHECK(multiattack->effect.find("three Rend attacks") != std::string::npos);
+    }
+    if (rend != nullptr) {
+        CHECK_EQ(rend->count, 3);
+        CHECK(rend->effect.find("2d10 + 6") != std::string::npos);
+        CHECK(rend->effect.find("Fire") != std::string::npos);
+    }
+}
+
 TEST_CASE("missing custom monster file loads as an empty list")
 {
     TempDir dir;

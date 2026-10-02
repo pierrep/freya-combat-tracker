@@ -23,6 +23,7 @@ class QVBoxLayout;
 namespace combat {
 class CharacterStore;
 class EncounterStore;
+class MonsterCatalog;
 }
 
 namespace combat::ui {
@@ -33,8 +34,8 @@ class CombatPage : public QWidget {
     Q_OBJECT
 
 public:
-    CombatPage(CharacterStore& characters, EncounterStore& encounters, std::vector<Spell> spells,
-               std::vector<Condition> conditions, QWidget* parent = nullptr);
+    CombatPage(CharacterStore& characters, MonsterCatalog& catalog, EncounterStore& encounters,
+               std::vector<Spell> spells, std::vector<Condition> conditions, QWidget* parent = nullptr);
 
     bool hasLoadError() const { return !m_loadError.isEmpty(); }
     QString loadError() const { return m_loadError; }
@@ -55,8 +56,9 @@ private:
     void onInitiativeEditingFinished();
     void onHpChanged(int value);
     void onTempHpChanged(int value);
-    void applyActiveDamage();
-    void applyActiveHealing();
+    void applySelectedDamage();
+    void applySelectedHealing();
+    void showAttacks(const Combatant* combatant);
     void addSelectedCondition();
     void removeListedCondition();
     void showConditionText();
@@ -70,7 +72,6 @@ private:
     void updateDerivedModifiers();
     Character* characterFor(const Combatant& combatant);
     void saveCharacters();
-    Combatant* activeCombatant();
     void rollAll();
     void rerollSelected();
     void moveSelected(int direction);
@@ -84,6 +85,7 @@ private:
     Combatant* selectedCombatant();
 
     CharacterStore& m_charactersStore;
+    MonsterCatalog& m_catalog;
     EncounterStore& m_encountersStore;
     std::vector<Character> m_characters;
     std::vector<Encounter> m_encounters;
@@ -109,6 +111,8 @@ private:
     QLabel* m_noCombatantHint = nullptr;
     QLabel* m_combatantName = nullptr;
     QLabel* m_combatantSource = nullptr;
+    QWidget* m_attacksSection = nullptr;
+    QLabel* m_attacks = nullptr;
     QSpinBox* m_initiative = nullptr;
     QLabel* m_bonusLabel = nullptr;
     QPushButton* m_rerollButton = nullptr;

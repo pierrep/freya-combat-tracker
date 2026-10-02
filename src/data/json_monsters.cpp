@@ -54,6 +54,9 @@ std::string readString(const json& object, const char* key, const std::string& c
     return value.get<std::string>();
 }
 
+bool isBlank(const std::string& text);
+std::vector<MonsterAttack> readAttacks(const json& object, const std::string& context);
+
 Monster monsterFromJson(const json& value, std::size_t index)
 {
     const std::string context = "Monster " + std::to_string(index + 1);
@@ -86,12 +89,45 @@ Monster monsterFromJson(const json& value, std::size_t index)
     monster.abilities.intelligence = readInt(abilities, "intelligence", abilityContext);
     monster.abilities.wisdom = readInt(abilities, "wisdom", abilityContext);
     monster.abilities.charisma = readInt(abilities, "charisma", abilityContext);
+    monster.attacks = readAttacks(value, context);
     return monster;
+}
+
+std::vector<MonsterAttack> readAttacks(const json& object, const std::string& context)
+{
+    const auto it = object.find("attacks");
+    if (it == object.end()) {
+        return {};
+    }
+    if (!it->is_array()) {
+        throw MonsterDataError(context + ": field \"attacks\" must be an array.");
+    }
+    std::vector<MonsterAttack> attacks;
+    attacks.reserve(it->size());
+    for (std::size_t i = 0; i < it->size(); ++i) {
+        const std::string attackContext = context + " attack " + std::to_string(i + 1);
+        const json& value = (*it)[i];
+        if (!value.is_object()) {
+            throw MonsterDataError(attackContext + ": must be an object.");
+        }
+        MonsterAttack attack;
+        attack.name = readString(value, "name", attackContext);
+        attack.effect = readString(value, "effect", attackContext);
+        attack.count = readInt(value, "count", attackContext);
+        if (isBlank(attack.name)) {
+            throw MonsterDataError(attackContext + ": name is required.");
+        }
+        if (attack.count < 1) {
+            throw MonsterDataError(attackContext + ": count must be at least 1.");
+        }
+        attacks.push_back(std::move(attack));
+    }
+    return attacks;
 }
 
 json monsterToJson(const Monster& monster)
 {
-    return json{
+    json document{
         {"id", monster.id},
         {"name", monster.name},
         {"size", monster.size},
@@ -114,6 +150,18 @@ json monsterToJson(const Monster& monster)
         {"challengeRating", monster.challengeRating},
         {"source", monster.source},
     };
+    if (!monster.attacks.empty()) {
+        json attacks = json::array();
+        for (const MonsterAttack& attack : monster.attacks) {
+            attacks.push_back(json{
+                {"name", attack.name},
+                {"effect", attack.effect},
+                {"count", attack.count},
+            });
+        }
+        document["attacks"] = std::move(attacks);
+    }
+    return document;
 }
 
 bool isBlank(const std::string& text)
