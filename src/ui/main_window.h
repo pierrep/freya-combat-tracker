@@ -9,6 +9,7 @@ class QStackedWidget;
 namespace combat {
 class CharacterStore;
 class CustomMonsterStore;
+class EncounterStore;
 class MergedMonsterCatalog;
 }
 
@@ -24,7 +25,8 @@ public:
     enum Page { DashboardIndex = 0, CharactersIndex, MonstersIndex, CombatIndex };
 
     MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, CustomMonsterStore& customStore,
-               const QString& attribution, const QString& catalogError, QWidget* parent = nullptr);
+               EncounterStore& encounters, const QString& attribution, const QString& catalogError,
+               QWidget* parent = nullptr);
 
     void showPage(int index);
 

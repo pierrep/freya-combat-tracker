@@ -21,6 +21,11 @@ std::filesystem::path customMonstersFilePath()
     return appDataFolder() / "custom-monsters.json";
 }
 
+std::filesystem::path encountersFilePath()
+{
+    return appDataFolder() / "encounters.json";
+}
+
 std::filesystem::path srdDirectory()
 {
 #ifdef COMBAT_TRACKER_SRD_DIR

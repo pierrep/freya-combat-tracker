@@ -1,5 +1,6 @@
 #include "core/monster_catalog.h"
 #include "data/json_character_store.h"
+#include "data/json_encounters.h"
 #include "data/json_monsters.h"
 #include "ui/app_paths.h"
 #include "ui/main_window.h"
@@ -47,7 +48,9 @@ int main(int argc, char* argv[])
         }
     }
 
-    combat::ui::MainWindow window(store, catalog, customStore, attribution, catalogError);
+    combat::JsonEncounterStore encounters(combat::ui::encountersFilePath());
+
+    combat::ui::MainWindow window(store, catalog, customStore, encounters, attribution, catalogError);
     window.resize(960, 640);
     window.show();
 

@@ -4,7 +4,8 @@
 
 namespace combat::ui {
 
-// The per-user folder that holds characters.json:
+// The per-user folder that holds characters.json, custom-monsters.json, and
+// encounters.json:
 //   macOS   ~/Library/Application Support/CombatTracker
 //   Linux   $XDG_DATA_HOME/combat-tracker (default ~/.local/share/combat-tracker)
 //   Windows %APPDATA%\CombatTracker
@@ -13,6 +14,7 @@ std::filesystem::path appDataFolder();
 
 std::filesystem::path charactersFilePath();
 std::filesystem::path customMonstersFilePath();
+std::filesystem::path encountersFilePath();
 
 // Packaged SRD files. The build sets COMBAT_TRACKER_SRD_DIR to data/srd.
 std::filesystem::path srdMonstersFilePath();

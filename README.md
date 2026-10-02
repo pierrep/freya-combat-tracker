@@ -2,7 +2,7 @@
 
 A local desktop combat tracker for fifth edition (2024 rules), built with C++20 and Qt 6 Widgets. 5E compatible.
 
-Phase 2 adds monster lookup. The Monsters page searches an offline SRD 5.2.1 catalog and a custom-monster file in the same list. SRD rows are read-only. Custom rows can be added, edited, and deleted. Combat is still a placeholder.
+Phase 3 runs a fight on the Combat page. You create encounters, add characters and monsters, type initiative, and roll initiative for every monster. Turn order, the round, and the fight's own hit points are saved in `encounters.json`. The character sheet and the monster catalog are not rewritten by the fight.
 
 ## Layout
 
@@ -42,3 +42,5 @@ Monsters come from two files with the same stat-block shape:
 - `custom-monsters.json` sits next to `characters.json`. A missing file means no custom monsters. Custom ids are UUIDs. A row whose id matches an SRD slug, or whose source is `srd-5.2.1`, is skipped and reported instead of replacing the SRD monster.
 
 Search is offline: a case-insensitive substring of the name, plus optional exact creature-type and challenge-rating filters. A blank search lists every monster by name. When two rows share a name, the SRD row comes first. Custom rows are badged Custom.
+
+Encounters are saved to `encounters.json` (`schemaVersion` 1) in that same app-data folder. A missing file means no encounters. Each combatant keeps a copy of the name, AC, HP, and, for a monster, the initiative bonus from the moment they were added. Changing the fight does not change `characters.json` or either monster file. Monster initiative is `d20 +` that stored bonus. Characters are typed, not rolled. Equal initiatives keep their order, including after a save.
