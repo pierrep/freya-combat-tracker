@@ -1,3 +1,4 @@
+#include "core/combat_rules.h"
 #include "core/encounter.h"
 #include "test_harness.h"
 
@@ -249,6 +250,28 @@ TEST_CASE("a combatant at 0 hp is out of turn order and returns to the same init
     advanceTurn(encounter);
     CHECK_EQ(encounter.turnIndex, 2);
     CHECK_EQ(encounter.round, 1);
+
+    const std::string goblinName = encounter.combatants[1].name;
+    const std::string ariaName = encounter.combatants[0].name;
+    encounter.combatants[1].tempHp = 5;
+    const std::vector<int> shielded = initiativeOrder(encounter.combatants);
+    CHECK_EQ(shielded.size(), 3U);
+    CHECK_EQ(shielded[1], 1);
+    CHECK_EQ(encounter.combatants[1].name, goblinName);
+
+    applyDamage(encounter.combatants[1], 5);
+    CHECK_EQ(encounter.combatants[1].tempHp, 0);
+    CHECK_EQ(encounter.combatants[1].hp, 0);
+    CHECK_EQ(encounter.combatants[1].name, goblinName);
+    CHECK_EQ(encounter.combatants[0].name, ariaName);
+    encounter.turnIndex = 1;
+    keepTurnInInitiative(encounter);
+    CHECK_EQ(encounter.turnIndex, 2);
+    CHECK_EQ(encounter.round, 1);
+    const std::vector<int> afterDamage = initiativeOrder(encounter.combatants);
+    CHECK_EQ(afterDamage.size(), 2U);
+    CHECK_EQ(afterDamage[0], 0);
+    CHECK_EQ(afterDamage[1], 2);
 }
 
 TEST_CASE("turn controls do nothing when the fight is empty")
@@ -293,7 +316,7 @@ TEST_CASE("removing a combatant keeps the turn on the right person")
     CHECK_EQ(combatants[0].id, std::string("b"));
 }
 
-TEST_CASE("monster copies get distinct numbered names and their own bonus snapshot")
+TEST_CASE("one monster has no copy suffix and two of the same type are numbered")
 {
     Monster monster;
     monster.id = "goblin-warrior";
@@ -305,11 +328,22 @@ TEST_CASE("monster copies get distinct numbered names and their own bonus snapsh
     std::vector<Combatant> existing;
     const Combatant first = makeMonsterCombatant(monster, existing, "id-1");
     existing.push_back(first);
+    assignMonsterCopyNames(existing);
+    CHECK_EQ(existing[0].name, std::string("Goblin Warrior"));
+    CHECK_EQ(first.name, std::string("Goblin Warrior"));
+
     monster.initiativeBonus = 9;
     monster.hp = 99;
     const Combatant second = makeMonsterCombatant(monster, existing, "id-2");
-    CHECK_EQ(first.name, std::string("Goblin Warrior 1"));
-    CHECK_EQ(second.name, std::string("Goblin Warrior 2"));
+    existing.push_back(second);
+    assignMonsterCopyNames(existing);
+    CHECK_EQ(existing[0].name, std::string("Goblin Warrior 1"));
+    CHECK_EQ(existing[1].name, std::string("Goblin Warrior 2"));
+    existing[1].hp = 0;
+    existing[1].tempHp = 0;
+    assignMonsterCopyNames(existing);
+    CHECK_EQ(existing[0].name, std::string("Goblin Warrior 1"));
+    CHECK_EQ(existing[1].name, std::string("Goblin Warrior 2"));
     CHECK_EQ(first.id, std::string("id-1"));
     CHECK_EQ(second.id, std::string("id-2"));
     CHECK_EQ(*first.initiativeBonus, 2);

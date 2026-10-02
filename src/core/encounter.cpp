@@ -52,6 +52,21 @@ int copyNumber(const std::string& name, const std::string& monsterName)
     return static_cast<int>(value);
 }
 
+std::string copyBaseName(const std::string& name)
+{
+    const auto space = name.rfind(' ');
+    if (space == std::string::npos || space == 0 || space + 1 >= name.size()) {
+        return name;
+    }
+    for (std::size_t i = space + 1; i < name.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(name[i]);
+        if (c < '0' || c > '9') {
+            return name;
+        }
+    }
+    return name.substr(0, space);
+}
+
 }  // namespace
 
 std::vector<std::string> validateCombatant(const Combatant& combatant)
@@ -126,20 +141,64 @@ bool isMonsterCombatant(const Combatant& combatant)
     return combatant.source == kCombatantSourceMonster;
 }
 
-std::string nextMonsterCopyName(const std::string& monsterName, const std::string& sourceId,
-                                const std::vector<Combatant>& existing)
+bool assignMonsterCopyNames(std::vector<Combatant>& combatants)
 {
-    int highest = 0;
-    for (const Combatant& combatant : existing) {
-        if (combatant.source != kCombatantSourceMonster || combatant.sourceId != sourceId) {
+    std::vector<std::string> sourceIds;
+    for (const Combatant& combatant : combatants) {
+        if (!isMonsterCombatant(combatant)) {
             continue;
         }
-        highest = std::max(highest, copyNumber(combatant.name, monsterName));
+        if (std::find(sourceIds.begin(), sourceIds.end(), combatant.sourceId) == sourceIds.end()) {
+            sourceIds.push_back(combatant.sourceId);
+        }
     }
-    if (highest == std::numeric_limits<int>::max()) {
-        return monsterName + " " + std::to_string(highest);
+    bool changed = false;
+    for (const std::string& sourceId : sourceIds) {
+        std::vector<int> indexes;
+        for (int i = 0; i < combatantCount(combatants); ++i) {
+            const Combatant& combatant = combatants[static_cast<std::size_t>(i)];
+            if (isMonsterCombatant(combatant) && combatant.sourceId == sourceId) {
+                indexes.push_back(i);
+            }
+        }
+        if (indexes.empty()) {
+            continue;
+        }
+        const std::string base =
+            copyBaseName(combatants[static_cast<std::size_t>(indexes.front())].name);
+        if (indexes.size() == 1) {
+            Combatant& only = combatants[static_cast<std::size_t>(indexes.front())];
+            if (only.name != base) {
+                only.name = base;
+                changed = true;
+            }
+            continue;
+        }
+        bool unique = true;
+        std::vector<int> seen;
+        for (const int index : indexes) {
+            const int number = copyNumber(combatants[static_cast<std::size_t>(index)].name, base);
+            if (number <= 0 || std::find(seen.begin(), seen.end(), number) != seen.end()) {
+                unique = false;
+                break;
+            }
+            seen.push_back(number);
+        }
+        if (unique) {
+            continue;
+        }
+        int number = 1;
+        for (const int index : indexes) {
+            const std::string numbered = base + " " + std::to_string(number);
+            ++number;
+            Combatant& combatant = combatants[static_cast<std::size_t>(index)];
+            if (combatant.name != numbered) {
+                combatant.name = numbered;
+                changed = true;
+            }
+        }
     }
-    return monsterName + " " + std::to_string(highest + 1);
+    return changed;
 }
 
 Combatant makeCharacterCombatant(const Character& character, const std::string& combatantId)
@@ -182,14 +241,14 @@ bool carryCharacterHitPoints(std::vector<Character>& characters, const Combatant
     return false;
 }
 
-Combatant makeMonsterCombatant(const Monster& monster, const std::vector<Combatant>& existing,
+Combatant makeMonsterCombatant(const Monster& monster, const std::vector<Combatant>& /*existing*/,
                                const std::string& combatantId)
 {
     Combatant combatant;
     combatant.id = combatantId;
     combatant.source = kCombatantSourceMonster;
     combatant.sourceId = monster.id;
-    combatant.name = nextMonsterCopyName(monster.name, monster.id, existing);
+    combatant.name = monster.name;
     combatant.initiative = 0;
     combatant.initiativeBonus = monster.initiativeBonus;
     combatant.hp = monster.hp;
@@ -231,7 +290,7 @@ MoveResult moveCombatant(std::vector<Combatant>& combatants, int index, int dire
     if (index < 0 || index >= count) {
         return result;
     }
-    if (combatants[static_cast<std::size_t>(index)].hp <= 0) {
+    if (!isInInitiative(combatants[static_cast<std::size_t>(index)])) {
         return result;
     }
     int destination = index;
@@ -240,7 +299,7 @@ MoveResult moveCombatant(std::vector<Combatant>& combatants, int index, int dire
         if (destination < 0 || destination >= count) {
             return result;
         }
-        if (combatants[static_cast<std::size_t>(destination)].hp > 0) {
+        if (isInInitiative(combatants[static_cast<std::size_t>(destination)])) {
             break;
         }
     }
@@ -325,7 +384,7 @@ std::vector<int> initiativeOrder(const std::vector<Combatant>& combatants)
     const int count = combatantCount(combatants);
     order.reserve(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i) {
-        if (combatants[static_cast<std::size_t>(i)].hp > 0) {
+        if (isInInitiative(combatants[static_cast<std::size_t>(i)])) {
             order.push_back(i);
         }
     }
@@ -340,7 +399,7 @@ void keepTurnInInitiative(Encounter& encounter)
     }
     const int count = combatantCount(encounter.combatants);
     if (encounter.turnIndex >= 0 && encounter.turnIndex < count &&
-        encounter.combatants[static_cast<std::size_t>(encounter.turnIndex)].hp > 0) {
+        isInInitiative(encounter.combatants[static_cast<std::size_t>(encounter.turnIndex)])) {
         return;
     }
     if (encounter.turnIndex < 0 || encounter.turnIndex >= count) {
@@ -349,7 +408,7 @@ void keepTurnInInitiative(Encounter& encounter)
     }
     for (int step = 1; step <= count; ++step) {
         const int index = (encounter.turnIndex + step) % count;
-        if (encounter.combatants[static_cast<std::size_t>(index)].hp > 0) {
+        if (isInInitiative(encounter.combatants[static_cast<std::size_t>(index)])) {
             encounter.turnIndex = index;
             return;
         }

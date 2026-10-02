@@ -375,6 +375,9 @@ void EncounterBuilderPage::showEncounter()
     m_encounterName->setText(QString::fromStdString(encounter->name));
     m_nameError->hide();
     m_populating = false;
+    if (assignMonsterCopyNames(encounter->combatants)) {
+        persist();
+    }
     rebuildRoster();
 }
 
@@ -457,6 +460,7 @@ void EncounterBuilderPage::addSelectedMonster()
     }
     encounter->combatants.push_back(
         makeMonsterCombatant(*monster, encounter->combatants, generateUuidV4([this] { return m_ids(); })));
+    assignMonsterCopyNames(encounter->combatants);
     encounter->turnIndex = sortByInitiative(encounter->combatants, encounter->turnIndex);
     persist();
     rebuildRoster();

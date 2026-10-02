@@ -62,10 +62,18 @@ std::vector<std::string> validateEncounter(const Encounter& encounter);
 
 bool isMonsterCombatant(const Combatant& combatant);
 
-// "Goblin Warrior 1", then "Goblin Warrior 2". The number is one higher than
-// the highest numbered copy of this source id already in the fight.
-std::string nextMonsterCopyName(const std::string& monsterName, const std::string& sourceId,
-                                const std::vector<Combatant>& existing);
+// Still in the initiative order while current HP or temporary HP is above 0.
+// Both have to be 0 before the combatant leaves that order. Damage still
+// spends temporary HP before current HP.
+inline bool isInInitiative(const Combatant& combatant)
+{
+    return combatant.hp > 0 || combatant.tempHp > 0;
+}
+
+// One monster of a source keeps that monster's name. Two or more are
+// "Name 1", "Name 2", in list order, until each already has its own number.
+// A combatant at 0 HP still counts. Returns true when a name changed.
+bool assignMonsterCopyNames(std::vector<Combatant>& combatants);
 
 Combatant makeCharacterCombatant(const Character& character, const std::string& combatantId);
 Combatant makeMonsterCombatant(const Monster& monster, const std::vector<Combatant>& existing,
@@ -86,10 +94,10 @@ bool carryCharacterHitPoints(std::vector<Character>& characters, const Combatant
 // returns 0.
 int sortByInitiative(std::vector<Combatant>& combatants, int activeIndex);
 
-// Swaps the combatant at index with the next combatant in that direction whose
-// current HP is above 0. A combatant at 0 current HP stays in the vector and
-// is not moved. turnIndex follows the same combatant it pointed at. A move
-// past either end leaves the list unchanged.
+// Swaps the combatant at index with the next combatant in that direction who
+// is still in the initiative order. Someone at 0 current HP and 0 temporary
+// HP stays in the vector and is not moved. turnIndex follows the same
+// combatant it pointed at. A move past either end leaves the list unchanged.
 struct MoveResult {
     int movedTo = 0;
     int turnIndex = 0;
@@ -115,30 +123,31 @@ int rollAllMonsterInitiatives(Encounter& encounter, const RollD20& rollD20);
 bool rerollMonsterInitiative(Encounter& encounter, const std::string& combatantId, const RollD20& rollD20,
                              bool* bonusMissing = nullptr);
 
-// Indices, in vector order, of combatants whose current HP is above 0. A
-// combatant at 0 stays in the vector, so this is the initiative list: healing
-// them above 0 puts them back in the same slot. Temporary HP is ignored.
+// Indices, in vector order, of combatants still in the initiative order. A
+// combatant with both current HP and temporary HP at 0 stays in the vector,
+// so healing them, or giving them temporary HP, puts them back in the same
+// slot.
 std::vector<int> initiativeOrder(const std::vector<Combatant>& combatants);
 
-// If the turn marker is on a combatant at 0 current HP, moves it forward to
-// the next combatant still in the initiative order, wrapping without changing
-// the round. A marker already on someone above 0 stays. If nobody is above 0,
-// the index is left as it is.
+// If the turn marker is on someone who has left the initiative order, moves
+// it forward to the next combatant still in that order, wrapping without
+// changing the round. A marker already on someone in the order stays. If
+// nobody is left in the order, the index is left as it is.
 void keepTurnInInitiative(Encounter& encounter);
 
-// Next combatant whose current HP is above 0. Wrapping past the last of those
-// starts the next round at the first. An empty fight, or one where everyone
-// is at 0, does nothing.
+// Next combatant still in the initiative order. Wrapping past the last of
+// those starts the next round at the first. An empty fight, or one where
+// everyone has left the order, does nothing.
 void advanceTurn(Encounter& encounter);
 
-// Previous combatant whose current HP is above 0. Wrapping past the first of
-// those goes to the last and, when the round is above 1, back one round.
+// Previous combatant still in the initiative order. Wrapping past the first
+// of those goes to the last and, when the round is above 1, back one round.
 // Round never drops below 1.
 void retreatTurn(Encounter& encounter);
 
-// Starts the next round at the first combatant whose current HP is above 0.
-// If everyone is at 0, the turn goes to the start of the vector. An empty
-// fight does nothing.
+// Starts the next round at the first combatant still in the initiative
+// order. If everyone has left it, the turn goes to the start of the vector.
+// An empty fight does nothing.
 void advanceRound(Encounter& encounter);
 
 }  // namespace combat

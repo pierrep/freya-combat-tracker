@@ -158,7 +158,7 @@ TEST_CASE("renaming a custom monster keeps that name when it is added")
     CHECK(catalog.search(query).empty());
 
     const Combatant added = makeMonsterCombatant(*lookedUp, {}, "combatant-1");
-    CHECK_EQ(added.name, std::string("Cave Fisher 1"));
+    CHECK_EQ(added.name, std::string("Cave Fisher"));
     CHECK_EQ(added.sourceId, monster.id);
     CHECK(added.name.find("New monster") == std::string::npos);
 }

@@ -77,11 +77,9 @@ private:
     void saveCharacters();
     void rollAll();
     void rerollSelected();
-    void moveSelected(int direction);
     void removeSelected();
     void previousTurn();
     void nextTurn();
-    void nextRound();
     void persist();
     int rollD20();
     Encounter* selectedEncounter();
@@ -106,7 +104,6 @@ private:
     QLabel* m_activeLabel = nullptr;
     QPushButton* m_previousTurnButton = nullptr;
     QPushButton* m_nextTurnButton = nullptr;
-    QPushButton* m_nextRoundButton = nullptr;
     QPushButton* m_rollAllButton = nullptr;
     QLabel* m_rollNote = nullptr;
     QTreeWidget* m_initiativeList = nullptr;
@@ -139,8 +136,6 @@ private:
     QWidget* m_slotHost = nullptr;
     QVBoxLayout* m_slotLayout = nullptr;
     QLabel* m_derivedLabel = nullptr;
-    QPushButton* m_moveUpButton = nullptr;
-    QPushButton* m_moveDownButton = nullptr;
     QPushButton* m_removeButton = nullptr;
 };
 
