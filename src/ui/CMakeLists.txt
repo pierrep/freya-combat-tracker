@@ -6,7 +6,13 @@ add_executable(combat_app
     main_window.cpp
     dashboard_page.cpp
     characters_page.cpp
+    monsters_page.cpp
     placeholder_page.cpp
+)
+
+# The SRD catalog is read from the source tree. v1 runs from the build directory.
+target_compile_definitions(combat_app PRIVATE
+    "COMBAT_TRACKER_SRD_DIR=\"${CMAKE_SOURCE_DIR}/data/srd\""
 )
 
 set_target_properties(combat_app PROPERTIES

@@ -2,7 +2,7 @@
 
 A local desktop combat tracker for fifth edition (2024 rules), built with C++20 and Qt 6 Widgets. 5E compatible.
 
-Phase 1 is a roster you can use: a Dashboard, a Characters page where you add, edit, and delete characters, and placeholder Monsters and Combat pages.
+Phase 2 adds monster lookup. The Monsters page searches an offline SRD 5.2.1 catalog and a custom-monster file in the same list. SRD rows are read-only. Custom rows can be added, edited, and deleted. Combat is still a placeholder.
 
 ## Layout
 
@@ -15,7 +15,7 @@ Phase 1 is a roster you can use: a Dashboard, a Characters page where you add, e
 
 ## Build
 
-Requirements: CMake 3.25+, Ninja, a C++20 compiler (GCC 13+, Clang 17+, Apple Clang, or MSVC 2022), and Qt 6.8+ (official installer or [aqtinstall](https://github.com/miurahr/aqtinstall)). nlohmann/json is used from the system if CMake finds it, otherwise fetched at configure time.
+Requirements: CMake 3.25+, Ninja, a C++20 compiler (GCC 13+, Clang 17+, Apple Clang, or MSVC 2022), and Qt 6.4+ (6.8+ recommended; distro packages such as Ubuntu 24.04's `qt6-base-dev` work, or use the official installer or [aqtinstall](https://github.com/miurahr/aqtinstall)). nlohmann/json is used from the system if CMake finds it, otherwise fetched at configure time.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64
@@ -34,4 +34,11 @@ Characters are saved to `characters.json` (`schemaVersion` 1) in the per-user ap
 - Linux: `$XDG_DATA_HOME/combat-tracker/` (or `~/.local/share/combat-tracker/`)
 - Windows: `%APPDATA%\CombatTracker\`
 
-Every edit is saved right away by writing a temporary file and renaming it over the old one. If the file cannot be read, the app shows the error and leaves the file untouched.
+Every edit is saved right away by writing a temporary file and renaming it over the old one. If a file cannot be read, the app shows the error and leaves that file untouched.
+
+Monsters come from two files with the same stat-block shape:
+
+- `data/srd/monsters.json` is the packaged SRD 5.2.1 catalog (`source` `srd-5.2.1`), opened read-only, with `data/srd/ATTRIBUTION.txt`. The Monsters page shows that attribution.
+- `custom-monsters.json` sits next to `characters.json`. A missing file means no custom monsters. Custom ids are UUIDs. A row whose id matches an SRD slug, or whose source is `srd-5.2.1`, is skipped and reported instead of replacing the SRD monster.
+
+Search is offline: a case-insensitive substring of the name, plus optional exact creature-type and challenge-rating filters. A blank search lists every monster by name. When two rows share a name, the SRD row comes first. Custom rows are badged Custom.

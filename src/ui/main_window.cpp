@@ -2,6 +2,7 @@
 
 #include "ui/characters_page.h"
 #include "ui/dashboard_page.h"
+#include "ui/monsters_page.h"
 #include "ui/placeholder_page.h"
 
 #include <QApplication>
@@ -13,7 +14,8 @@
 
 namespace combat::ui {
 
-MainWindow::MainWindow(CharacterStore& store, QWidget* parent)
+MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, CustomMonsterStore& customStore,
+                       const QString& attribution, const QString& catalogError, QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle(QApplication::applicationDisplayName());
@@ -34,7 +36,7 @@ MainWindow::MainWindow(CharacterStore& store, QWidget* parent)
     m_pages = new QStackedWidget;
     m_pages->insertWidget(DashboardIndex, m_dashboard);
     m_pages->insertWidget(CharactersIndex, m_characters);
-    m_pages->insertWidget(MonstersIndex, new PlaceholderPage(tr("Monsters")));
+    m_pages->insertWidget(MonstersIndex, new MonstersPage(catalog, customStore, attribution, catalogError));
     m_pages->insertWidget(CombatIndex,
                           new PlaceholderPage(tr("Combat"),
                                               tr("Later this page will track initiative and whose turn it is.")));

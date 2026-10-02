@@ -1,12 +1,15 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QString>
 
 class QListWidget;
 class QStackedWidget;
 
 namespace combat {
 class CharacterStore;
+class CustomMonsterStore;
+class MergedMonsterCatalog;
 }
 
 namespace combat::ui {
@@ -20,7 +23,8 @@ class MainWindow : public QMainWindow {
 public:
     enum Page { DashboardIndex = 0, CharactersIndex, MonstersIndex, CombatIndex };
 
-    explicit MainWindow(CharacterStore& store, QWidget* parent = nullptr);
+    MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, CustomMonsterStore& customStore,
+               const QString& attribution, const QString& catalogError, QWidget* parent = nullptr);
 
     void showPage(int index);
 

@@ -12,5 +12,10 @@ namespace combat::ui {
 std::filesystem::path appDataFolder();
 
 std::filesystem::path charactersFilePath();
+std::filesystem::path customMonstersFilePath();
+
+// Packaged SRD files. The build sets COMBAT_TRACKER_SRD_DIR to data/srd.
+std::filesystem::path srdMonstersFilePath();
+std::filesystem::path srdAttributionFilePath();
 
 }  // namespace combat::ui
