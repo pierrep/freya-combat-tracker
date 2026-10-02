@@ -58,7 +58,7 @@ private:
     void onTempHpChanged(int value);
     void applySelectedDamage();
     void applySelectedHealing();
-    void showAttacks(const Combatant* combatant);
+    void showAttacks();
     void addSelectedCondition();
     void removeListedCondition();
     void showConditionText();

@@ -8,6 +8,7 @@
 
 #include <QComboBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -146,6 +147,38 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
 
     m_combatantForm = new QWidget;
     auto* form = new QFormLayout(m_combatantForm);
+
+    m_damageAmount = makeNumberBox();
+    m_damageAmount->setRange(0, std::numeric_limits<int>::max());
+    m_damageAmount->setValue(0);
+    m_damageButton = new QPushButton(tr("Apply damage to the selected combatant"));
+    m_damageButton->setObjectName(QStringLiteral("applyDamage"));
+    auto* damageRow = new QHBoxLayout;
+    damageRow->addWidget(m_damageAmount);
+    damageRow->addWidget(m_damageButton);
+    damageRow->addStretch(1);
+    form->addRow(tr("Damage"), damageRow);
+
+    m_healAmount = makeNumberBox();
+    m_healAmount->setRange(0, std::numeric_limits<int>::max());
+    m_healAmount->setValue(0);
+    m_healButton = new QPushButton(tr("Apply healing to the selected combatant"));
+    m_healButton->setObjectName(QStringLiteral("applyHealing"));
+    auto* healRow = new QHBoxLayout;
+    healRow->addWidget(m_healAmount);
+    healRow->addWidget(m_healButton);
+    healRow->addStretch(1);
+    form->addRow(tr("Healing"), healRow);
+    m_healNote = new QLabel;
+    m_healNote->setWordWrap(true);
+    form->addRow(QString(), m_healNote);
+
+    auto* divider = new QFrame;
+    divider->setObjectName(QStringLiteral("combatantDivider"));
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Sunken);
+    form->addRow(divider);
+
     m_combatantName = new QLabel;
     m_combatantName->setObjectName(QStringLiteral("combatantName"));
     form->addRow(tr("Name"), m_combatantName);
@@ -189,31 +222,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_tempHp = makeNumberBox();
     m_tempHp->setObjectName(QStringLiteral("tempHpField"));
     form->addRow(tr("Temporary HP"), m_tempHp);
-
-    m_damageAmount = makeNumberBox();
-    m_damageAmount->setRange(0, std::numeric_limits<int>::max());
-    m_damageAmount->setValue(0);
-    m_damageButton = new QPushButton(tr("Apply damage to the selected combatant"));
-    m_damageButton->setObjectName(QStringLiteral("applyDamage"));
-    auto* damageRow = new QHBoxLayout;
-    damageRow->addWidget(m_damageAmount);
-    damageRow->addWidget(m_damageButton);
-    damageRow->addStretch(1);
-    form->addRow(tr("Damage"), damageRow);
-
-    m_healAmount = makeNumberBox();
-    m_healAmount->setRange(0, std::numeric_limits<int>::max());
-    m_healAmount->setValue(0);
-    m_healButton = new QPushButton(tr("Apply healing to the selected combatant"));
-    m_healButton->setObjectName(QStringLiteral("applyHealing"));
-    auto* healRow = new QHBoxLayout;
-    healRow->addWidget(m_healAmount);
-    healRow->addWidget(m_healButton);
-    healRow->addStretch(1);
-    form->addRow(tr("Healing"), healRow);
-    m_healNote = new QLabel;
-    m_healNote->setWordWrap(true);
-    form->addRow(QString(), m_healNote);
 
     m_conditionPicker = new QComboBox;
     m_conditionPicker->setObjectName(QStringLiteral("conditionPicker"));
@@ -566,6 +574,7 @@ void CombatPage::showCombatant()
     m_removeButton->setEnabled(combatant != nullptr);
     if (combatant == nullptr) {
         m_rerollButton->setEnabled(false);
+        showAttacks();
         return;
     }
 
@@ -625,7 +634,7 @@ void CombatPage::showCombatant()
     m_deathSuccessLabel->setText(QString::number(combatant->deathSaves.successes));
     m_deathFailureLabel->setText(QString::number(combatant->deathSaves.failures));
     m_populating = false;
-    showAttacks(combatant);
+    showAttacks();
     showConditionText();
     updateDerivedModifiers();
     rebuildSlotButtons();
@@ -699,15 +708,21 @@ void CombatPage::saveCharacters()
     }
 }
 
-void CombatPage::showAttacks(const Combatant* combatant)
+void CombatPage::showAttacks()
 {
-    const bool monster = combatant != nullptr && isMonsterCombatant(*combatant);
+    const Encounter* encounter = selectedEncounter();
+    const Combatant* turn = nullptr;
+    if (encounter != nullptr && encounter->turnIndex >= 0 &&
+        encounter->turnIndex < static_cast<int>(encounter->combatants.size())) {
+        turn = &encounter->combatants[static_cast<std::size_t>(encounter->turnIndex)];
+    }
+    const bool monster = turn != nullptr && isMonsterCombatant(*turn);
     m_attacksSection->setVisible(monster);
     if (!monster) {
         m_attacks->clear();
         return;
     }
-    const std::optional<Monster> lookedUp = m_catalog.findById(combatant->sourceId);
+    const std::optional<Monster> lookedUp = m_catalog.findById(turn->sourceId);
     if (!lookedUp.has_value() || lookedUp->attacks.empty()) {
         m_attacks->setText(tr("No attacks are stored for this monster."));
         return;
@@ -730,6 +745,7 @@ void CombatPage::applySelectedDamage()
     if (!applyDamage(*combatant, m_damageAmount->value())) {
         return;
     }
+    m_damageAmount->setValue(0);
     const std::string id = combatant->id;
     rebuildCombatantList(id);
     persist();
@@ -744,6 +760,7 @@ void CombatPage::applySelectedHealing()
     if (!applyHealing(*combatant, m_healAmount->value())) {
         return;
     }
+    m_healAmount->setValue(0);
     const std::string id = combatant->id;
     rebuildCombatantList(id);
     persist();
