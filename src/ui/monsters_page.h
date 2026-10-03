@@ -16,6 +16,7 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QSpinBox;
+class QVBoxLayout;
 class QWidget;
 
 namespace combat {
@@ -47,6 +48,7 @@ private:
     void rebuildFilters();
     void persist();
     void selectId(const QString& id);
+    void showAttackList(QWidget* section, QVBoxLayout* rows, const std::vector<MonsterAttack>& attacks);
     QString currentId() const;
     Monster* selectedCustom();
     const Monster* selectedVisible() const;
@@ -78,6 +80,8 @@ private:
     QLabel* m_statPerception = nullptr;
     QLabel* m_statChallenge = nullptr;
     std::array<QLabel*, 6> m_statScores{};
+    QWidget* m_statAttacks = nullptr;
+    QVBoxLayout* m_statAttackRows = nullptr;
 
     QWidget* m_form = nullptr;
     QLabel* m_nameError = nullptr;
@@ -94,6 +98,8 @@ private:
     QLineEdit* m_challengeRating = nullptr;
     std::array<QSpinBox*, 6> m_scores{};
     std::array<QLabel*, 6> m_modifiers{};
+    QWidget* m_formAttacks = nullptr;
+    QVBoxLayout* m_formAttackRows = nullptr;
 };
 
 }  // namespace combat::ui

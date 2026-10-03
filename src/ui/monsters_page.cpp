@@ -249,6 +249,20 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     }
     statGrid->setColumnStretch(2, 1);
     statLayout->addLayout(statGrid);
+    m_statAttacks = new QWidget;
+    m_statAttacks->setObjectName(QStringLiteral("monsterAttacks"));
+    auto* statAttackLayout = new QVBoxLayout(m_statAttacks);
+    statAttackLayout->setContentsMargins(0, 8, 0, 0);
+    statAttackLayout->setSpacing(8);
+    auto* statAttackHeading = new QLabel(tr("Attacks"));
+    statAttackHeading->setFont(headingFont);
+    m_statAttackRows = new QVBoxLayout;
+    m_statAttackRows->setContentsMargins(0, 0, 0, 0);
+    m_statAttackRows->setSpacing(8);
+    statAttackLayout->addWidget(statAttackHeading);
+    statAttackLayout->addLayout(m_statAttackRows);
+    m_statAttacks->hide();
+    statLayout->addWidget(m_statAttacks);
     statLayout->addStretch(1);
     rightLayout->addWidget(m_stat);
 
@@ -313,6 +327,20 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     }
     abilityGrid->setColumnStretch(3, 1);
     formLayout->addLayout(abilityGrid);
+    m_formAttacks = new QWidget;
+    m_formAttacks->setObjectName(QStringLiteral("monsterFormAttacks"));
+    auto* formAttackLayout = new QVBoxLayout(m_formAttacks);
+    formAttackLayout->setContentsMargins(0, 0, 0, 0);
+    formAttackLayout->setSpacing(8);
+    auto* formAttackHeading = new QLabel(tr("Attacks"));
+    formAttackHeading->setFont(headingFont);
+    m_formAttackRows = new QVBoxLayout;
+    m_formAttackRows->setContentsMargins(0, 0, 0, 0);
+    m_formAttackRows->setSpacing(8);
+    formAttackLayout->addWidget(formAttackHeading);
+    formAttackLayout->addLayout(m_formAttackRows);
+    m_formAttacks->hide();
+    formLayout->addWidget(m_formAttacks);
     formLayout->addStretch(1);
     rightLayout->addWidget(m_form);
     scroll->setWidget(right);
@@ -509,6 +537,7 @@ void MonstersPage::showSelected()
         for (std::size_t i = 0; i < kAbilities.size(); ++i) {
             m_statScores[i]->setText(scoreText(monster->abilities.*kAbilities[i].member));
         }
+        showAttackList(m_statAttacks, m_statAttackRows, monster->attacks);
         return;
     }
 
@@ -532,7 +561,42 @@ void MonstersPage::showSelected()
         m_scores[i]->setValue(monster->abilities.*kAbilities[i].member);
         m_modifiers[i]->setText(QString::fromStdString(formatModifier(abilityModifier(m_scores[i]->value()))));
     }
+    showAttackList(m_formAttacks, m_formAttackRows, monster->attacks);
     m_populating = false;
+}
+
+void MonstersPage::showAttackList(QWidget* section, QVBoxLayout* rows, const std::vector<MonsterAttack>& attacks)
+{
+    if (section == nullptr || rows == nullptr) {
+        return;
+    }
+    while (QLayoutItem* item = rows->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    section->setVisible(!attacks.empty());
+    for (const MonsterAttack& attack : attacks) {
+        auto* block = new QWidget;
+        auto* blockLayout = new QVBoxLayout(block);
+        blockLayout->setContentsMargins(0, 0, 0, 0);
+        blockLayout->setSpacing(2);
+        QString title = QString::fromStdString(attack.name);
+        if (attack.count != 1) {
+            title = tr("%1 × %2").arg(title).arg(attack.count);
+        }
+        auto* name = new QLabel(title);
+        name->setWordWrap(true);
+        name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        QFont nameFont = name->font();
+        nameFont.setBold(true);
+        name->setFont(nameFont);
+        auto* effect = new QLabel(QString::fromStdString(attack.effect));
+        effect->setWordWrap(true);
+        effect->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        blockLayout->addWidget(name);
+        blockLayout->addWidget(effect);
+        rows->addWidget(block);
+    }
 }
 
 void MonstersPage::onSearchChanged()
