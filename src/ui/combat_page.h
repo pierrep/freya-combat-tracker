@@ -7,6 +7,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <map>
 #include <optional>
 #include <random>
 #include <string>
@@ -65,8 +66,10 @@ private:
     void applySelectedDamage();
     void applySelectedHealing();
     void applyArmedDamage(QTreeWidgetItem* item, int column);
+    void useSelectedAbility();
     void armAttack(const std::string& effect, int total);
     void disarmAttack();
+    void rememberArmedSelection(QTreeWidgetItem* previous, QTreeWidget* otherList);
     void showAttacks();
     void clearAttackRows();
     void setCharacterSheetControlsVisible(bool visible);
@@ -91,6 +94,9 @@ private:
     void undoLastChange();
     void syncAttackCount();
     void setHitText(const QString& text);
+    int attacksUsedFor(const std::string& id) const;
+    int allotmentFor(const Combatant& combatant) const;
+    std::string currentTurnId();
     bool beginUndo(FightEdit edit, const Combatant* sheetCombatant, FightUndo& snapshot);
     void keepUndo(FightEdit edit, FightUndo snapshot);
     bool fightChanged(const FightUndo& snapshot, const Combatant* sheetCombatant);
@@ -111,9 +117,12 @@ private:
     std::mt19937 m_dice;
     struct PageUndo {
         FightUndo fight;
-        int attacksUsed = 0;
+        std::map<std::string, int> attacksUsedById;
         std::string countedCombatantId;
+        int countedRound = 0;
         QString hitText;
+        // Set for an attack or Use ability. Undo selects this combatant again.
+        std::optional<std::string> selectedCombatantId;
     };
 
     bool m_populating = false;
@@ -122,8 +131,13 @@ private:
     bool m_reportedLoadError = false;
     bool m_swordCursor = false;
     FightEdit m_openEdit = FightEdit::None;
-    int m_attacksUsed = 0;
-    int m_capturedAttacksUsed = 0;
+    std::map<std::string, int> m_attacksUsedById;
+    std::map<std::string, int> m_capturedAttacksUsedById;
+    int m_countedRound = 0;
+    int m_capturedCountedRound = 0;
+    std::optional<std::string> m_capturedSelectionId;
+    std::string m_selectionBeforeAttack;
+    bool m_hasSelectionBeforeAttack = false;
     std::optional<PageUndo> m_undo;
     std::optional<int> m_armedDamage;
     std::string m_armedEffect;

@@ -1,5 +1,6 @@
 #include "core/encounter.h"
 
+#include "core/attack_damage.h"
 #include "core/combat_rules.h"
 
 #include <algorithm>
@@ -489,6 +490,36 @@ void retreatTurn(Encounter& encounter)
     }
 }
 
+namespace {
+
+// Counts one completed attack or Use ability. When the marker is still on the
+// attacker and the allotment was already reached, the marker moves and the
+// count does not grow. Reaching the allotment with this use also moves it.
+int noteMonsterAction(Encounter& encounter, int attackerIndex, int attacksUsed, int allotment)
+{
+    if (attacksUsed < 0) {
+        attacksUsed = 0;
+    }
+    if (allotment < 1) {
+        allotment = 1;
+    }
+    const int count = combatantCount(encounter.combatants);
+    if (attackerIndex < 0 || attackerIndex >= count || encounter.turnIndex != attackerIndex) {
+        return attacksUsed;
+    }
+    if (attacksUsed >= allotment) {
+        advanceTurn(encounter);
+        return attacksUsed;
+    }
+    ++attacksUsed;
+    if (attacksUsed >= allotment) {
+        advanceTurn(encounter);
+    }
+    return attacksUsed;
+}
+
+}  // namespace
+
 int attackAllotment(const std::vector<MonsterAttack>& attacks)
 {
     for (const MonsterAttack& attack : attacks) {
@@ -499,6 +530,33 @@ int attackAllotment(const std::vector<MonsterAttack>& attacks)
     return 1;
 }
 
+std::string attacksUsedLabel(int attacksUsed, int allotment)
+{
+    if (attacksUsed < 0) {
+        attacksUsed = 0;
+    }
+    if (allotment < 1) {
+        allotment = 1;
+    }
+    return std::to_string(attacksUsed) + "/" + std::to_string(allotment);
+}
+
+bool attackButtonsAvailable(int attacksUsed, int allotment)
+{
+    if (attacksUsed < 0) {
+        attacksUsed = 0;
+    }
+    if (allotment < 1) {
+        allotment = 1;
+    }
+    return attacksUsed < allotment;
+}
+
+bool isUseAbilityAction(const MonsterAttack& attack)
+{
+    return attack.name != "Multiattack" && damageExpressions(attack.effect).empty();
+}
+
 std::optional<int> completeMonsterAttack(Encounter& encounter, int targetIndex, int amount,
                                         std::vector<Character>& characters, int attackerIndex, int attacksUsed,
                                         int allotment)
@@ -507,13 +565,6 @@ std::optional<int> completeMonsterAttack(Encounter& encounter, int targetIndex, 
     if (targetIndex < 0 || targetIndex >= count || amount < 0) {
         return std::nullopt;
     }
-    if (attacksUsed < 0) {
-        attacksUsed = 0;
-    }
-    if (allotment < 1) {
-        allotment = 1;
-    }
-
     Combatant& target = encounter.combatants[static_cast<std::size_t>(targetIndex)];
     if (!applyDamage(target, amount)) {
         return std::nullopt;
@@ -528,15 +579,16 @@ std::optional<int> completeMonsterAttack(Encounter& encounter, int targetIndex, 
         }
     }
     keepTurnInInitiative(encounter);
-    if (attackerIndex < 0 || attackerIndex >= count || encounter.turnIndex != attackerIndex) {
-        return 0;
+    return noteMonsterAction(encounter, attackerIndex, attacksUsed, allotment);
+}
+
+std::optional<int> spendMonsterAction(Encounter& encounter, int attackerIndex, int attacksUsed, int allotment)
+{
+    const int count = combatantCount(encounter.combatants);
+    if (attackerIndex < 0 || attackerIndex >= count) {
+        return std::nullopt;
     }
-    ++attacksUsed;
-    if (attacksUsed >= allotment) {
-        advanceTurn(encounter);
-        return 0;
-    }
-    return attacksUsed;
+    return noteMonsterAction(encounter, attackerIndex, attacksUsed, allotment);
 }
 
 bool restoreFightUndo(Encounter& encounter, std::vector<Character>& characters, const FightUndo& undo)

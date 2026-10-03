@@ -263,7 +263,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
 
     auto* lists = new QHBoxLayout;
     lists->setSpacing(16);
-    m_initiativeList = makeCombatantTree({QString(), QString(), tr("Name"), tr("AC"), tr("HP")}, 2);
+    m_initiativeList = makeCombatantTree({QString(), QString(), tr("Name"), tr("AC"), tr("HP"), tr("Attacks")}, 2);
     m_initiativeList->setObjectName(QStringLiteral("initiativeList"));
     m_zeroHpList = makeCombatantTree({tr("Name"), tr("HP")}, 0);
     m_zeroHpList->setObjectName(QStringLiteral("zeroHpList"));
@@ -417,10 +417,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(m_initiativeList, &QTreeWidget::itemClicked, this, &CombatPage::applyArmedDamage);
     connect(m_zeroHpList, &QTreeWidget::itemClicked, this, &CombatPage::applyArmedDamage);
     connect(m_initiativeList, &QTreeWidget::currentItemChanged, this,
-            [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
+            [this](QTreeWidgetItem* current, QTreeWidgetItem* previous) {
                 if (m_populating) {
                     return;
                 }
+                rememberArmedSelection(previous, m_zeroHpList);
                 if (current != nullptr) {
                     const QSignalBlocker blocker(m_zeroHpList);
                     m_zeroHpList->setCurrentItem(nullptr);
@@ -428,10 +429,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
                 showCombatant();
             });
     connect(m_zeroHpList, &QTreeWidget::currentItemChanged, this,
-            [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
+            [this](QTreeWidgetItem* current, QTreeWidgetItem* previous) {
                 if (m_populating) {
                     return;
                 }
+                rememberArmedSelection(previous, m_initiativeList);
                 if (current != nullptr) {
                     const QSignalBlocker blocker(m_initiativeList);
                     m_initiativeList->setCurrentItem(nullptr);
@@ -658,8 +660,9 @@ void CombatPage::showEncounter()
         if (m_undoButton != nullptr) {
             m_undoButton->setEnabled(false);
         }
-        m_attacksUsed = 0;
+        m_attacksUsedById.clear();
         m_countedCombatantId.clear();
+        m_countedRound = 0;
         setHitText({});
         disarmAttack();
         return;
@@ -671,8 +674,9 @@ void CombatPage::showEncounter()
             m_undoButton->setEnabled(false);
             disarmAttack();
         }
-        m_attacksUsed = 0;
+        m_attacksUsedById.clear();
         m_countedCombatantId.clear();
+        m_countedRound = 0;
         setHitText({});
         m_undoEncounterId = encounter->id;
     }
@@ -691,6 +695,7 @@ void CombatPage::rebuildCombatantList(const std::string& selectId)
         return;
     }
     keepTurnInInitiative(*encounter);
+    syncAttackCount();
     std::string id = selectId;
     if (id.empty() && !encounter->combatants.empty()) {
         const int turn = encounter->turnIndex;
@@ -712,6 +717,12 @@ void CombatPage::rebuildCombatantList(const std::string& selectId)
             QTreeWidget* list = down ? m_zeroHpList : m_initiativeList;
             QTreeWidgetItem* item =
                 addCombatantRow(list, combatant, !down && i == encounter->turnIndex, !down);
+            if (!down && isMonsterCombatant(combatant)) {
+                const std::string label =
+                    attacksUsedLabel(attacksUsedFor(combatant.id), allotmentFor(combatant));
+                item->setText(5, QString::fromStdString(label));
+                item->setTextAlignment(5, Qt::AlignRight | Qt::AlignVCenter);
+            }
             if (combatant.id == id) {
                 selectItem = item;
                 selectList = list;
@@ -966,32 +977,38 @@ void CombatPage::clearAttackRows()
 void CombatPage::showAttacks()
 {
     clearAttackRows();
-    const Encounter* encounter = selectedEncounter();
-    const Combatant* turn = nullptr;
-    if (encounter != nullptr && encounter->turnIndex >= 0 &&
-        encounter->turnIndex < static_cast<int>(encounter->combatants.size())) {
-        turn = &encounter->combatants[static_cast<std::size_t>(encounter->turnIndex)];
-    }
     const Combatant* selected = selectedCombatant();
-    const bool monster = turn != nullptr && selected == turn && isMonsterCombatant(*turn);
+    const bool monster = selected != nullptr && isMonsterCombatant(*selected);
     m_attacksSection->setVisible(monster);
     if (!monster) {
         return;
     }
-    const std::optional<Monster> lookedUp = m_catalog.findById(turn->sourceId);
+    const std::optional<Monster> lookedUp = m_catalog.findById(selected->sourceId);
     if (!lookedUp.has_value() || lookedUp->attacks.empty()) {
         auto* empty = new QLabel(tr("No attacks are stored for this monster."));
         empty->setWordWrap(true);
         m_attackRows->addWidget(empty);
         return;
     }
+    const Encounter* encounter = selectedEncounter();
+    bool theirTurn = false;
+    if (encounter != nullptr && encounter->turnIndex >= 0 &&
+        encounter->turnIndex < static_cast<int>(encounter->combatants.size())) {
+        theirTurn = encounter->combatants[static_cast<std::size_t>(encounter->turnIndex)].id == selected->id;
+    }
+    const int allotment = attackAllotment(lookedUp->attacks);
+    const bool buttons = theirTurn && attackButtonsAvailable(attacksUsedFor(selected->id), allotment);
     for (const MonsterAttack& attack : lookedUp->attacks) {
+        auto* block = new QWidget;
+        auto* blockLayout = new QVBoxLayout(block);
+        blockLayout->setContentsMargins(0, 0, 0, 0);
+        blockLayout->setSpacing(2);
         const QString title = tr("%1 × %2").arg(QString::fromStdString(attack.name)).arg(attack.count);
-        if (damageExpressions(attack.effect).empty()) {
-            auto* name = new QLabel(title);
-            name->setWordWrap(true);
-            m_attackRows->addWidget(name);
-        } else {
+        auto* name = new QLabel(title);
+        name->setWordWrap(true);
+        blockLayout->addWidget(name);
+        const bool damage = !damageExpressions(attack.effect).empty();
+        if (buttons && damage) {
             auto* button = new QPushButton(title);
             button->setObjectName(QStringLiteral("rollAttackDamage"));
             const std::string effect = attack.effect;
@@ -1008,12 +1025,18 @@ void CombatPage::showAttacks()
                     armAttack(effect, *total);
                 }
             });
-            m_attackRows->addWidget(button);
+            blockLayout->addWidget(button);
+        } else if (buttons && isUseAbilityAction(attack)) {
+            auto* button = new QPushButton(tr("Use ability"));
+            button->setObjectName(QStringLiteral("useAbility"));
+            connect(button, &QPushButton::clicked, this, &CombatPage::useSelectedAbility);
+            blockLayout->addWidget(button);
         }
         auto* effectLabel = new QLabel(QString::fromStdString(attack.effect));
         effectLabel->setWordWrap(true);
         effectLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        m_attackRows->addWidget(effectLabel);
+        blockLayout->addWidget(effectLabel);
+        m_attackRows->addWidget(block);
     }
 }
 
@@ -1438,6 +1461,8 @@ void CombatPage::applyArmedDamage(QTreeWidgetItem* item, int /*column*/)
     }
     const int amount = *m_armedDamage;
     const std::string attackerId = m_armedAttackerId;
+    const bool restorePriorSelection = m_hasSelectionBeforeAttack;
+    const std::string priorSelection = m_selectionBeforeAttack;
     Combatant& combatant = encounter->combatants[static_cast<std::size_t>(index)];
     const QString targetName = QString::fromStdString(combatant.name);
     QString attackerName;
@@ -1448,7 +1473,13 @@ void CombatPage::applyArmedDamage(QTreeWidgetItem* item, int /*column*/)
     const Combatant* sheet = isMonsterCombatant(combatant) ? nullptr : &combatant;
     FightUndo snapshot;
     const bool fresh = beginUndo(FightEdit::Once, sheet, snapshot);
-    const std::string id = combatant.id;
+    if (restorePriorSelection) {
+        m_capturedSelectionId = priorSelection;
+    } else if (const Combatant* selected = selectedCombatant()) {
+        m_capturedSelectionId = selected->id;
+    } else {
+        m_capturedSelectionId = std::string();
+    }
     disarmAttack();
 
     int attackerIndex = -1;
@@ -1469,8 +1500,9 @@ void CombatPage::applyArmedDamage(QTreeWidgetItem* item, int /*column*/)
     }
 
     m_suppressUndo = true;
+    const int usedBefore = attackerId.empty() ? 0 : attacksUsedFor(attackerId);
     const std::optional<int> attacksUsed =
-        completeMonsterAttack(*encounter, index, amount, m_characters, attackerIndex, m_attacksUsed, allotment);
+        completeMonsterAttack(*encounter, index, amount, m_characters, attackerIndex, usedBefore, allotment);
     if (!attacksUsed.has_value()) {
         m_suppressUndo = false;
         return;
@@ -1479,11 +1511,50 @@ void CombatPage::applyArmedDamage(QTreeWidgetItem* item, int /*column*/)
         keepUndo(FightEdit::Once, std::move(snapshot));
     }
     setHitText(tr("%1 hit %2 for %3 damage").arg(attackerName, targetName).arg(amount));
-    m_attacksUsed = *attacksUsed;
+    if (!attackerId.empty()) {
+        m_attacksUsedById[attackerId] = *attacksUsed;
+    }
     if (!isMonsterCombatant(encounter->combatants[static_cast<std::size_t>(index)])) {
         saveCharacters();
     }
-    rebuildCombatantList(id);
+    rebuildCombatantList(currentTurnId());
+    persist();
+    m_suppressUndo = false;
+}
+
+void CombatPage::useSelectedAbility()
+{
+    Encounter* encounter = selectedEncounter();
+    Combatant* selected = selectedCombatant();
+    if (encounter == nullptr || selected == nullptr || !isMonsterCombatant(*selected)) {
+        return;
+    }
+    const int turn = encounter->turnIndex;
+    if (turn < 0 || turn >= static_cast<int>(encounter->combatants.size()) ||
+        encounter->combatants[static_cast<std::size_t>(turn)].id != selected->id) {
+        return;
+    }
+    const std::string attackerId = selected->id;
+    const int allotment = allotmentFor(*selected);
+    const int usedBefore = attacksUsedFor(attackerId);
+    if (!attackButtonsAvailable(usedBefore, allotment)) {
+        return;
+    }
+    FightUndo snapshot;
+    const bool fresh = beginUndo(FightEdit::Once, nullptr, snapshot);
+    m_capturedSelectionId = attackerId;
+    disarmAttack();
+    m_suppressUndo = true;
+    const std::optional<int> attacksUsed = spendMonsterAction(*encounter, turn, usedBefore, allotment);
+    if (!attacksUsed.has_value()) {
+        m_suppressUndo = false;
+        return;
+    }
+    if (fresh) {
+        keepUndo(FightEdit::Once, std::move(snapshot));
+    }
+    m_attacksUsedById[attackerId] = *attacksUsed;
+    rebuildCombatantList(currentTurnId());
     persist();
     m_suppressUndo = false;
 }
@@ -1493,6 +1564,8 @@ void CombatPage::armAttack(const std::string& effect, int total)
     m_armedEffect = effect;
     m_armedDamage = total;
     m_armedAttackerId.clear();
+    m_hasSelectionBeforeAttack = false;
+    m_selectionBeforeAttack.clear();
     if (const Encounter* encounter = selectedEncounter()) {
         const int turn = encounter->turnIndex;
         if (turn >= 0 && turn < static_cast<int>(encounter->combatants.size())) {
@@ -1513,11 +1586,30 @@ void CombatPage::disarmAttack()
     m_armedDamage.reset();
     m_armedEffect.clear();
     m_armedAttackerId.clear();
+    m_hasSelectionBeforeAttack = false;
+    m_selectionBeforeAttack.clear();
     if (!m_swordCursor) {
         return;
     }
     QApplication::restoreOverrideCursor();
     m_swordCursor = false;
+}
+
+void CombatPage::rememberArmedSelection(QTreeWidgetItem* previous, QTreeWidget* otherList)
+{
+    if (!m_armedDamage.has_value() || m_populating) {
+        return;
+    }
+    QTreeWidgetItem* source = previous;
+    if (source == nullptr && otherList != nullptr) {
+        source = otherList->currentItem();
+    }
+    if (source == nullptr) {
+        m_selectionBeforeAttack.clear();
+    } else {
+        m_selectionBeforeAttack = source->data(0, Qt::UserRole).toString().toStdString();
+    }
+    m_hasSelectionBeforeAttack = true;
 }
 
 void CombatPage::undoLastChange()
@@ -1538,14 +1630,17 @@ void CombatPage::undoLastChange()
     m_undoButton->setEnabled(false);
     m_undoing = true;
     const bool sheetRestored = restoreFightUndo(*encounter, m_characters, undo.fight);
-    m_attacksUsed = undo.attacksUsed;
+    m_attacksUsedById = undo.attacksUsedById;
     m_countedCombatantId = undo.countedCombatantId;
+    m_countedRound = undo.countedRound;
     setHitText(undo.hitText);
     if (undo.fight.sheet.has_value() && sheetRestored) {
         saveCharacters();
     }
     std::string selectId;
-    if (const Combatant* selected = selectedCombatant()) {
+    if (undo.selectedCombatantId.has_value()) {
+        selectId = *undo.selectedCombatantId;
+    } else if (const Combatant* selected = selectedCombatant()) {
         selectId = selected->id;
     }
     rebuildCombatantList(selectId);
@@ -1574,10 +1669,47 @@ void CombatPage::syncAttackCount()
     if (turn >= 0 && turn < static_cast<int>(encounter->combatants.size())) {
         turnId = encounter->combatants[static_cast<std::size_t>(turn)].id;
     }
-    if (turnId != m_countedCombatantId) {
-        m_attacksUsed = 0;
+    if (turnId != m_countedCombatantId || encounter->round != m_countedRound) {
+        if (!turnId.empty()) {
+            m_attacksUsedById[turnId] = 0;
+        }
         m_countedCombatantId = std::move(turnId);
+        m_countedRound = encounter->round;
     }
+}
+
+int CombatPage::attacksUsedFor(const std::string& id) const
+{
+    const auto found = m_attacksUsedById.find(id);
+    if (found == m_attacksUsedById.end()) {
+        return 0;
+    }
+    return found->second;
+}
+
+int CombatPage::allotmentFor(const Combatant& combatant) const
+{
+    if (!isMonsterCombatant(combatant)) {
+        return 1;
+    }
+    const std::optional<Monster> monster = m_catalog.findById(combatant.sourceId);
+    if (!monster.has_value()) {
+        return 1;
+    }
+    return attackAllotment(monster->attacks);
+}
+
+std::string CombatPage::currentTurnId()
+{
+    const Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr) {
+        return {};
+    }
+    const int turn = encounter->turnIndex;
+    if (turn < 0 || turn >= static_cast<int>(encounter->combatants.size())) {
+        return {};
+    }
+    return encounter->combatants[static_cast<std::size_t>(turn)].id;
 }
 
 bool CombatPage::beginUndo(FightEdit edit, const Combatant* sheetCombatant, FightUndo& snapshot)
@@ -1599,9 +1731,11 @@ bool CombatPage::beginUndo(FightEdit edit, const Combatant* sheetCombatant, Figh
             snapshot.sheet = *character;
         }
     }
-    m_capturedAttacksUsed = m_attacksUsed;
+    m_capturedAttacksUsedById = m_attacksUsedById;
     m_capturedCountedCombatantId = m_countedCombatantId;
+    m_capturedCountedRound = m_countedRound;
     m_capturedHitText = m_hitText;
+    m_capturedSelectionId.reset();
     return true;
 }
 
@@ -1609,9 +1743,11 @@ void CombatPage::keepUndo(FightEdit edit, FightUndo snapshot)
 {
     PageUndo page;
     page.fight = std::move(snapshot);
-    page.attacksUsed = m_capturedAttacksUsed;
+    page.attacksUsedById = m_capturedAttacksUsedById;
     page.countedCombatantId = m_capturedCountedCombatantId;
+    page.countedRound = m_capturedCountedRound;
     page.hitText = m_capturedHitText;
+    page.selectedCombatantId = m_capturedSelectionId;
     m_undo = std::move(page);
     m_openEdit = edit;
     m_undoButton->setEnabled(true);

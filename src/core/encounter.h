@@ -167,16 +167,34 @@ bool restoreFightUndo(Encounter& encounter, std::vector<Character>& characters, 
 // Multiattack action's count, or 1 when the monster has no Multiattack.
 int attackAllotment(const std::vector<MonsterAttack>& attacks);
 
+// "used/allotment", such as "1/2". Used is at least 0 and allotment at least 1.
+std::string attacksUsedLabel(int attacksUsed, int allotment);
+
+// True while used is still below the allotment, so attack and Use ability
+// buttons can be shown on that monster's turn.
+bool attackButtonsAvailable(int attacksUsed, int allotment);
+
+// An action that deals no damage, other than Multiattack. Multiattack is the
+// allotment, not a Use ability button.
+bool isUseAbilityAction(const MonsterAttack& attack);
+
 // One attack-button use that was not cancelled. Damages the combatant at
 // targetIndex (temporary HP first), writes a character's current HP back to
 // the roster, and steps the marker if the combatant whose turn it was has
 // left the initiative order. When the marker is still attackerIndex, this use
-// counts toward allotment. Reaching the allotment advances the turn and the
-// returned count is 0. The count is also 0 when the turn moved for another
-// reason. Returns empty, and changes nothing, when the target index is out of
-// range or amount is negative.
+// counts toward allotment. Reaching the allotment advances the turn. The
+// returned count is how many uses have been spent, including the use that
+// passed the turn. When the turn moved before this use could count, the
+// returned count is the one passed in. Returns empty, and changes nothing,
+// when the target index is out of range or amount is negative.
 std::optional<int> completeMonsterAttack(Encounter& encounter, int targetIndex, int amount,
                                         std::vector<Character>& characters, int attackerIndex, int attacksUsed,
                                         int allotment);
+
+// One Use ability. Does not change hit points or arm an attack. When the
+// marker is still attackerIndex, this use counts toward allotment. Reaching
+// the allotment advances the turn. The returned count is how many uses have
+// been spent. Returns empty when attackerIndex is out of range.
+std::optional<int> spendMonsterAction(Encounter& encounter, int attackerIndex, int attacksUsed, int allotment);
 
 }  // namespace combat

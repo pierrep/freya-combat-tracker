@@ -402,15 +402,75 @@ TEST_CASE("multiattack allots two attacks and a lone attack allots one")
 
     const std::optional<int> afterSecond = completeMonsterAttack(encounter, 1, 1, roster, 0, *afterFirst, multi);
     CHECK(afterSecond.has_value());
-    CHECK_EQ(*afterSecond, 0);
+    CHECK_EQ(*afterSecond, 2);
     CHECK_EQ(encounter.turnIndex, 1);
 
     encounter.turnIndex = 0;
     const std::optional<int> lone =
         completeMonsterAttack(encounter, 1, 1, roster, 0, 0, attackAllotment({}));
     CHECK(lone.has_value());
-    CHECK_EQ(*lone, 0);
+    CHECK_EQ(*lone, 1);
     CHECK_EQ(encounter.turnIndex, 1);
+}
+
+TEST_CASE("used attacks stay visible after the turn passes and a use ability spends one")
+{
+    const std::vector<MonsterAttack> attacks = {
+        MonsterAttack{"Multiattack", "The goblin makes two attacks.", 2},
+        MonsterAttack{"Scimitar", "Hit: 4 (1d6 + 1) Slashing damage.", 2},
+        MonsterAttack{"Nimble Escape", "The goblin takes the Disengage or Hide action.", 1},
+    };
+    const int allotment = attackAllotment(attacks);
+    CHECK_EQ(allotment, 2);
+    CHECK(!isUseAbilityAction(attacks[0]));
+    CHECK(!isUseAbilityAction(attacks[1]));
+    CHECK(isUseAbilityAction(attacks[2]));
+    CHECK(attackButtonsAvailable(0, allotment));
+    CHECK_EQ(attacksUsedLabel(0, allotment), std::string("0/2"));
+
+    Character aria;
+    aria.id = "aria";
+    aria.name = "Aria";
+    aria.hp.current = 30;
+    aria.hp.max = 30;
+    Encounter encounter = fightWith({
+        goblin("goblin", 18, 2),
+        makeCharacterCombatant(aria, "aria-row"),
+    });
+    encounter.combatants[1].initiative = 10;
+    std::vector<Character> roster{aria};
+
+    const std::optional<int> afterFirst = completeMonsterAttack(encounter, 1, 1, roster, 0, 0, allotment);
+    CHECK(afterFirst.has_value());
+    CHECK_EQ(*afterFirst, 1);
+    CHECK_EQ(attacksUsedLabel(*afterFirst, allotment), std::string("1/2"));
+    CHECK(attackButtonsAvailable(*afterFirst, allotment));
+    CHECK_EQ(encounter.turnIndex, 0);
+
+    const std::optional<int> afterSecond = completeMonsterAttack(encounter, 1, 1, roster, 0, *afterFirst, allotment);
+    CHECK(afterSecond.has_value());
+    CHECK_EQ(*afterSecond, 2);
+    CHECK_EQ(attacksUsedLabel(*afterSecond, allotment), std::string("2/2"));
+    CHECK(!attackButtonsAvailable(*afterSecond, allotment));
+    CHECK_EQ(encounter.turnIndex, 1);
+
+    encounter.turnIndex = 0;
+    const int hpBefore = encounter.combatants[1].hp;
+    const std::optional<int> spent = spendMonsterAction(encounter, 0, 0, allotment);
+    CHECK(spent.has_value());
+    CHECK_EQ(*spent, 1);
+    CHECK_EQ(attacksUsedLabel(*spent, allotment), std::string("1/2"));
+    CHECK(attackButtonsAvailable(*spent, allotment));
+    CHECK_EQ(encounter.turnIndex, 0);
+    CHECK_EQ(encounter.combatants[1].hp, hpBefore);
+
+    const std::optional<int> spentAgain = spendMonsterAction(encounter, 0, *spent, allotment);
+    CHECK(spentAgain.has_value());
+    CHECK_EQ(*spentAgain, 2);
+    CHECK_EQ(attacksUsedLabel(*spentAgain, allotment), std::string("2/2"));
+    CHECK(!attackButtonsAvailable(*spentAgain, allotment));
+    CHECK_EQ(encounter.turnIndex, 1);
+    CHECK_EQ(encounter.combatants[1].hp, hpBefore);
 }
 
 TEST_CASE("undo of a targeted attack restores the row, the sheet, and the turn")
@@ -431,7 +491,7 @@ TEST_CASE("undo of a targeted attack restores the row, the sheet, and the turn")
 
     const std::optional<int> used = completeMonsterAttack(encounter, 1, 6, roster, 0, 0, 1);
     CHECK(used.has_value());
-    CHECK_EQ(*used, 0);
+    CHECK_EQ(*used, 1);
     CHECK_EQ(encounter.turnIndex, 1);
     CHECK_EQ(encounter.combatants[1].tempHp, 0);
     CHECK_EQ(encounter.combatants[1].hp, 18);
