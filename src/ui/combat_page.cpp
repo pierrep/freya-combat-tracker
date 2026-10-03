@@ -232,13 +232,15 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_undoButton->setEnabled(false);
     m_damageAmount = makeNumberBox();
     m_damageAmount->setRange(0, std::numeric_limits<int>::max());
+    m_damageAmount->setMaximumWidth(70);
     m_damageAmount->setValue(0);
-    m_damageButton = new QPushButton(tr("Apply damage to the selected combatant"));
+    m_damageButton = new QPushButton(tr("Apply damage"));
     m_damageButton->setObjectName(QStringLiteral("applyDamage"));
     m_healAmount = makeNumberBox();
     m_healAmount->setRange(0, std::numeric_limits<int>::max());
+    m_healAmount->setMaximumWidth(70);
     m_healAmount->setValue(0);
-    m_healButton = new QPushButton(tr("Apply healing to the selected combatant"));
+    m_healButton = new QPushButton(tr("Apply healing"));
     m_healButton->setObjectName(QStringLiteral("applyHealing"));
     turnButtons->addWidget(m_previousTurnButton);
     turnButtons->addWidget(m_nextTurnButton);
