@@ -12,6 +12,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QCursor>
+#include <QFontMetrics>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -30,6 +31,8 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStringList>
+#include <QStyle>
+#include <QStyleOptionSpinBox>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -81,6 +84,34 @@ QSpinBox* makeNumberBox()
     box->setRange(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
     box->setMaximumWidth(140);
     return box;
+}
+
+// The amount boxes sit on the turn row. Three digits is the whole field: the
+// line edit rejects a fourth character, and the box is only as wide as those
+// digits plus the spin buttons and frame.
+void fitThreeDigitAmount(QSpinBox* box)
+{
+    box->setRange(0, 999);
+    if (QLineEdit* edit = box->findChild<QLineEdit*>()) {
+        edit->setMaxLength(3);
+    }
+    const QFontMetrics metrics(box->font());
+    int textWidth = 0;
+    for (int value = 0; value <= 999; ++value) {
+        const int advance = metrics.horizontalAdvance(QString::number(value));
+        if (advance > textWidth) {
+            textWidth = advance;
+        }
+    }
+    QStyleOptionSpinBox option;
+    option.initFrom(box);
+    option.rect = QRect(0, 0, 400, metrics.height() + 16);
+    option.frame = box->hasFrame();
+    option.subControls = QStyle::SC_SpinBoxFrame | QStyle::SC_SpinBoxEditField | QStyle::SC_SpinBoxUp |
+                          QStyle::SC_SpinBoxDown;
+    const QRect editField = box->style()->subControlRect(QStyle::CC_SpinBox, &option, QStyle::SC_SpinBoxEditField, box);
+    const int chrome = option.rect.width() - editField.width();
+    box->setFixedWidth(textWidth + chrome);
 }
 
 QTreeWidget* makeCombatantTree(const QStringList& headers, int stretchColumn)
@@ -231,14 +262,12 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_undoButton->setObjectName(QStringLiteral("undoFight"));
     m_undoButton->setEnabled(false);
     m_damageAmount = makeNumberBox();
-    m_damageAmount->setRange(0, std::numeric_limits<int>::max());
-    m_damageAmount->setMaximumWidth(70);
+    fitThreeDigitAmount(m_damageAmount);
     m_damageAmount->setValue(0);
     m_damageButton = new QPushButton(tr("Apply damage"));
     m_damageButton->setObjectName(QStringLiteral("applyDamage"));
     m_healAmount = makeNumberBox();
-    m_healAmount->setRange(0, std::numeric_limits<int>::max());
-    m_healAmount->setMaximumWidth(70);
+    fitThreeDigitAmount(m_healAmount);
     m_healAmount->setValue(0);
     m_healButton = new QPushButton(tr("Apply healing"));
     m_healButton->setObjectName(QStringLiteral("applyHealing"));
