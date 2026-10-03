@@ -56,6 +56,7 @@ std::string readString(const json& object, const char* key, const std::string& c
 
 bool isBlank(const std::string& text);
 std::vector<MonsterAttack> readAttacks(const json& object, const std::string& context);
+std::vector<MonsterFeature> readFeatures(const json& object, const char* key, const std::string& context);
 
 Monster monsterFromJson(const json& value, std::size_t index)
 {
@@ -90,6 +91,10 @@ Monster monsterFromJson(const json& value, std::size_t index)
     monster.abilities.wisdom = readInt(abilities, "wisdom", abilityContext);
     monster.abilities.charisma = readInt(abilities, "charisma", abilityContext);
     monster.attacks = readAttacks(value, context);
+    monster.traits = readFeatures(value, "traits", context);
+    monster.bonusActions = readFeatures(value, "bonusActions", context);
+    monster.reactions = readFeatures(value, "reactions", context);
+    monster.legendaryActions = readFeatures(value, "legendaryActions", context);
     return monster;
 }
 
@@ -123,6 +128,49 @@ std::vector<MonsterAttack> readAttacks(const json& object, const std::string& co
         attacks.push_back(std::move(attack));
     }
     return attacks;
+}
+
+std::vector<MonsterFeature> readFeatures(const json& object, const char* key, const std::string& context)
+{
+    const auto it = object.find(key);
+    if (it == object.end()) {
+        return {};
+    }
+    if (!it->is_array()) {
+        throw MonsterDataError(context + ": field \"" + key + "\" must be an array.");
+    }
+    std::vector<MonsterFeature> features;
+    features.reserve(it->size());
+    for (std::size_t i = 0; i < it->size(); ++i) {
+        const std::string featureContext = context + " " + key + " " + std::to_string(i + 1);
+        const json& value = (*it)[i];
+        if (!value.is_object()) {
+            throw MonsterDataError(featureContext + ": must be an object.");
+        }
+        MonsterFeature feature;
+        feature.name = readString(value, "name", featureContext);
+        feature.effect = readString(value, "effect", featureContext);
+        if (isBlank(feature.name)) {
+            throw MonsterDataError(featureContext + ": name is required.");
+        }
+        features.push_back(std::move(feature));
+    }
+    return features;
+}
+
+void writeFeatures(json& document, const char* key, const std::vector<MonsterFeature>& features)
+{
+    if (features.empty()) {
+        return;
+    }
+    json list = json::array();
+    for (const MonsterFeature& feature : features) {
+        list.push_back(json{
+            {"name", feature.name},
+            {"effect", feature.effect},
+        });
+    }
+    document[key] = std::move(list);
 }
 
 json monsterToJson(const Monster& monster)
@@ -161,6 +209,10 @@ json monsterToJson(const Monster& monster)
         }
         document["attacks"] = std::move(attacks);
     }
+    writeFeatures(document, "traits", monster.traits);
+    writeFeatures(document, "bonusActions", monster.bonusActions);
+    writeFeatures(document, "reactions", monster.reactions);
+    writeFeatures(document, "legendaryActions", monster.legendaryActions);
     return document;
 }
 

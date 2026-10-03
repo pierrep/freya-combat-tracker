@@ -166,7 +166,9 @@ private:
     QWidget* m_deathSavesHost = nullptr;
     QLabel* m_noCombatantHint = nullptr;
     QWidget* m_attacksSection = nullptr;
+    QVBoxLayout* m_beforeAttackRows = nullptr;
     QVBoxLayout* m_attackRows = nullptr;
+    QVBoxLayout* m_afterAttackRows = nullptr;
     QSpinBox* m_initiative = nullptr;
     QLabel* m_bonusLabel = nullptr;
     QPushButton* m_rerollButton = nullptr;

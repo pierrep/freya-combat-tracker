@@ -56,6 +56,35 @@ void clearLayout(QLayout* layout)
     }
 }
 
+void addFeatureText(QVBoxLayout* rows, const QString& heading, const std::vector<MonsterFeature>& features)
+{
+    if (rows == nullptr || features.empty()) {
+        return;
+    }
+    auto* title = new QLabel(heading);
+    QFont titleFont = title->font();
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    rows->addWidget(title);
+    for (const MonsterFeature& feature : features) {
+        auto* block = new QWidget;
+        auto* blockLayout = new QVBoxLayout(block);
+        blockLayout->setContentsMargins(0, 0, 0, 0);
+        blockLayout->setSpacing(2);
+        auto* name = new QLabel(QString::fromStdString(feature.name));
+        name->setWordWrap(true);
+        QFont nameFont = name->font();
+        nameFont.setBold(true);
+        name->setFont(nameFont);
+        blockLayout->addWidget(name);
+        auto* effectLabel = new QLabel(QString::fromStdString(feature.effect));
+        effectLabel->setWordWrap(true);
+        effectLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        blockLayout->addWidget(effectLabel);
+        rows->addWidget(block);
+    }
+}
+
 // Tip at the hotspot, so the click lands where the sword points.
 QCursor swordCursor()
 {
@@ -313,7 +342,10 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_attacksSection->setObjectName(QStringLiteral("combatantAttacks"));
     auto* attacksLayout = new QVBoxLayout(m_attacksSection);
     attacksLayout->setContentsMargins(0, 0, 0, 0);
-    attacksLayout->setSpacing(4);
+    attacksLayout->setSpacing(8);
+    m_beforeAttackRows = new QVBoxLayout;
+    m_beforeAttackRows->setContentsMargins(0, 0, 0, 0);
+    m_beforeAttackRows->setSpacing(8);
     auto* attacksHeading = new QLabel(tr("Attacks"));
     QFont attacksFont = attacksHeading->font();
     attacksFont.setBold(true);
@@ -321,8 +353,13 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_attackRows = new QVBoxLayout;
     m_attackRows->setContentsMargins(0, 0, 0, 0);
     m_attackRows->setSpacing(8);
+    m_afterAttackRows = new QVBoxLayout;
+    m_afterAttackRows->setContentsMargins(0, 0, 0, 0);
+    m_afterAttackRows->setSpacing(8);
+    attacksLayout->addLayout(m_beforeAttackRows);
     attacksLayout->addWidget(attacksHeading);
     attacksLayout->addLayout(m_attackRows);
+    attacksLayout->addLayout(m_afterAttackRows);
     form->addRow(m_attacksSection);
 
     m_initiative = makeNumberBox();
@@ -1002,7 +1039,9 @@ void CombatPage::clampAndCarryHitPoints(Combatant& combatant)
 
 void CombatPage::clearAttackRows()
 {
+    clearLayout(m_beforeAttackRows);
     clearLayout(m_attackRows);
+    clearLayout(m_afterAttackRows);
 }
 
 void CombatPage::showAttacks()
@@ -1015,10 +1054,20 @@ void CombatPage::showAttacks()
         return;
     }
     const std::optional<Monster> lookedUp = m_catalog.findById(selected->sourceId);
-    if (!lookedUp.has_value() || lookedUp->attacks.empty()) {
+    if (!lookedUp.has_value()) {
         auto* empty = new QLabel(tr("No attacks are stored for this monster."));
         empty->setWordWrap(true);
         m_attackRows->addWidget(empty);
+        return;
+    }
+    addFeatureText(m_beforeAttackRows, tr("Traits"), lookedUp->traits);
+    if (lookedUp->attacks.empty()) {
+        auto* empty = new QLabel(tr("No attacks are stored for this monster."));
+        empty->setWordWrap(true);
+        m_attackRows->addWidget(empty);
+        addFeatureText(m_afterAttackRows, tr("Bonus Actions"), lookedUp->bonusActions);
+        addFeatureText(m_afterAttackRows, tr("Reactions"), lookedUp->reactions);
+        addFeatureText(m_afterAttackRows, tr("Legendary Actions"), lookedUp->legendaryActions);
         return;
     }
     const Encounter* encounter = selectedEncounter();
@@ -1069,6 +1118,9 @@ void CombatPage::showAttacks()
         blockLayout->addWidget(effectLabel);
         m_attackRows->addWidget(block);
     }
+    addFeatureText(m_afterAttackRows, tr("Bonus Actions"), lookedUp->bonusActions);
+    addFeatureText(m_afterAttackRows, tr("Reactions"), lookedUp->reactions);
+    addFeatureText(m_afterAttackRows, tr("Legendary Actions"), lookedUp->legendaryActions);
 }
 
 void CombatPage::applySelectedDamage()

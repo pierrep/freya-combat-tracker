@@ -30,6 +30,15 @@ struct MonsterAttack {
     bool operator==(const MonsterAttack&) const = default;
 };
 
+// A trait, bonus action, reaction, or legendary action. Read-only text.
+// These are not attacks and do not spend the attack allotment.
+struct MonsterFeature {
+    std::string name;
+    std::string effect;
+
+    bool operator==(const MonsterFeature&) const = default;
+};
+
 struct Monster {
     std::string id;
     std::string name;
@@ -47,6 +56,12 @@ struct Monster {
     // Empty when the monster has no actions, including a custom monster that
     // was saved before attacks were stored.
     std::vector<MonsterAttack> attacks;
+    // Empty when the SRD stat block has no such section, and for a custom
+    // monster that does not store them. Omitted from JSON when empty.
+    std::vector<MonsterFeature> traits;
+    std::vector<MonsterFeature> bonusActions;
+    std::vector<MonsterFeature> reactions;
+    std::vector<MonsterFeature> legendaryActions;
 
     bool operator==(const Monster&) const = default;
 };

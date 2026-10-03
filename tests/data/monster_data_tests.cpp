@@ -274,6 +274,99 @@ TEST_CASE("an SRD monster exposes its attacks, including a multiattack count")
     }
 }
 
+TEST_CASE("an SRD monster exposes a trait and a legendary action, and one without them omits them")
+{
+    const auto monsters = loadSrdMonsters(fs::path{COMBAT_TRACKER_SRD_DIR} / "monsters.json");
+    const Monster* aboleth = nullptr;
+    const Monster* assassin = nullptr;
+    const Monster* axeBeak = nullptr;
+    for (const Monster& monster : monsters) {
+        if (monster.id == "aboleth") {
+            aboleth = &monster;
+        } else if (monster.id == "assassin") {
+            assassin = &monster;
+        } else if (monster.id == "axe-beak") {
+            axeBeak = &monster;
+        }
+    }
+    CHECK(aboleth != nullptr);
+    CHECK(assassin != nullptr);
+    CHECK(axeBeak != nullptr);
+    if (aboleth == nullptr || assassin == nullptr || axeBeak == nullptr) {
+        return;
+    }
+
+    const MonsterFeature* amphibious = nullptr;
+    const MonsterFeature* lash = nullptr;
+    for (const MonsterFeature& feature : aboleth->traits) {
+        if (feature.name == "Amphibious") {
+            amphibious = &feature;
+        }
+    }
+    for (const MonsterFeature& feature : aboleth->legendaryActions) {
+        if (feature.name == "Lash") {
+            lash = &feature;
+        }
+    }
+    CHECK(amphibious != nullptr);
+    CHECK(lash != nullptr);
+    if (amphibious != nullptr) {
+        CHECK(amphibious->effect.find("breathe air and water") != std::string::npos);
+    }
+    if (lash != nullptr) {
+        CHECK(lash->effect.find("Tentacle") != std::string::npos);
+    }
+    CHECK(aboleth->bonusActions.empty());
+    CHECK(aboleth->reactions.empty());
+
+    const MonsterFeature* evasion = nullptr;
+    const MonsterFeature* cunning = nullptr;
+    for (const MonsterFeature& feature : assassin->traits) {
+        if (feature.name == "Evasion") {
+            evasion = &feature;
+        }
+    }
+    for (const MonsterFeature& feature : assassin->bonusActions) {
+        if (feature.name == "Cunning Action") {
+            cunning = &feature;
+        }
+    }
+    CHECK(evasion != nullptr);
+    CHECK(cunning != nullptr);
+    if (cunning != nullptr) {
+        CHECK(cunning->effect.find("Disengage") != std::string::npos);
+    }
+    bool repeatedShortsword = false;
+    for (const MonsterFeature& feature : assassin->traits) {
+        if (feature.name == "Shortsword") {
+            repeatedShortsword = true;
+        }
+    }
+    for (const MonsterFeature& feature : assassin->bonusActions) {
+        if (feature.name == "Shortsword") {
+            repeatedShortsword = true;
+        }
+    }
+    for (const MonsterFeature& feature : assassin->reactions) {
+        if (feature.name == "Shortsword") {
+            repeatedShortsword = true;
+        }
+    }
+    for (const MonsterFeature& feature : assassin->legendaryActions) {
+        if (feature.name == "Shortsword") {
+            repeatedShortsword = true;
+        }
+    }
+    CHECK(!repeatedShortsword);
+    CHECK(assassin->reactions.empty());
+    CHECK(assassin->legendaryActions.empty());
+
+    CHECK(axeBeak->traits.empty());
+    CHECK(axeBeak->bonusActions.empty());
+    CHECK(axeBeak->reactions.empty());
+    CHECK(axeBeak->legendaryActions.empty());
+}
+
 TEST_CASE("missing custom monster file loads as an empty list")
 {
     TempDir dir;

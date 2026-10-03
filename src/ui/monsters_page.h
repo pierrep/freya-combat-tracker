@@ -49,6 +49,7 @@ private:
     void persist();
     void selectId(const QString& id);
     void showAttackList(QWidget* section, QVBoxLayout* rows, const std::vector<MonsterAttack>& attacks);
+    void showFeatureList(QWidget* section, QVBoxLayout* rows, const std::vector<MonsterFeature>& features);
     QString currentId() const;
     Monster* selectedCustom();
     const Monster* selectedVisible() const;
@@ -82,6 +83,13 @@ private:
     std::array<QLabel*, 6> m_statScores{};
     QWidget* m_statAttacks = nullptr;
     QVBoxLayout* m_statAttackRows = nullptr;
+    // Traits, then bonus actions, reactions, and legendary actions. Traits sit
+    // above the attack list; the other three sit under it.
+    struct FeatureSection {
+        QWidget* section = nullptr;
+        QVBoxLayout* rows = nullptr;
+    };
+    std::array<FeatureSection, 4> m_statFeatures{};
 
     QWidget* m_form = nullptr;
     QLabel* m_nameError = nullptr;
@@ -100,6 +108,7 @@ private:
     std::array<QLabel*, 6> m_modifiers{};
     QWidget* m_formAttacks = nullptr;
     QVBoxLayout* m_formAttackRows = nullptr;
+    std::array<FeatureSection, 4> m_formFeatures{};
 };
 
 }  // namespace combat::ui

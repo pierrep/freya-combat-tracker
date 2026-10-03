@@ -18,8 +18,11 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
+#include <QStringList>
+
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace combat::ui {
 
@@ -249,6 +252,31 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     }
     statGrid->setColumnStretch(2, 1);
     statLayout->addLayout(statGrid);
+    const QStringList featureHeadings{tr("Traits"), tr("Bonus Actions"), tr("Reactions"), tr("Legendary Actions")};
+    const QStringList statFeatureNames{QStringLiteral("monsterTraits"), QStringLiteral("monsterBonusActions"),
+                                       QStringLiteral("monsterReactions"), QStringLiteral("monsterLegendaryActions")};
+    auto makeFeatureSection = [&](const QString& objectName, const QString& heading, int topMargin) {
+        auto* section = new QWidget;
+        section->setObjectName(objectName);
+        auto* layout = new QVBoxLayout(section);
+        layout->setContentsMargins(0, topMargin, 0, 0);
+        layout->setSpacing(8);
+        auto* title = new QLabel(heading);
+        title->setFont(headingFont);
+        auto* rows = new QVBoxLayout;
+        rows->setContentsMargins(0, 0, 0, 0);
+        rows->setSpacing(8);
+        layout->addWidget(title);
+        layout->addLayout(rows);
+        section->hide();
+        return std::pair<QWidget*, QVBoxLayout*>{section, rows};
+    };
+    for (int i = 0; i < 4; ++i) {
+        const auto made = makeFeatureSection(statFeatureNames[i], featureHeadings[i], 8);
+        m_statFeatures[static_cast<std::size_t>(i)].section = made.first;
+        m_statFeatures[static_cast<std::size_t>(i)].rows = made.second;
+    }
+    statLayout->addWidget(m_statFeatures[0].section);
     m_statAttacks = new QWidget;
     m_statAttacks->setObjectName(QStringLiteral("monsterAttacks"));
     auto* statAttackLayout = new QVBoxLayout(m_statAttacks);
@@ -263,6 +291,9 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     statAttackLayout->addLayout(m_statAttackRows);
     m_statAttacks->hide();
     statLayout->addWidget(m_statAttacks);
+    for (std::size_t i = 1; i < m_statFeatures.size(); ++i) {
+        statLayout->addWidget(m_statFeatures[i].section);
+    }
     statLayout->addStretch(1);
     rightLayout->addWidget(m_stat);
 
@@ -327,6 +358,15 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     }
     abilityGrid->setColumnStretch(3, 1);
     formLayout->addLayout(abilityGrid);
+    const QStringList formFeatureNames{QStringLiteral("monsterFormTraits"), QStringLiteral("monsterFormBonusActions"),
+                                       QStringLiteral("monsterFormReactions"),
+                                       QStringLiteral("monsterFormLegendaryActions")};
+    for (int i = 0; i < 4; ++i) {
+        const auto made = makeFeatureSection(formFeatureNames[i], featureHeadings[i], 0);
+        m_formFeatures[static_cast<std::size_t>(i)].section = made.first;
+        m_formFeatures[static_cast<std::size_t>(i)].rows = made.second;
+    }
+    formLayout->addWidget(m_formFeatures[0].section);
     m_formAttacks = new QWidget;
     m_formAttacks->setObjectName(QStringLiteral("monsterFormAttacks"));
     auto* formAttackLayout = new QVBoxLayout(m_formAttacks);
@@ -341,6 +381,9 @@ MonstersPage::MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& cu
     formAttackLayout->addLayout(m_formAttackRows);
     m_formAttacks->hide();
     formLayout->addWidget(m_formAttacks);
+    for (std::size_t i = 1; i < m_formFeatures.size(); ++i) {
+        formLayout->addWidget(m_formFeatures[i].section);
+    }
     formLayout->addStretch(1);
     rightLayout->addWidget(m_form);
     scroll->setWidget(right);
@@ -538,6 +581,10 @@ void MonstersPage::showSelected()
             m_statScores[i]->setText(scoreText(monster->abilities.*kAbilities[i].member));
         }
         showAttackList(m_statAttacks, m_statAttackRows, monster->attacks);
+        showFeatureList(m_statFeatures[0].section, m_statFeatures[0].rows, monster->traits);
+        showFeatureList(m_statFeatures[1].section, m_statFeatures[1].rows, monster->bonusActions);
+        showFeatureList(m_statFeatures[2].section, m_statFeatures[2].rows, monster->reactions);
+        showFeatureList(m_statFeatures[3].section, m_statFeatures[3].rows, monster->legendaryActions);
         return;
     }
 
@@ -562,6 +609,10 @@ void MonstersPage::showSelected()
         m_modifiers[i]->setText(QString::fromStdString(formatModifier(abilityModifier(m_scores[i]->value()))));
     }
     showAttackList(m_formAttacks, m_formAttackRows, monster->attacks);
+    showFeatureList(m_formFeatures[0].section, m_formFeatures[0].rows, monster->traits);
+    showFeatureList(m_formFeatures[1].section, m_formFeatures[1].rows, monster->bonusActions);
+    showFeatureList(m_formFeatures[2].section, m_formFeatures[2].rows, monster->reactions);
+    showFeatureList(m_formFeatures[3].section, m_formFeatures[3].rows, monster->legendaryActions);
     m_populating = false;
 }
 
@@ -591,6 +642,36 @@ void MonstersPage::showAttackList(QWidget* section, QVBoxLayout* rows, const std
         nameFont.setBold(true);
         name->setFont(nameFont);
         auto* effect = new QLabel(QString::fromStdString(attack.effect));
+        effect->setWordWrap(true);
+        effect->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        blockLayout->addWidget(name);
+        blockLayout->addWidget(effect);
+        rows->addWidget(block);
+    }
+}
+
+void MonstersPage::showFeatureList(QWidget* section, QVBoxLayout* rows, const std::vector<MonsterFeature>& features)
+{
+    if (section == nullptr || rows == nullptr) {
+        return;
+    }
+    while (QLayoutItem* item = rows->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    section->setVisible(!features.empty());
+    for (const MonsterFeature& feature : features) {
+        auto* block = new QWidget;
+        auto* blockLayout = new QVBoxLayout(block);
+        blockLayout->setContentsMargins(0, 0, 0, 0);
+        blockLayout->setSpacing(2);
+        auto* name = new QLabel(QString::fromStdString(feature.name));
+        name->setWordWrap(true);
+        name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        QFont nameFont = name->font();
+        nameFont.setBold(true);
+        name->setFont(nameFont);
+        auto* effect = new QLabel(QString::fromStdString(feature.effect));
         effect->setWordWrap(true);
         effect->setTextInteractionFlags(Qt::TextSelectableByMouse);
         blockLayout->addWidget(name);
