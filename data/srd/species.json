@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "source": "srd-5.2.1",
+  "species": [
+    "Dragonborn",
+    "Dwarf",
+    "Elf",
+    "Gnome",
+    "Goliath",
+    "Halfling",
+    "Human",
+    "Orc",
+    "Tiefling"
+  ]
+}

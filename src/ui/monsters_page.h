@@ -1,0 +1,145 @@
+#pragma once
+
+#include "core/monster.h"
+#include "core/monster_catalog.h"
+
+#include <QString>
+#include <QWidget>
+
+#include <array>
+#include <random>
+#include <vector>
+
+class QCheckBox;
+class QComboBox;
+class QHideEvent;
+class QShowEvent;
+class QTimer;
+class QLabel;
+class QLineEdit;
+class QListWidget;
+class QPushButton;
+class QSpinBox;
+class QVBoxLayout;
+class QWidget;
+
+namespace combat {
+class CustomMonsterStore;
+}
+
+namespace combat::ui {
+
+// Search and results on the left, the stat block on the right. SRD rows are
+// read-only. Custom rows can be edited and deleted.
+class MonstersPage : public QWidget {
+    Q_OBJECT
+
+public:
+    MonstersPage(MergedMonsterCatalog& catalog, CustomMonsterStore& customStore, const QString& attribution,
+                 const QString& catalogError, QWidget* parent = nullptr);
+
+    // Writes an edit that is still waiting for typing to pause.
+    void flushPendingSave();
+
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+private:
+    void addMonster();
+    void copyToCustom();
+    void addCustom(Monster monster);
+    void rebuildFormAttacks();
+    void rebuildFormFeatures(int kind);
+    void commitCustom();
+    void onDefenseFieldsEdited();
+    void saveNow();
+    void deleteSelected();
+    void showSelected();
+    void onSearchChanged();
+    void onFilterChanged();
+    void onNameEdited(const QString& text);
+    void onNameEditingFinished();
+    void onFormEdited();
+    void onTextFinished();
+    void refreshResults();
+    void rebuildFilters();
+    void persist();
+    void selectId(const QString& id);
+    void showAttackList(QWidget* section, QVBoxLayout* rows, const std::vector<MonsterAttack>& attacks);
+    void showFeatureList(QWidget* section, QVBoxLayout* rows, const std::vector<MonsterFeature>& features);
+    QString currentId() const;
+    Monster* selectedCustom();
+    const Monster* selectedVisible() const;
+    QSpinBox* makeNumberBox();
+
+    MergedMonsterCatalog& m_catalog;
+    CustomMonsterStore& m_store;
+    std::vector<Monster> m_custom;
+    std::vector<Monster> m_visible;
+    QString m_customError;
+    std::mt19937_64 m_rng;
+    bool m_populating = false;
+    bool m_savePending = false;
+    QTimer* m_saveTimer = nullptr;
+
+    QLineEdit* m_search = nullptr;
+    QComboBox* m_typeFilter = nullptr;
+    QComboBox* m_crFilter = nullptr;
+    QListWidget* m_list = nullptr;
+    QPushButton* m_addButton = nullptr;
+    QPushButton* m_deleteButton = nullptr;
+    QPushButton* m_copyButton = nullptr;
+    QLabel* m_emptyHint = nullptr;
+
+    QWidget* m_stat = nullptr;
+    QLabel* m_statName = nullptr;
+    QLabel* m_statType = nullptr;
+    QLabel* m_statAc = nullptr;
+    QLabel* m_statHp = nullptr;
+    QLabel* m_statSpeed = nullptr;
+    QLabel* m_statInitiative = nullptr;
+    QLabel* m_statPerception = nullptr;
+    QLabel* m_statChallenge = nullptr;
+    QLabel* m_statDefenses = nullptr;
+    QLabel* m_statSaves = nullptr;
+    std::array<QLabel*, 6> m_statScores{};
+    QWidget* m_statAttacks = nullptr;
+    QVBoxLayout* m_statAttackRows = nullptr;
+    // Traits, then bonus actions, reactions, and legendary actions. Traits sit
+    // above the attack list; the other three sit under it.
+    struct FeatureSection {
+        QWidget* section = nullptr;
+        QVBoxLayout* rows = nullptr;
+    };
+    std::array<FeatureSection, 4> m_statFeatures{};
+
+    QWidget* m_form = nullptr;
+    QLabel* m_nameError = nullptr;
+    QLineEdit* m_name = nullptr;
+    QLineEdit* m_size = nullptr;
+    QLineEdit* m_creatureType = nullptr;
+    QSpinBox* m_hp = nullptr;
+    QLabel* m_hpSlash = nullptr;
+    QSpinBox* m_ac = nullptr;
+    QLineEdit* m_hitDice = nullptr;
+    QLineEdit* m_speed = nullptr;
+    QSpinBox* m_initiative = nullptr;
+    QSpinBox* m_passivePerception = nullptr;
+    QLineEdit* m_challengeRating = nullptr;
+    std::array<QSpinBox*, 6> m_scores{};
+    std::array<QLabel*, 6> m_modifiers{};
+    QLineEdit* m_resistances = nullptr;
+    QLineEdit* m_immunities = nullptr;
+    QLineEdit* m_vulnerabilities = nullptr;
+    QLineEdit* m_conditionImmunities = nullptr;
+    QLineEdit* m_saveBonuses = nullptr;
+    QLineEdit* m_xp = nullptr;
+    QSpinBox* m_legendaryUses = nullptr;
+    QLabel* m_formHint = nullptr;
+    QWidget* m_formAttacks = nullptr;
+    QVBoxLayout* m_formAttackRows = nullptr;
+    std::array<FeatureSection, 4> m_formFeatures{};
+};
+
+}  // namespace combat::ui

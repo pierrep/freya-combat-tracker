@@ -1,0 +1,592 @@
+#include "data/json_character_store.h"
+#include "data/json_sheet.h"
+#include "data/pdf_import.h"
+#include "test_harness.h"
+
+#include <qpdf/QPDF.hh>
+#include <qpdf/QPDFAcroFormDocumentHelper.hh>
+#include <qpdf/QPDFFormFieldObjectHelper.hh>
+#include <qpdf/QPDFWriter.hh>
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <random>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using namespace combat;
+namespace fs = std::filesystem;
+
+namespace {
+
+class TempDir {
+public:
+    TempDir()
+    {
+        std::random_device rd;
+        m_path = fs::temp_directory_path() / ("combat-tracker-pdf-" + std::to_string(rd()) + std::to_string(rd()));
+        fs::create_directories(m_path);
+    }
+    ~TempDir()
+    {
+        std::error_code ec;
+        fs::remove_all(m_path, ec);
+    }
+    TempDir(const TempDir&) = delete;
+    TempDir& operator=(const TempDir&) = delete;
+
+    const fs::path& path() const { return m_path; }
+
+private:
+    fs::path m_path;
+};
+
+void writeFile(const fs::path& path, const std::string& text)
+{
+    std::ofstream out(path, std::ios::binary);
+    out << text;
+}
+
+std::string readFile(const fs::path& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+// qpdf only returns a field from getFormFields when the dictionary is also a widget.
+void markWidget(QPDFObjectHandle& field)
+{
+    field.replaceKey("/Subtype", QPDFObjectHandle::newName("/Widget"));
+    QPDFObjectHandle rect = QPDFObjectHandle::newArray();
+    rect.appendItem(QPDFObjectHandle::newInteger(0));
+    rect.appendItem(QPDFObjectHandle::newInteger(0));
+    rect.appendItem(QPDFObjectHandle::newInteger(72));
+    rect.appendItem(QPDFObjectHandle::newInteger(16));
+    field.replaceKey("/Rect", rect);
+}
+
+void addTextField(QPDF& pdf, QPDFAcroFormDocumentHelper& forms, const std::string& name, const std::string& value)
+{
+    QPDFObjectHandle field = pdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    field.replaceKey("/FT", QPDFObjectHandle::newName("/Tx"));
+    field.replaceKey("/T", QPDFObjectHandle::newString(name));
+    markWidget(field);
+    forms.addFormField(QPDFFormFieldObjectHelper(field));
+    QPDFFormFieldObjectHelper(field).setV(value, false);
+}
+
+void addCheckbox(QPDF& pdf, QPDFAcroFormDocumentHelper& forms, const std::string& name)
+{
+    QPDFObjectHandle field = pdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    field.replaceKey("/FT", QPDFObjectHandle::newName("/Btn"));
+    field.replaceKey("/T", QPDFObjectHandle::newString(name));
+    field.replaceKey("/V", QPDFObjectHandle::newName("/Yes"));
+    markWidget(field);
+    forms.addFormField(QPDFFormFieldObjectHelper(field));
+}
+
+void writePdf(QPDF& pdf, const fs::path& path)
+{
+    QPDFWriter writer(pdf, path.string().c_str());
+    writer.setStaticID(true);
+    writer.write();
+}
+
+bool contains(const std::vector<std::string>& items, const std::string& value)
+{
+    return std::find(items.begin(), items.end(), value) != items.end();
+}
+
+std::vector<Spell> spellCatalog()
+{
+    return loadSpellCatalog(fs::path(COMBAT_TRACKER_SRD_DIR) / "spells.json");
+}
+
+}  // namespace
+
+TEST_CASE("classic fillable fields map onto a character and prose is dropped")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "freya-sheet.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    QPDFAcroFormDocumentHelper forms(pdf);
+    addTextField(pdf, forms, "CharacterName", "Freya");
+    addTextField(pdf, forms, "Race ", "Elf");
+    addTextField(pdf, forms, "ClassLevel", "Fighter 5 / Wizard 2");
+    addTextField(pdf, forms, "STR", "16");
+    addTextField(pdf, forms, "DEX", "14");
+    addTextField(pdf, forms, "CON", "13");
+    addTextField(pdf, forms, "INT", "12");
+    addTextField(pdf, forms, "WIS", "10");
+    addTextField(pdf, forms, "CHA", "8");
+    addTextField(pdf, forms, "AC", "16");
+    addTextField(pdf, forms, "HPCurrent", "12");
+    addTextField(pdf, forms, "HPMax", "20");
+    addTextField(pdf, forms, "HPTemp", "5");
+    addTextField(pdf, forms, "Passive", "13");
+    addTextField(pdf, forms, "Initiative", "+3");
+    addTextField(pdf, forms, "ProfBonus", "+2");
+    addTextField(pdf, forms, "Speed", "30 ft.");
+    addTextField(pdf, forms, "Wpn Name", "Longsword");
+    addTextField(pdf, forms, "Wpn Name 2", "2 Daggers");
+    addTextField(pdf, forms, "Equipment", "Rope\n10 arrows");
+    addTextField(pdf, forms, "Spells 1014", "Bless");
+    addTextField(pdf, forms, "Spells 1015", "Homebrew Zap");
+    addTextField(pdf, forms, "Spells 1016", "Fire Bolt - V, S");
+    addTextField(pdf, forms, "SlotsTotal 19", "4");
+    addTextField(pdf, forms, "SlotsRemaining 19", "3");
+    addTextField(pdf, forms, "SlotsTotal 27", "1");
+    addTextField(pdf, forms, "Features and Traits", "Sneak Attack essay");
+    addTextField(pdf, forms, "PersonalityTraits", "A secret from the book");
+    addTextField(pdf, forms, "STRmod", "+3");
+    addCheckbox(pdf, forms, "Check Box 11");
+    writePdf(pdf, pdfPath);
+
+    const PdfImportResult imported = importCharacterPdf(pdfPath, spellCatalog());
+    const Character& character = imported.character;
+    CHECK(character.id.empty());
+    CHECK_EQ(character.name, std::string("Freya"));
+    CHECK_EQ(character.species, std::string("Elf"));
+    CHECK_EQ(character.classes.size(), std::size_t{2});
+    CHECK_EQ(character.classes[0].name, std::string("Fighter"));
+    CHECK_EQ(character.classes[0].level, 5);
+    CHECK(character.classes[0].subclass.empty());
+    CHECK_EQ(character.classes[1].name, std::string("Wizard"));
+    CHECK_EQ(character.classes[1].level, 2);
+    CHECK_EQ(character.abilities.strength, 16);
+    CHECK_EQ(character.abilities.dexterity, 14);
+    CHECK_EQ(character.abilities.constitution, 13);
+    CHECK_EQ(character.abilities.intelligence, 12);
+    CHECK_EQ(character.abilities.wisdom, 10);
+    CHECK_EQ(character.abilities.charisma, 8);
+    CHECK_EQ(character.ac, 16);
+    CHECK_EQ(character.hp.current, 12);
+    CHECK_EQ(character.hp.max, 20);
+    CHECK_EQ(character.tempHp, 5);
+    CHECK_EQ(character.passivePerception, 13);
+    CHECK_EQ(initiativeModifier(character), 3);
+    CHECK_EQ(proficiencyBonus(character), 2);
+    CHECK_EQ(character.speed, std::string("30 ft."));
+    CHECK_EQ(character.gear.size(), std::size_t{4});
+    CHECK_EQ(character.gear[0].name, std::string("Longsword"));
+    CHECK_EQ(character.gear[0].quantity, 1);
+    CHECK(!character.gear[0].equipped);
+    CHECK_EQ(character.gear[1].name, std::string("Daggers"));
+    CHECK_EQ(character.gear[1].quantity, 2);
+    CHECK_EQ(character.gear[2].name, std::string("Rope"));
+    CHECK_EQ(character.gear[2].quantity, 1);
+    CHECK_EQ(character.gear[3].name, std::string("arrows"));
+    CHECK_EQ(character.gear[3].quantity, 10);
+    CHECK_EQ(character.spells.size(), std::size_t{3});
+    CHECK_EQ(character.spells[0].id, std::string("bless"));
+    CHECK_EQ(character.spells[0].name, std::string("Bless"));
+    CHECK(!character.spells[0].prepared);
+    CHECK(character.spells[1].id.empty());
+    CHECK_EQ(character.spells[1].name, std::string("Homebrew Zap"));
+    CHECK(!character.spells[1].prepared);
+    CHECK_EQ(character.spells[2].id, std::string("fire-bolt"));
+    CHECK_EQ(character.spells[2].name, std::string("Fire Bolt"));
+    CHECK_EQ(character.spellSlots.size(), std::size_t{2});
+    CHECK_EQ(character.spellSlots[0].level, 1);
+    CHECK_EQ(character.spellSlots[0].current, 3);
+    CHECK_EQ(character.spellSlots[0].max, 4);
+    CHECK_EQ(character.spellSlots[1].level, 9);
+    CHECK_EQ(character.spellSlots[1].current, 1);
+    CHECK_EQ(character.spellSlots[1].max, 1);
+    CHECK(character.notes.empty());
+    CHECK(!character.savingThrows.strength);
+    CHECK(!character.skills.perception);
+    CHECK(character.external.has_value());
+    CHECK_EQ(character.external->source, std::string(kPdfImportSource));
+    CHECK_EQ(character.external->fileName, std::string("freya-sheet.pdf"));
+    CHECK(!character.external->importedAt.empty());
+    CHECK(character.external->importedAt.back() == 'Z');
+
+    CHECK(contains(imported.report.fieldsUsed, "Race "));
+    CHECK(contains(imported.report.fieldsDropped, "Features and Traits"));
+    CHECK(contains(imported.report.fieldsDropped, "PersonalityTraits"));
+    CHECK(contains(imported.report.unmatchedSpells, "Homebrew Zap"));
+    CHECK(contains(imported.report.fieldsUnused, "STRmod"));
+    CHECK(imported.report.skippedButtons >= 1);
+    const std::string report = formatPdfImportReport(imported.report);
+    CHECK(report.find("Sneak Attack") == std::string::npos);
+    CHECK(report.find("A secret from the book") == std::string::npos);
+    CHECK(report.find("+3") == std::string::npos);
+    CHECK(report.find("STRmod") != std::string::npos);
+    CHECK(report.find("Create a new character") != std::string::npos);
+}
+
+TEST_CASE("unparsed class text is reported and changes neither classes nor notes")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "class.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    QPDFAcroFormDocumentHelper forms(pdf);
+    addTextField(pdf, forms, "CharacterName", "Freya");
+    addTextField(pdf, forms, "ClassLevel", "not a class");
+    writePdf(pdf, pdfPath);
+
+    const PdfImportResult imported = importCharacterPdf(pdfPath, {});
+    CHECK(imported.character.classes.empty());
+    CHECK(imported.character.notes.empty());
+    CHECK(!imported.presence.classes);
+    CHECK(!imported.presence.notes);
+    CHECK(!imported.report.parseFailures.empty());
+
+    Character target;
+    target.id = "t";
+    target.name = "Old";
+    target.notes = "Mine";
+    target.classes.push_back(ClassLevel{"Rogue", 3, "", 0});
+    applyImportedCharacter(target, imported);
+    CHECK_EQ(target.notes, std::string("Mine"));
+    CHECK_EQ(target.classes.size(), std::size_t{1});
+}
+
+TEST_CASE("Race without a trailing space is used only when the spaced name is absent")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "race.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    QPDFAcroFormDocumentHelper forms(pdf);
+    addTextField(pdf, forms, "CharacterName", "Freya");
+    addTextField(pdf, forms, "Race", "Dwarf");
+    writePdf(pdf, pdfPath);
+
+    const PdfImportResult imported = importCharacterPdf(pdfPath, {});
+    CHECK_EQ(imported.character.species, std::string("Dwarf"));
+    CHECK(contains(imported.report.fieldsUsed, "Race"));
+}
+
+TEST_CASE("a PDF with no form fields asks for a fresh export")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "flat.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    writePdf(pdf, pdfPath);
+
+    bool threw = false;
+    try {
+        (void)importCharacterPdf(pdfPath, {});
+    } catch (const PdfImportError& error) {
+        threw = true;
+        const std::string message = error.what();
+        CHECK(message.find("Export to PDF") != std::string::npos);
+        CHECK(message.find("flattened") != std::string::npos);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("an empty form and dropped prose alone do not import")
+{
+    TempDir dir;
+    const fs::path emptyPath = dir.path() / "empty-name.pdf";
+    {
+        QPDF pdf;
+        pdf.emptyPDF();
+        QPDFAcroFormDocumentHelper forms(pdf);
+        addTextField(pdf, forms, "CharacterName", "   ");
+        writePdf(pdf, emptyPath);
+    }
+    bool threw = false;
+    try {
+        (void)importCharacterPdf(emptyPath, {});
+    } catch (const PdfImportError& error) {
+        threw = true;
+        CHECK(std::string(error.what()).find("Export to PDF") != std::string::npos);
+    }
+    CHECK(threw);
+
+    const fs::path prosePath = dir.path() / "prose-only.pdf";
+    {
+        QPDF pdf;
+        pdf.emptyPDF();
+        QPDFAcroFormDocumentHelper forms(pdf);
+        addTextField(pdf, forms, "Backstory", "A long non-SRD essay");
+        writePdf(pdf, prosePath);
+    }
+    threw = false;
+    try {
+        (void)importCharacterPdf(prosePath, {});
+    } catch (const PdfImportError& error) {
+        threw = true;
+        const std::string message = error.what();
+        CHECK(message.find("A long non-SRD essay") == std::string::npos);
+        CHECK(message.find("Export to PDF") != std::string::npos);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("replace keeps the id and leaves fields the PDF did not have")
+{
+    Character target;
+    target.id = "keep-me";
+    target.name = "Old";
+    target.hp = {8, 8};
+    target.skills.athletics = true;
+    target.notes = "Keep these notes.";
+    target.classes.push_back(ClassLevel{"Rogue", 3, "Thief"});
+
+    PdfImportResult imported;
+    imported.character.name = "Freya";
+    imported.character.hp = {12, 20};
+    imported.presence.name = true;
+    imported.presence.hpCurrent = true;
+    imported.presence.hpMax = true;
+    imported.character.external = CharacterImport{kPdfImportSource, "2026-10-02T01:02:03Z", "a.pdf"};
+
+    applyImportedCharacter(target, imported);
+    CHECK_EQ(target.id, std::string("keep-me"));
+    CHECK_EQ(target.name, std::string("Freya"));
+    CHECK_EQ(target.hp.current, 12);
+    CHECK_EQ(target.hp.max, 20);
+    CHECK(target.skills.athletics);
+    CHECK_EQ(target.notes, std::string("Keep these notes."));
+    CHECK_EQ(target.classes.size(), std::size_t{1});
+    CHECK_EQ(target.classes[0].name, std::string("Rogue"));
+    CHECK(target.external.has_value());
+    CHECK_EQ(target.external->fileName, std::string("a.pdf"));
+}
+
+QPDFObjectHandle blankPage(QPDF& pdf)
+{
+    QPDFObjectHandle page = pdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    page.replaceKey("/Type", QPDFObjectHandle::newName("/Page"));
+    QPDFObjectHandle box = QPDFObjectHandle::newArray();
+    box.appendItem(QPDFObjectHandle::newInteger(0));
+    box.appendItem(QPDFObjectHandle::newInteger(0));
+    box.appendItem(QPDFObjectHandle::newInteger(612));
+    box.appendItem(QPDFObjectHandle::newInteger(792));
+    page.replaceKey("/MediaBox", box);
+    pdf.addPage(page, true);
+    return page;
+}
+
+void addOrphanWidget(QPDF& pdf, QPDFObjectHandle page, QPDFObjectHandle annots, const std::string& name,
+                     const std::string& value, bool button)
+{
+    QPDFObjectHandle field = pdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
+    field.replaceKey("/Type", QPDFObjectHandle::newName("/Annot"));
+    field.replaceKey("/FT", QPDFObjectHandle::newName(button ? "/Btn" : "/Tx"));
+    field.replaceKey("/T", QPDFObjectHandle::newString(name));
+    if (button) {
+        field.replaceKey("/V", QPDFObjectHandle::newName("/Yes"));
+    } else if (!value.empty()) {
+        field.replaceKey("/V", QPDFObjectHandle::newString(value));
+    }
+    markWidget(field);
+    annots.appendItem(field);
+    page.replaceKey("/Annots", annots);
+}
+
+TEST_CASE("widget annotations without an AcroForm map the current export names")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "widgets.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    QPDFObjectHandle page = blankPage(pdf);
+    QPDFObjectHandle annots = QPDFObjectHandle::newArray();
+    addOrphanWidget(pdf, page, annots, "CharacterName", "Widget", false);
+    addOrphanWidget(pdf, page, annots, "CharacterName2", "Widget", false);
+    addOrphanWidget(pdf, page, annots, "CLASS  LEVEL", "Barbarian 3", false);
+    addOrphanWidget(pdf, page, annots, "RACE", "Human", false);
+    addOrphanWidget(pdf, page, annots, "PLAYER NAME", "Someone", false);
+    addOrphanWidget(pdf, page, annots, "STR", "17", false);
+    addOrphanWidget(pdf, page, annots, "DEX", "13", false);
+    addOrphanWidget(pdf, page, annots, "CON", "15", false);
+    addOrphanWidget(pdf, page, annots, "INT", "8", false);
+    addOrphanWidget(pdf, page, annots, "WIS", "10", false);
+    addOrphanWidget(pdf, page, annots, "CHA", "12", false);
+    addOrphanWidget(pdf, page, annots, "AC", "13", false);
+    addOrphanWidget(pdf, page, annots, "MaxHP", "38", false);
+    addOrphanWidget(pdf, page, annots, "TempHP", "--", false);
+    addOrphanWidget(pdf, page, annots, "Init", "+1", false);
+    addOrphanWidget(pdf, page, annots, "ProfBonus", "+2", false);
+    addOrphanWidget(pdf, page, annots, "Speed", "30 ft. (Walking)", false);
+    addOrphanWidget(pdf, page, annots, "Passive1", "12", false);
+    addOrphanWidget(pdf, page, annots, "Wpn Name", "Greataxe", false);
+    addOrphanWidget(pdf, page, annots, "Wpn Name 2", "Unarmed Strike", false);
+    addOrphanWidget(pdf, page, annots, "Eq Name0", "Greataxe", false);
+    addOrphanWidget(pdf, page, annots, "Eq Qty0", "1", false);
+    addOrphanWidget(pdf, page, annots, "Eq Name1", "Handaxe", false);
+    addOrphanWidget(pdf, page, annots, "Eq Qty1", "1", false);
+    addOrphanWidget(pdf, page, annots, "Eq Name2", "Handaxe", false);
+    addOrphanWidget(pdf, page, annots, "Eq Qty2", "1", false);
+    addOrphanWidget(pdf, page, annots, "SpellName0", "Bless", false);
+    addOrphanWidget(pdf, page, annots, "FeaturesTraits1", "Secret feature essay", false);
+    addOrphanWidget(pdf, page, annots, "PersonalityTraits ", "Secret personality", false);
+    addOrphanWidget(pdf, page, annots, "Check Box 12", "", true);
+    addOrphanWidget(pdf, page, annots, "StrProf", "\u2022", false);
+    addOrphanWidget(pdf, page, annots, "ConProf", "\u2022", false);
+    addOrphanWidget(pdf, page, annots, "AthleticsProf", "P", false);
+    addOrphanWidget(pdf, page, annots, "PerceptionProf", "E", false);
+    addOrphanWidget(pdf, page, annots, "Defenses", "Resistances: Fire, Poison", false);
+    writePdf(pdf, pdfPath);
+
+    {
+        QPDF check;
+        check.processFile(pdfPath.string().c_str());
+        CHECK(!QPDFAcroFormDocumentHelper(check).hasAcroForm());
+    }
+
+    const PdfImportResult imported = importCharacterPdf(pdfPath, spellCatalog());
+    const Character& character = imported.character;
+    CHECK_EQ(character.name, std::string("Widget"));
+    CHECK_EQ(character.species, std::string("Human"));
+    CHECK_EQ(character.classes.size(), std::size_t{1});
+    CHECK_EQ(character.classes[0].name, std::string("Barbarian"));
+    CHECK_EQ(character.classes[0].level, 3);
+    CHECK_EQ(character.abilities.strength, 17);
+    CHECK_EQ(character.abilities.dexterity, 13);
+    CHECK_EQ(character.abilities.constitution, 15);
+    CHECK_EQ(character.abilities.intelligence, 8);
+    CHECK_EQ(character.abilities.wisdom, 10);
+    CHECK_EQ(character.abilities.charisma, 12);
+    CHECK_EQ(character.ac, 13);
+    CHECK_EQ(character.hp.max, 38);
+    CHECK_EQ(character.hp.current, 38);
+    CHECK_EQ(character.tempHp, 0);
+    CHECK_EQ(initiativeModifier(character), 1);
+    CHECK(!character.initiativeOverride.has_value());
+    CHECK_EQ(proficiencyBonus(character), 2);
+    CHECK(!character.proficiencyOverride.has_value());
+    CHECK_EQ(character.speed, std::string("30 ft. (Walking)"));
+    CHECK_EQ(character.passivePerception, 12);
+    CHECK_EQ(character.gear.size(), std::size_t{4});
+    CHECK_EQ(character.gear[0].name, std::string("Greataxe"));
+    CHECK_EQ(character.gear[0].quantity, 1);
+    CHECK_EQ(character.gear[1].name, std::string("Handaxe"));
+    CHECK_EQ(character.gear[1].quantity, 1);
+    CHECK_EQ(character.gear[2].name, std::string("Handaxe"));
+    CHECK_EQ(character.gear[2].quantity, 1);
+    CHECK_EQ(character.gear[3].name, std::string("Unarmed Strike"));
+    CHECK_EQ(character.gear[3].quantity, 1);
+    CHECK_EQ(character.spells.size(), std::size_t{1});
+    CHECK_EQ(character.spells[0].id, std::string("bless"));
+    CHECK(character.skills.perception);
+    CHECK(character.skills.athletics);
+    CHECK(!character.skills.stealth);
+    CHECK(character.savingThrows.strength);
+    CHECK(character.savingThrows.constitution);
+    CHECK(!character.savingThrows.dexterity);
+    CHECK(imported.presence.saves);
+    CHECK(imported.presence.skills);
+    CHECK_EQ(character.defenses.resistances, (std::vector<std::string>{"fire", "poison"}));
+    CHECK(character.notes.empty());
+    CHECK(contains(imported.report.fieldsUsed, "RACE"));
+    CHECK(contains(imported.report.fieldsUsed, "CLASS  LEVEL"));
+    CHECK(contains(imported.report.fieldsUsed, "MaxHP"));
+    CHECK(contains(imported.report.fieldsUsed, "Passive1"));
+    CHECK(contains(imported.report.fieldsDropped, "FeaturesTraits1"));
+    CHECK(contains(imported.report.fieldsDropped, "PersonalityTraits "));
+    CHECK(contains(imported.report.fieldsUnused, "PLAYER NAME"));
+    CHECK(contains(imported.report.fieldsUnused, "CharacterName2"));
+    CHECK(imported.report.skippedButtons >= 1);
+    const std::string report = formatPdfImportReport(imported.report);
+    CHECK(report.find("Secret feature essay") == std::string::npos);
+    CHECK(report.find("Secret personality") == std::string::npos);
+    CHECK(report.find("Someone") == std::string::npos);
+}
+
+TEST_CASE("widget prose without a mapped field does not import")
+{
+    TempDir dir;
+    const fs::path pdfPath = dir.path() / "widget-prose.pdf";
+    QPDF pdf;
+    pdf.emptyPDF();
+    QPDFObjectHandle page = blankPage(pdf);
+    QPDFObjectHandle annots = QPDFObjectHandle::newArray();
+    addOrphanWidget(pdf, page, annots, "FeaturesTraits1", "Secret feature essay", false);
+    writePdf(pdf, pdfPath);
+
+    bool threw = false;
+    try {
+        (void)importCharacterPdf(pdfPath, {});
+    } catch (const PdfImportError& error) {
+        threw = true;
+        const std::string message = error.what();
+        CHECK(message.find("Secret feature essay") == std::string::npos);
+        CHECK(message.find("Export to PDF") != std::string::npos);
+    }
+    CHECK(threw);
+}
+
+TEST_CASE("external round-trips and is omitted when empty")
+{
+    Character character;
+    character.id = "22222222-2222-4222-8222-222222222222";
+    character.name = "Freya";
+    character.external = CharacterImport{"dndbeyond-pdf", "2026-10-02T03:04:05Z", "sheet.pdf"};
+
+    TempDir dir;
+    JsonCharacterStore store(dir.path() / "characters.json");
+    store.saveAll({character});
+    CHECK(store.loadAll() == std::vector<Character>{character});
+    const std::string text = readFile(store.path());
+    CHECK(text.find("\"schemaVersion\": 4") != std::string::npos);
+    CHECK(text.find("dndbeyond-pdf") != std::string::npos);
+    CHECK(text.find("sheet.pdf") != std::string::npos);
+
+    character.external.reset();
+    store.saveAll({character});
+    CHECK(readFile(store.path()).find("external") == std::string::npos);
+    CHECK(store.loadAll() == std::vector<Character>{character});
+}
+
+TEST_CASE("an older sheet drops fight state, turns typed bonuses into overrides, and keeps a copy")
+{
+    const std::string version3 = R"({
+  "schemaVersion": 3,
+  "characters": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "Bryn",
+      "hp": {"current": -3, "max": 20},
+      "tempHp": 0,
+      "ac": 15,
+      "speed": "30 ft.",
+      "initiativeBonus": 5,
+      "proficiencyBonus": 2,
+      "abilities": {"strength": 10, "dexterity": 10, "constitution": 10, "intelligence": 10, "wisdom": 10, "charisma": 10},
+      "passivePerception": 10,
+      "species": "Human",
+      "classes": [],
+      "savingThrows": {"strength": false, "dexterity": false, "constitution": false, "intelligence": false, "wisdom": false, "charisma": false},
+      "skills": {"acrobatics": false, "animalHandling": false, "arcana": false, "athletics": false, "deception": false, "history": false, "insight": false, "intimidation": false, "investigation": false, "medicine": false, "nature": false, "perception": false, "performance": false, "persuasion": false, "religion": false, "sleightOfHand": false, "stealth": false, "survival": false},
+      "spells": [],
+      "spellSlots": [{"level": 1, "current": 1, "max": 2}],
+      "gear": [],
+      "conditions": ["blinded"],
+      "deathSaves": {"successes": 1, "failures": 0},
+      "notes": ""
+    }
+  ]
+})";
+    const auto loaded = parseCharactersDocument(version3);
+    CHECK_EQ(loaded.size(), std::size_t{1});
+    CHECK_EQ(loaded[0].hp.current, 0);
+    CHECK(loaded[0].initiativeOverride.has_value());
+    CHECK_EQ(*loaded[0].initiativeOverride, 5);
+    CHECK(!loaded[0].proficiencyOverride.has_value());
+    CHECK(!loaded[0].spellSlots[0].shortRest);
+
+    TempDir dir;
+    const fs::path path = dir.path() / "characters.json";
+    writeFile(path, version3);
+    JsonCharacterStore store(path);
+    store.saveAll(store.loadAll());
+    CHECK_EQ(readFile(dir.path() / "characters.v3.json"), version3);
+    const std::string saved = readFile(path);
+    CHECK(saved.find("\"schemaVersion\": 4") != std::string::npos);
+    CHECK(saved.find("blinded") == std::string::npos);
+    CHECK(store.loadAll() == loaded);
+}
