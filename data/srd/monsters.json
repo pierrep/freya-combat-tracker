@@ -23730,15 +23730,15 @@
           "name": "Charm (Recharge 5–6)",
           "effect": "The vampire casts Charm Person, requiring no spell components and using Charisma as the spellcasting ability (spell save DC 17), and the duration is 24 hours. The Charmed target is a willing recipient of the vampire’s Bite, the damage of which doesn’t end the spell. When the spell ends, the target is unaware it was Charmed by the vampire.",
           "recharge": 5,
+          "targetTypes": [
+            "humanoid"
+          ],
           "save": {
             "ability": "wisdom",
             "dc": 17,
             "onSuccess": "none",
             "advantageIf": "the caster or its allies are fighting it"
           },
-          "targetTypes": [
-            "humanoid"
-          ],
           "riders": [
             {
               "conditions": [
@@ -25389,7 +25389,15 @@
             "dc": 10,
             "onSuccess": "none"
           },
-          "damage": []
+          "damage": [],
+          "targetAtZeroHp": true,
+          "targetExceptTypes": [
+            "undead",
+            "construct"
+          ],
+          "failureHpThreshold": 0,
+          "failureHpEffect": "dies",
+          "failureSelfHealing": "3d6"
         },
         {
           "name": "Vanish",

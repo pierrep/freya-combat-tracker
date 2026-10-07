@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Freya Combat Tracker
+GenericName=Combat Tracker
+Comment=Run D&D 2024 combat: initiative, hit points, conditions, and monster actions
+Exec=freya-combat-tracker
+Icon=freya-combat-tracker
+Terminal=false
+Categories=Game;RolePlaying;Utility;
+Keywords=D&D;DnD;dungeons;dragons;initiative;combat;tracker;SRD;
+StartupWMClass=freya-combat-tracker

@@ -77,6 +77,27 @@ void killOutright(Combatant& combatant);
 std::string creatureSize(const Combatant& combatant, const std::string& species = {});
 // Why this target cannot be chosen for the action, or empty when it can:
 // "Death Glare needs a Frightened creature."
+// Escaping a grapple: "a Strength (Athletics) or Dexterity (Acrobatics)
+// check against the grapple's escape DC", as an action. The DC of a Grappled
+// condition, when known.
+std::optional<int> grappleEscapeDc(const ActiveCondition& condition);
+// The better of the two checks for this creature, with its bonus (less any
+// Exhaustion penalty). sheet is the character's sheet, or null for a monster.
+struct EscapeCheck {
+    int bonus = 0;
+    std::string skill;  // "Athletics" or "Acrobatics"
+    Ability ability = Ability::Strength;
+};
+EscapeCheck escapeCheck(const Combatant& combatant, const Character* sheet);
+// Ends the grapple by this grappler; conditions tied to it (Restrained "until
+// the grapple ends") go with releaseConditions. False when there was none.
+bool escapeGrapple(Combatant& combatant, const std::string& grapplerId);
+
+// Charmed: "can't attack the charmer or target the charmer with damaging
+// abilities or magical effects." Why the actor can't target this creature, or
+// empty when it can. Only a Charmed whose cause is known counts.
+std::string charmedProblem(const Combatant& actor, const Combatant& target);
+
 // A condition list ("charmed,grappled") is met by any one of them; Grappled
 // must be by the attacker when attackerId is given and the grapple's cause is
 // known.

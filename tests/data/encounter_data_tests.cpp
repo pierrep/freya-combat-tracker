@@ -414,6 +414,15 @@ TEST_CASE("the undo history round-trips through history.json, and a bad file loa
     prompt.attack = scimitar;
     prompt.riders = {0, 2};
     prompt.refund = 3;
+    HistoryPrompt save;  // a breath weapon's save, its damage already rolled
+    save.kind = 6;
+    save.combatantId = "a";
+    save.sourceId = "g";
+    save.attack = scimitar;
+    save.damage = {{21, "fire"}, {4, ""}};
+    save.advantage = true;
+    save.afterHit = true;
+    save.wasBloodied = true;
     HistoryStep step;
     step.encounterId = "fight";
     step.encounter = before;
@@ -426,7 +435,7 @@ TEST_CASE("the undo history round-trips through history.json, and a bad file loa
     history.encounters = {fight};
     history.shownEncounterId = "fight";
     history.log = {"R1 Goblin: Scimitar hits Aria for 7.", "R1 Combat starts."};
-    history.prompts = {prompt};
+    history.prompts = {prompt, save};
     history.steps = {step};
 
     const FightHistory back = parseHistory(serializeHistory(history));

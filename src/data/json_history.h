@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace combat {
@@ -39,6 +40,12 @@ struct HistoryPrompt {
     std::optional<MonsterAttack> attack;
     std::vector<std::size_t> riders;
     int refund = 0;
+    // A monster action's save: the damage a failure deals, as amount and
+    // type pairs, and its flags.
+    std::vector<std::pair<int, std::string>> damage;
+    bool advantage = false;
+    bool afterHit = false;
+    bool wasBloodied = false;
 
     bool operator==(const HistoryPrompt&) const = default;
 };

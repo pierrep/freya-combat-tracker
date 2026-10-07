@@ -82,6 +82,7 @@ ActiveCondition conditionFromJson(const json& value, const std::string& context,
     condition.byId = json_util::readOptionalString<Error>(value, "byId", context);
     condition.tiedTo = json_util::readOptionalString<Error>(value, "tiedTo", context);
     condition.ongoingAt = json_util::readOptionalString<Error>(value, "ongoingAt", context);
+    condition.escapeDc = json_util::readOptionalInt<Error>(value, "escapeDc", context);
     if (const auto ongoing = value.find("ongoing"); ongoing != value.end() && ongoing->is_array()) {
         for (const json& part : *ongoing) {
             const std::string partContext = context + " ongoing";
@@ -139,6 +140,9 @@ json conditionToJson(const ActiveCondition& condition)
     }
     if (!condition.ongoingAt.empty()) {
         value["ongoingAt"] = condition.ongoingAt;
+    }
+    if (condition.escapeDc.has_value()) {
+        value["escapeDc"] = *condition.escapeDc;
     }
     if (!condition.source.empty()) {
         value["source"] = condition.source;

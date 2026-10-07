@@ -1044,7 +1044,9 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_rollAllButton->setObjectName(QStringLiteral("rollAllMonsters"));
     m_rollAllButton->setToolTip(tr("d20 + each stat block's initiative bonus. Options can give every monster of one "
                                    "kind the same roll."));
+    makePrimary(m_rollAllButton);  // the same style as Start combat
     m_rollPlayersButton = new QPushButton(tr("Roll player initiative"));
+    makePrimary(m_rollPlayersButton);
     m_rollPlayersButton->setObjectName(QStringLiteral("rollAllCharacters"));
     m_rollPlayersButton->setToolTip(tr("d20 + each character sheet's initiative bonus, for a table that lets the app "
                                        "roll. Type over any total."));
@@ -1192,13 +1194,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
         entry->addSpacing(4);
         entry->addLayout(monsterSection);
         entry->addStretch(1);
-        auto* entryFooter = new QHBoxLayout;
-        entryFooter->addStretch(1);
-        m_entryStartButton = new QPushButton(tr("Start combat"));
-        m_entryStartButton->setObjectName(QStringLiteral("initiativeEntryStart"));
-        makePrimary(m_entryStartButton);
-        entryFooter->addWidget(m_entryStartButton);
-        entry->addLayout(entryFooter);
+        // Start combat is the button at the top of the page.
     }
     m_initiativeEntry->hide();
     right->addWidget(m_initiativeEntry, 1);
@@ -1282,8 +1278,16 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
 
     nameRow->addWidget(makeMuted(tr("HP")));
     nameRow->addWidget(m_hp);
-    nameRow->addSpacing(14);
-    nameRow->addWidget(makeMuted(tr("Temp HP")));
+    // "Temp" over "HP" in small type, close to the HP box.
+    nameRow->addSpacing(6);
+    auto* tempLabel = makeMuted(tr("Temp\nHP"));
+    tempLabel->setObjectName(QStringLiteral("tempHpLabel"));
+    tempLabel->setWordWrap(false);
+    tempLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    QFont tempFont = tempLabel->font();
+    tempFont.setPointSizeF(tempFont.pointSizeF() * 0.78);
+    tempLabel->setFont(tempFont);
+    nameRow->addWidget(tempLabel);
     nameRow->addWidget(m_tempHp);
     nameRow->addSpacing(8);
     nameRow->addWidget(m_bloodiedLabel);
@@ -1520,10 +1524,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_concentrationLabel = makeMuted(QString());
     m_concentrationLabel->setObjectName(QStringLiteral("concentrationLabel"));
     concentrationHeader->addWidget(m_concentrationLabel, 1);
-    auto* clearConcentrationButton = new QPushButton(tr("End"));
-    clearConcentrationButton->setObjectName(QStringLiteral("clearConcentration"));
-    makeQuiet(clearConcentrationButton);
-    concentrationHeader->addWidget(clearConcentrationButton);
     conditionsLayout->addLayout(concentrationHeader);
     auto* concentrationRow = new QHBoxLayout;
     m_spellSearch = new QLineEdit;
@@ -1540,6 +1540,14 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_spellMatches->setObjectName(QStringLiteral("concentrationMatches"));
     m_spellMatches->setMaximumHeight(96);
     conditionsLayout->addWidget(m_spellMatches);
+    // End sits at the foot of the section, on the left, like Add above.
+    auto* clearConcentrationButton = new QPushButton(tr("End"));
+    clearConcentrationButton->setObjectName(QStringLiteral("clearConcentration"));
+    makePrimary(clearConcentrationButton);
+    auto* endRow = new QHBoxLayout;
+    endRow->addWidget(clearConcentrationButton);
+    endRow->addStretch(1);
+    conditionsLayout->addLayout(endRow);
     conditionsLayout->addStretch(1);
     m_detailTabs->addTab(scrollingTab(conditionsPage), tr("Conditions"));
 
@@ -1603,14 +1611,17 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     auto* deathTop = new QHBoxLayout;
     deathTop->addWidget(m_deathStatus, 1);
     deathTop->addWidget(m_stabilizeButton);
-    auto* deathBottom = new QHBoxLayout;
+    m_deathSaveButtons = new QWidget;
+    m_deathSaveButtons->setObjectName(QStringLiteral("deathSaveButtons"));
+    auto* deathBottom = new QHBoxLayout(m_deathSaveButtons);
+    deathBottom->setContentsMargins(0, 0, 0, 0);
     deathBottom->addWidget(successUp);
     deathBottom->addWidget(successDown);
     deathBottom->addWidget(failureUp);
     deathBottom->addWidget(failureDown);
     deathBottom->addStretch(1);
     deathColumn->addLayout(deathTop);
-    deathColumn->addLayout(deathBottom);
+    deathColumn->addWidget(m_deathSaveButtons);
     deathRow->addLayout(deathColumn);
     // Death saves sit on the card, under the hit row, while a character is at 0 HP.
     card->insertWidget(card->indexOf(m_detailTabs), m_deathSavesHost);
@@ -1623,6 +1634,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     removeLayout->setContentsMargins(0, 0, 0, 2);
     removeLayout->addWidget(m_removeButton);
     m_detailTabs->setCornerWidget(removeHost, Qt::TopRightCorner);
+    connect(m_detailTabs, &QTabWidget::currentChanged, this, [this](int index) {
+        if (!m_cardCombatantId.empty()) {
+            m_tabByCombatant[m_cardCombatantId] = index;
+        }
+    });
 
     connect(m_conditionPicker, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
         m_invisibleCause->setVisible(m_conditionPicker->currentData().toString() == QStringLiteral("invisible"));
@@ -1639,8 +1655,8 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
         return (QApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier)) != 0;
     };
     connect(m_initiativeList, &QTreeWidget::currentItemChanged, this, [this, adding](QTreeWidgetItem* current) {
-        if (m_populating) {
-            return;
+        if (m_populating || m_armed.has_value()) {
+            return;  // choosing targets: the card stays on the action's user
         }
         if (current != nullptr) {
             const QSignalBlocker blocker(m_downList);
@@ -1652,8 +1668,8 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
         showCombatant();
     });
     connect(m_downList, &QTreeWidget::currentItemChanged, this, [this, adding](QTreeWidgetItem* current) {
-        if (m_populating) {
-            return;
+        if (m_populating || m_armed.has_value()) {
+            return;  // choosing targets: the card stays on the action's user
         }
         if (current != nullptr) {
             const QSignalBlocker blocker(m_initiativeList);
@@ -1712,7 +1728,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(m_rerollButton, &QPushButton::clicked, this, &CombatPage::rerollSelected);
     connect(m_removeButton, &QPushButton::clicked, this, &CombatPage::removeSelected);
     connect(m_nextTurnButton, &QPushButton::clicked, this, [this] { nextTurn(); });
-    connect(m_entryStartButton, &QPushButton::clicked, this, [this] { nextTurn(); });
     connect(m_backToEntryButton, &QPushButton::clicked, this, &CombatPage::showInitiativeEntry);
     connect(m_undoButton, &QPushButton::clicked, this, &CombatPage::undoLastChange);
     auto* cancelAttack = new QShortcut(QKeySequence(Qt::Key_Escape), this);
@@ -1720,8 +1735,8 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(cancelAttack, &QShortcut::activated, this, [this] {
         if (m_armed.has_value()) {
             addLog(tr("%1 stops choosing targets.").arg(nameOf(m_armed->attackerId)));
+            stopTargeting();
         }
-        disarmAttack();
     });
     auto* undoShortcut = new QShortcut(QKeySequence::Undo, this);
     connect(undoShortcut, &QShortcut::activated, this, &CombatPage::undoLastChange);
@@ -1786,12 +1801,18 @@ HistoryPrompt toHistory(const CombatPage::Prompt& prompt)
     row.attack = prompt.attack;
     row.riders = prompt.riders;
     row.refund = prompt.refund;
+    for (const TypedDamage& part : prompt.damage) {
+        row.damage.emplace_back(part.amount, part.type);
+    }
+    row.advantage = prompt.advantage;
+    row.afterHit = prompt.afterHit;
+    row.wasBloodied = prompt.wasBloodied;
     return row;
 }
 
 std::optional<CombatPage::Prompt> fromHistory(const HistoryPrompt& row)
 {
-    if (row.kind < 0 || row.kind > static_cast<int>(CombatPage::Prompt::Kind::Hide) || row.ability < 0 ||
+    if (row.kind < 0 || row.kind > static_cast<int>(CombatPage::Prompt::Kind::Escape) || row.ability < 0 ||
         row.ability >= static_cast<int>(kAbilityOrder.size())) {
         return std::nullopt;
     }
@@ -1806,6 +1827,16 @@ std::optional<CombatPage::Prompt> fromHistory(const HistoryPrompt& row)
     prompt.attack = row.attack;
     prompt.riders = row.riders;
     prompt.refund = row.refund;
+    for (const auto& [amount, type] : row.damage) {
+        prompt.damage.push_back(TypedDamage{amount, type});
+    }
+    prompt.advantage = row.advantage;
+    prompt.afterHit = row.afterHit;
+    prompt.wasBloodied = row.wasBloodied;
+    if (prompt.kind == CombatPage::Prompt::Kind::ActionSave &&
+        (!prompt.attack.has_value() || (prompt.afterHit ? !prompt.attack->riderSave : !prompt.attack->save))) {
+        return std::nullopt;
+    }
     return prompt;
 }
 
@@ -2107,8 +2138,11 @@ CombatPage::PageUndo CombatPage::capture() const
     undo.roster = m_characters;
     undo.log = m_log;
     undo.prompts = m_prompts;
-    if (const QTreeWidgetItem* item =
-            m_initiativeList->currentItem() != nullptr ? m_initiativeList->currentItem() : m_downList->currentItem()) {
+    if (m_armed.has_value()) {
+        undo.selectionId = m_armed->attackerId;  // choosing targets: the user is selected
+    } else if (const QTreeWidgetItem* item = m_initiativeList->currentItem() != nullptr
+                                                 ? m_initiativeList->currentItem()
+                                                 : m_downList->currentItem()) {
         undo.selectionId = item->data(0, Qt::UserRole).toString().toStdString();
     }
     return undo;
@@ -2125,7 +2159,9 @@ void CombatPage::commit(PageUndo before, EditKind kind, const std::string& selec
     releaseEndedConditions();
     const bool fightChanged = before.encounter != *encounter;
     const bool sheetsChanged = before.roster != m_characters;
-    if (fightChanged || sheetsChanged) {
+    // Answering a question is a step too, so Undo asks it again.
+    const bool promptsChanged = before.prompts != m_prompts;
+    if (fightChanged || sheetsChanged || promptsChanged) {
         const bool merge = kind != EditKind::Once && kind == m_lastEdit && !m_undo.empty() &&
                            m_undo.back().encounterId == before.encounterId;
         if (!merge) {
@@ -2162,8 +2198,10 @@ void CombatPage::undoLastChange()
     PageUndo undo = std::move(m_undo.back());
     m_undo.pop_back();
     m_lastEdit = EditKind::Once;
+    bool unstarted = false;  // Undo of Start combat: back to the initiative list
     for (Encounter& encounter : m_encounters) {
         if (encounter.id == undo.encounterId) {
+            unstarted = encounter.started && !undo.encounter.started;
             encounter = undo.encounter;
         }
     }
@@ -2177,6 +2215,7 @@ void CombatPage::undoLastChange()
                                    [this](const Prompt& prompt) { return combatantById(prompt.combatantId) == nullptr; }),
                     m_prompts.end());
     showLog();
+    rebuildPrompts();
     m_hitLabel->clear();
     if (sheets) {
         saveCharacters();
@@ -2187,7 +2226,10 @@ void CombatPage::undoLastChange()
     if (row >= 0 && row != m_encounterCombo->currentIndex()) {
         m_encounterCombo->setCurrentIndex(row);
     }
-    rebuildCombatantList(undo.selectionId);
+    rebuildCombatantList(unstarted ? std::string() : undo.selectionId);
+    if (unstarted) {
+        showInitiativeEntry();
+    }
 }
 
 // --- Lookups -----------------------------------------------------------------
@@ -2232,6 +2274,13 @@ Combatant* CombatPage::combatantById(const std::string& id)
 
 Combatant* CombatPage::selectedCombatant()
 {
+    // While an action picks its targets, the card stays on the creature
+    // using it; clicked rows are its targets, not a new selection.
+    if (m_armed.has_value()) {
+        if (Combatant* user = combatantById(m_armed->attackerId)) {
+            return user;
+        }
+    }
     QTreeWidgetItem* item = m_initiativeList->currentItem();
     if (item == nullptr) {
         item = m_downList->currentItem();
@@ -2330,6 +2379,7 @@ void CombatPage::showEncounter()
         disarmAttack();
         m_prompts.clear();
         rebuildPrompts();
+        updateTurnLabels();
         return;
     }
     if (m_shownEncounterId != encounter->id) {
@@ -2452,13 +2502,59 @@ void CombatPage::rebuildCombatantList(const std::string& selectId)
     }
     updateTurnLabels();
     rebuildPrompts();
+    showArmedTargets();
     showCombatant();
+}
+
+void CombatPage::showArmedTargets()
+{
+    if (!m_armed.has_value()) {
+        return;
+    }
+    // The creatures picked so far are highlighted; the user's own row is not
+    // (it is still the card on the right, and comes back when the action ends).
+    const std::vector<std::string>& targets = m_armed->targets;
+    for (QTreeWidget* list : {m_initiativeList, m_downList}) {
+        const QSignalBlocker blocker(list);  // the list's, not its selection model's: rows keep their flags
+        // No current row while choosing (the card follows the action's user;
+        // a current row would be highlighted along with the targets).
+        list->selectionModel()->setCurrentIndex(QModelIndex(), QItemSelectionModel::NoUpdate);
+        list->clearSelection();
+        for (int i = 0; i < list->topLevelItemCount(); ++i) {
+            QTreeWidgetItem* item = list->topLevelItem(i);
+            const std::string id = item->data(0, Qt::UserRole).toString().toStdString();
+            if (std::find(targets.begin(), targets.end(), id) != targets.end()) {
+                item->setSelected(true);
+            }
+        }
+    }
+}
+
+void CombatPage::selectRow(const std::string& id)
+{
+    for (QTreeWidget* list : {m_initiativeList, m_downList}) {
+        const QSignalBlocker blocker(list);
+        list->clearSelection();
+        list->setCurrentItem(nullptr);
+        for (int i = 0; i < list->topLevelItemCount(); ++i) {
+            QTreeWidgetItem* item = list->topLevelItem(i);
+            if (item->data(0, Qt::UserRole).toString().toStdString() == id) {
+                list->setCurrentItem(item);
+            }
+        }
+    }
 }
 
 void CombatPage::updateTurnLabels()
 {
     Encounter* encounter = selectedEncounter();
     if (encounter == nullptr) {
+        // No encounter: no round or turn to show, and nothing to start.
+        m_roundLabel->clear();
+        m_activeLabel->clear();
+        m_nextTurnButton->setText(tr("Start combat"));
+        m_nextTurnButton->setEnabled(false);
+        m_nextTurnButton->setToolTip(tr("Create an encounter in the Encounter Builder first."));
         return;
     }
     m_roundLabel->setText(encounter->started ? tr("Round %1").arg(encounter->round) : tr("Initiative"));
@@ -2507,6 +2603,7 @@ void CombatPage::showCombatant()
         refreshInitiativeEntry();
     }
     if (combatant == nullptr) {
+        m_cardCombatantId.clear();
         clearLayout(m_actionRows);
         return;
     }
@@ -2516,6 +2613,13 @@ void CombatPage::showCombatant()
     m_rollModeLabel->setVisible(monster);
     m_economyHost->setVisible(monster);
     m_rerollButton->setVisible(monster);
+    // Another creature: back to the tab it had open (Actions the first time).
+    if (combatant->id != m_cardCombatantId) {
+        m_cardCombatantId.clear();  // so the switch below isn't recorded for anyone
+        const auto remembered = m_tabByCombatant.find(combatant->id);
+        m_detailTabs->setCurrentIndex(remembered == m_tabByCombatant.end() ? 0 : remembered->second);
+        m_cardCombatantId = combatant->id;
+    }
     m_selectedName->setText(QString::fromStdString(combatant->name));
     m_selectedMeta->setPixmap(shieldPixmap(QSizeF(34.0, 38.0), QString::number(combatant->ac),
                                            combatant->ac >= 100 ? 11.0 : 15.0, m_selectedMeta->devicePixelRatioF()));
@@ -2591,7 +2695,10 @@ void CombatPage::updateDeathSaveRow(const Combatant& combatant)
     } else {
         m_deathStatus->setText(tr("Not dying"));
     }
-    m_stabilizeButton->setEnabled(isDying(combatant));
+    // Stable or dead, there are no death saves to count and nothing to
+    // stabilize: only the line saying so stays.
+    m_stabilizeButton->setVisible(isDying(combatant));
+    m_deathSaveButtons->setVisible(isDying(combatant));
 }
 
 void CombatPage::rebuildConditionList(const Combatant& combatant)
@@ -2713,6 +2820,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
     clearLayout(m_actionRows);
     const bool monster = isMonsterCombatant(combatant);
     m_actionsSection->setVisible(true);
+    addEscapeRows(combatant);
     if (!monster) {
         addCharacterAttackRow(combatant);
         return;
@@ -2815,7 +2923,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 }
                 const bool armedHere = m_armed.has_value() && m_armed->attackerId == id &&
                                        m_armed->featureKind.has_value() && m_armed->feature.name == feature.name;
-                auto* button = new QPushButton(armedHere ? tr("Cancel") : text);
+                auto* button = new QPushButton(armedHere ? tr("End") : text);
                 button->setObjectName(feature.targeted.has_value() ? QStringLiteral("featureTarget")
                                                                    : QStringLiteral("featureUse"));
                 button->setEnabled(armedHere || available.available);
@@ -2962,7 +3070,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
         }
         const bool armedHere = m_armed.has_value() && m_armed->attackerId == id && !m_armed->featureKind.has_value() &&
                                m_armed->attack.name == attack.name;
-        auto* button = new QPushButton(armedHere ? tr("Cancel") : buttonText);
+        auto* button = new QPushButton(armedHere ? tr("End") : buttonText);
         button->setObjectName(QStringLiteral("rollAttackDamage"));
         button->setEnabled(armedHere || available.available);
         if (attack.benefit.has_value()) {
@@ -3005,6 +3113,72 @@ void CombatPage::rebuildActions(const Combatant& combatant)
     addFeatures(tr("Traits"), block.traits, std::nullopt);
 }
 
+void CombatPage::addEscapeRows(const Combatant& combatant)
+{
+    if (combatant.dead) {
+        return;
+    }
+    std::vector<ActiveCondition> grapples;
+    for (const ActiveCondition& condition : combatant.conditions) {
+        if (condition.id == "grappled") {
+            grapples.push_back(condition);
+        }
+    }
+    if (grapples.empty()) {
+        return;
+    }
+    addSectionHeading(m_actionRows, boldLabel(tr("Grappled")));
+    const EscapeCheck check = escapeCheck(combatant, characterFor(combatant));
+    const std::string id = combatant.id;
+    for (const ActiveCondition& grapple : grapples) {
+        const EntryRow entry = makeEntryRow();
+        entry.content->addWidget(boldLabel(grapple.byId.empty() ? tr("Grappled")
+                                                                : tr("Grappled by %1").arg(nameOf(grapple.byId))));
+        const std::optional<int> dc = grappleEscapeDc(grapple);
+        entry.content->addWidget(bodyLabel(
+            tr("Escape as an action: a %1Strength (Athletics) or Dexterity (Acrobatics) check. Best: %2 %3.")
+                .arg(dc.has_value() ? tr("DC %1 ").arg(*dc) : QString(), QString::fromStdString(check.skill),
+                     QString::fromStdString(formatModifier(check.bonus)))));
+        auto* button = new QPushButton(tr("Escape"));
+        button->setObjectName(QStringLiteral("escapeGrapple"));
+        const bool canAct = !combatant.economy.actionUsed && !isIncapacitated(combatant);
+        button->setEnabled(canAct);
+        button->setToolTip(canAct ? tr("Spend the action on a check to escape.")
+                           : isIncapacitated(combatant) ? tr("An Incapacitated creature can't take actions.")
+                                                        : tr("The action is already used this turn."));
+        const std::string grapplerId = grapple.byId;
+        connect(button, &QPushButton::clicked, this, [this, id, grapplerId] { onEscapeClicked(id, grapplerId); });
+        addColumnButton(entry, button);
+        m_actionRows->addWidget(entry.row);
+    }
+}
+
+void CombatPage::onEscapeClicked(const std::string& combatantId, const std::string& grapplerId)
+{
+    Combatant* combatant = combatantById(combatantId);
+    if (combatant == nullptr) {
+        return;
+    }
+    std::optional<int> dc;
+    for (const ActiveCondition& condition : combatant->conditions) {
+        if (condition.id == "grappled" && condition.byId == grapplerId) {
+            dc = grappleEscapeDc(condition);
+        }
+    }
+    PageUndo before = capture();
+    combatant->economy.actionUsed = true;
+    Prompt prompt;
+    prompt.kind = Prompt::Kind::Escape;
+    prompt.combatantId = combatantId;
+    prompt.sourceId = grapplerId;
+    prompt.conditionId = "grappled";
+    prompt.dc = dc.value_or(0);
+    m_prompts.push_back(prompt);
+    addLog(tr("%1 uses its action to try to escape the grapple.").arg(QString::fromStdString(combatant->name)));
+    commit(std::move(before), EditKind::Once, combatantId);
+    rebuildPrompts();
+}
+
 void CombatPage::addCharacterAttackRow(const Combatant& combatant)
 {
     m_actionRows->addWidget(boldLabel(tr("Actions")));
@@ -3027,7 +3201,7 @@ void CombatPage::addCharacterAttackRow(const Combatant& combatant)
     type->setCurrentIndex(std::max(0, type->findData(m_characterAttackType)));
     const std::string id = combatant.id;
     const bool armedHere = m_armed.has_value() && m_armed->attackerId == id && m_armed->fixedDamage.has_value();
-    auto* button = new QPushButton(armedHere ? tr("Cancel") : tr("Attack"));
+    auto* button = new QPushButton(armedHere ? tr("End") : tr("Attack"));
     button->setObjectName(QStringLiteral("characterAttack"));
     button->setEnabled(armedHere || (!combatant.dead && combatant.hp > 0));
     button->setToolTip(tr("Then click the target."));
@@ -3059,7 +3233,7 @@ void CombatPage::addCharacterAttackRow(const Combatant& combatant)
     healAmount->setValue(m_characterHealAmount);
     healAmount->setToolTip(tr("The Hit Points the player rolled."));
     const bool healArmed = m_armed.has_value() && m_armed->attackerId == id && m_armed->fixedHealing.has_value();
-    auto* healButton = new QPushButton(helpIcon(), healArmed ? tr("Cancel") : tr("Heal"));
+    auto* healButton = new QPushButton(helpIcon(), healArmed ? tr("End") : tr("Heal"));
     healButton->setObjectName(QStringLiteral("characterHeal"));
     healButton->setEnabled(healArmed || (!combatant.dead && combatant.hp > 0));
     healButton->setToolTip(tr("Then click who gets it."));
@@ -3148,10 +3322,18 @@ void CombatPage::rebuildPrompts()
         if (prompt.kind == Prompt::Kind::Aura && !auraCheckFor(prompt).has_value()) {
             continue;  // the monster fell, or its aura was switched off
         }
-        if (prompt.kind == Prompt::Kind::Rider && (combatantById(prompt.sourceId) == nullptr || !prompt.attack)) {
+        if (prompt.kind == Prompt::Kind::Escape &&
+            std::none_of(combatant->conditions.begin(), combatant->conditions.end(),
+                         [&prompt](const ActiveCondition& condition) {
+                             return condition.id == "grappled" && condition.byId == prompt.sourceId;
+                         })) {
+            continue;  // the grapple ended some other way
+        }
+        if ((prompt.kind == Prompt::Kind::Rider || prompt.kind == Prompt::Kind::ActionSave) &&
+            (combatantById(prompt.sourceId) == nullptr || !prompt.attack)) {
             continue;
         }
-        const bool repeat = prompt.kind != Prompt::Kind::Rider &&
+        const bool repeat = prompt.kind != Prompt::Kind::Rider && prompt.kind != Prompt::Kind::ActionSave &&
                             std::any_of(kept.begin(), kept.end(), [&prompt](const Prompt& other) {
             return other.kind == prompt.kind && other.combatantId == prompt.combatantId &&
                    other.conditionId == prompt.conditionId && other.sourceId == prompt.sourceId &&
@@ -3164,10 +3346,24 @@ void CombatPage::rebuildPrompts()
     m_prompts = std::move(kept);
     clearLayout(m_promptLayout);
     m_promptHost->setVisible(!m_prompts.empty());
+    // One creature at a time, oldest question first: the checks for the
+    // creature asked about first show; the rest wait until those are answered.
+    const std::string focus = m_prompts.empty() ? std::string() : m_prompts.front().combatantId;
+    QStringList waiting;
+    int waitingCount = 0;
+    for (const Prompt& prompt : m_prompts) {
+        if (prompt.combatantId != focus) {
+            ++waitingCount;
+            const QString who = nameOf(prompt.combatantId);
+            if (!waiting.contains(who)) {
+                waiting << who;
+            }
+        }
+    }
     for (std::size_t i = 0; i < m_prompts.size(); ++i) {
         const Prompt& prompt = m_prompts[i];
         Combatant* combatant = combatantById(prompt.combatantId);
-        if (combatant == nullptr) {
+        if (combatant == nullptr || prompt.combatantId != focus) {
             continue;
         }
         // Creature names are bold. They are marked while the sentence is put
@@ -3233,6 +3429,56 @@ void CombatPage::rebuildPrompts()
             pass = tr("Success");
             fail = tr("Failure");
             break;
+        case Prompt::Kind::Escape: {
+            const EscapeCheck check = escapeCheck(*combatant, characterFor(*combatant));
+            const QString grappler = prompt.sourceId.empty() ? tr("the") : bold(nameOf(prompt.sourceId)) + tr("'s");
+            text = (prompt.dc > 0 ? tr("%1 tries to escape %2 grapple: DC %3 Strength (Athletics) or Dexterity "
+                                       "(Acrobatics) check (%4 %5).")
+                                        .arg(name, grappler)
+                                        .arg(prompt.dc)
+                                  : tr("%1 tries to escape %2 grapple: a Strength (Athletics) or Dexterity "
+                                       "(Acrobatics) check against its escape DC (%4 %5).")
+                                        .arg(name, grappler))
+                       .arg(QString::fromStdString(check.skill), QString::fromStdString(formatModifier(check.bonus)));
+            pass = tr("Escaped");
+            fail = tr("Still grappled");
+            break;
+        }
+        case Prompt::Kind::ActionSave: {
+            const MonsterAttack& attack = *prompt.attack;
+            text = tr("%1's %2: %3 makes a DC %4 %5 save (%6)%7.")
+                       .arg(bold(nameOf(prompt.sourceId)), QString::fromStdString(attack.name), name)
+                       .arg(prompt.dc)
+                       .arg(QString::fromLatin1(abilityLabel(prompt.ability)))
+                       .arg(QString::fromStdString(formatModifier(bonus)))
+                       .arg(!prompt.afterHit && prompt.advantage ? tr(" with Advantage") : QString());
+            QStringList failure;
+            if (totalDamage(prompt.damage) > 0) {
+                failure << QString::fromStdString(describeDamage(prompt.damage));
+            }
+            if (!prompt.afterHit && attack.failureHpThreshold.has_value()) {
+                failure << (attack.failureHpEffect == "dies" ? tr("dies") : tr("drops to 0"));
+            }
+            QStringList riderIds;
+            for (const ConditionRider* rider : ridersFor(attack, kRiderOnFailure)) {
+                for (const std::string& id : rider->conditions) {
+                    riderIds << conditionName(id);
+                }
+            }
+            if (!riderIds.isEmpty()) {
+                failure << riderIds.join(tr(", "));
+            }
+            if (!failure.isEmpty()) {
+                text += tr(" Failure: %1").arg(failure.join(tr("; ")));
+                text += !prompt.afterHit && attack.save->halfOnSuccess && totalDamage(prompt.damage) > 0
+                            ? tr(". Success: half damage.")
+                            : QStringLiteral(".");
+            }
+            pass = tr("Saved");
+            fail = tr("Failed");
+            dismissText = tr("Not affected");
+            break;
+        }
         case Prompt::Kind::Rider: {
             const MonsterAttack& attack = *prompt.attack;
             const ConditionRider& first = attack.riders[prompt.riders.front()];
@@ -3274,10 +3520,19 @@ void CombatPage::rebuildPrompts()
         layout->addWidget(roll);
         layout->addWidget(passed);
         layout->addWidget(failed);
+        if (prompt.kind == Prompt::Kind::ActionSave && !ridersFor(*prompt.attack, kRiderOnFailureBy5).empty()) {
+            auto* byFive = new QPushButton(tr("Failed by 5+"));
+            byFive->setObjectName(QStringLiteral("promptFailedBy5"));
+            layout->addWidget(byFive);
+            connect(byFive, &QPushButton::clicked, this, [this, i] { resolvePrompt(i, 4); });
+        }
         layout->addWidget(dismiss);
         if (prompt.kind == Prompt::Kind::Rider) {
             roll->hide();
             failed->hide();
+        }
+        if (prompt.kind == Prompt::Kind::Escape && prompt.dc <= 0) {
+            roll->hide();  // the table knows the DC; the app doesn't
         }
         m_promptLayout->addWidget(row);
         connect(roll, &QPushButton::clicked, this, [this, i] { resolvePrompt(i, 0); });
@@ -3285,22 +3540,28 @@ void CombatPage::rebuildPrompts()
         connect(failed, &QPushButton::clicked, this, [this, i] { resolvePrompt(i, 2); });
         connect(dismiss, &QPushButton::clicked, this, [this, i] { resolvePrompt(i, 3); });
     }
+    if (waitingCount > 0) {
+        auto* queued = makeMuted(tr("%n more waiting, for %1.", nullptr, waitingCount).arg(waiting.join(tr(", "))));
+        queued->setObjectName(QStringLiteral("promptQueued"));
+        m_promptLayout->addWidget(queued);
+    }
 }
 
-// outcome: 0 roll, 1 passed, 2 failed, 3 dismiss.
+// outcome: 0 roll, 1 passed, 2 failed, 3 dismiss, 4 failed by 5 or more.
 void CombatPage::resolvePrompt(std::size_t index, int outcome)
 {
     if (index >= m_prompts.size()) {
         return;
     }
     const Prompt prompt = m_prompts[index];
+    // Taken with the question still open, so Undo asks it again.
+    PageUndo before = capture();
     m_prompts.erase(m_prompts.begin() + static_cast<std::ptrdiff_t>(index));
     Combatant* combatant = combatantById(prompt.combatantId);
     if (combatant == nullptr || outcome == 3) {
         QTimer::singleShot(0, this, [this] { rebuildPrompts(); });
         return;
     }
-    PageUndo before = capture();
     const QString name = QString::fromStdString(combatant->name);
     if (prompt.kind == Prompt::Kind::Rider) {
         Combatant* attacker = combatantById(prompt.sourceId);
@@ -3335,6 +3596,33 @@ void CombatPage::resolvePrompt(std::size_t index, int outcome)
                                                        QString::fromStdString(attack.name)));
             }
             carryToSheet(*combatant);
+        }
+    } else if (prompt.kind == Prompt::Kind::ActionSave) {
+        resolveActionSave(prompt, outcome);
+    } else if (prompt.kind == Prompt::Kind::Escape) {
+        bool escaped = outcome == 1;
+        const QString grappler = nameOf(prompt.sourceId);
+        if (outcome == 0) {
+            const EscapeCheck check = escapeCheck(*combatant, characterFor(*combatant));
+            const int face = rollD20();
+            const int total = face + check.bonus;
+            escaped = total >= prompt.dc;
+            addLog(tr("%1 rolls %2 for %3 (%4 %5) against DC %6: %7.")
+                       .arg(name)
+                       .arg(total)
+                       .arg(QString::fromStdString(check.skill))
+                       .arg(face)
+                       .arg(QString::fromStdString(formatModifier(check.bonus)))
+                       .arg(prompt.dc)
+                       .arg(escaped ? tr("escapes") : tr("still grappled")));
+        }
+        const QString whose = prompt.sourceId.empty() ? tr("the grapple") : tr("%1's grapple").arg(grappler);
+        if (escaped) {
+            escapeGrapple(*combatant, prompt.sourceId);
+            addLog(tr("%1 escapes %2.").arg(name, whose));
+            releaseEndedConditions();
+        } else if (outcome != 0) {
+            addLog(tr("%1 fails to escape %2.").arg(name, whose));
         }
     } else if (prompt.kind == Prompt::Kind::Hide) {
         bool hidden = outcome == 1;
@@ -3706,10 +3994,11 @@ void CombatPage::refreshInitiativeEntry()
             m_entryRows.push_back(row);
             ++line;
         }
-        // Enter moves down the list; after the last character, to Start combat.
+        // Enter moves down the list; after the last character, to Start combat
+        // at the top of the page.
         for (std::size_t i = 0; i < m_entryRows.size(); ++i) {
             QWidget* next = i + 1 < m_entryRows.size() ? static_cast<QWidget*>(m_entryRows[i + 1].box)
-                                                       : static_cast<QWidget*>(m_entryStartButton);
+                                                       : static_cast<QWidget*>(m_nextTurnButton);
             if (auto* edit = m_entryRows[i].box->findChild<QLineEdit*>()) {
                 connect(edit, &QLineEdit::returnPressed, next, [next] {
                     next->setFocus(Qt::TabFocusReason);
@@ -3723,7 +4012,7 @@ void CombatPage::refreshInitiativeEntry()
             }
         }
         if (!m_entryRows.empty()) {
-            QWidget::setTabOrder(m_entryRows.back().box, m_entryStartButton);
+            QWidget::setTabOrder(m_entryRows.back().box, m_nextTurnButton);
         }
     }
 
@@ -3764,7 +4053,6 @@ void CombatPage::refreshInitiativeEntry()
     m_entryCount->setText(m_entryRows.empty()
                               ? QString()
                               : tr("%1 of %2 entered").arg(entered).arg(static_cast<int>(m_entryRows.size())));
-    m_entryStartButton->setEnabled(m_nextTurnButton->isEnabled());
 }
 
 void CombatPage::onEntryInitiativeChanged(const std::string& combatantId, int value)
@@ -4566,8 +4854,7 @@ void CombatPage::onActionClicked(const std::string& attackerId, const MonsterAtt
 {
     if (m_armed.has_value() && m_armed->attackerId == attackerId && !m_armed->featureKind.has_value() &&
         m_armed->attack.name == attack.name) {
-        disarmAttack();
-        showCombatant();
+        stopTargeting();  // done choosing (a breath weapon's last creature)
         return;
     }
     Combatant* attacker = combatantById(attackerId);
@@ -4611,8 +4898,7 @@ void CombatPage::onFeatureClicked(const std::string& combatantId, FeatureKind ki
 {
     if (m_armed.has_value() && m_armed->attackerId == combatantId && m_armed->featureKind.has_value() &&
         m_armed->feature.name == feature.name) {
-        disarmAttack();
-        showCombatant();
+        stopTargeting();  // done choosing (a breath weapon's last creature)
         return;
     }
     Combatant* combatant = combatantById(combatantId);
@@ -4709,7 +4995,7 @@ void CombatPage::onStandardActionClicked(const std::string& combatantId, Feature
 void CombatPage::armAction(ArmedAction action)
 {
     // Nothing is logged until a target is clicked: the sword cursor and the
-    // Cancel button show the action is ready. Undoing the first target puts
+    // End button show the action is ready. Undoing the first target puts
     // the log back as it was here.
     action.logBefore = m_log;
     // Help (healing, a War Cry) gets the sparkle; everything else the sword.
@@ -4721,16 +5007,36 @@ void CombatPage::armAction(ArmedAction action)
         QApplication::setOverrideCursor(helpful ? helpCursor() : swordCursor());
         m_swordCursor = true;
     }
+    showArmedTargets();
     showCombatant();
+}
+
+void CombatPage::stopTargeting()
+{
+    // A spent action (a breath weapon that caught its creatures) may have been
+    // the monster's last thing to do: its turn passes, as after any action.
+    const bool spent = m_armed.has_value() && m_armed->spent && !m_armed->targets.empty();
+    const std::string attackerId = m_armed.has_value() ? m_armed->attackerId : std::string();
+    disarmAttack();
+    rebuildCombatantList(attackerId);  // back to the action's user, its row selected
+    if (spent) {
+        maybeAutoPass(attackerId);
+    }
 }
 
 void CombatPage::disarmAttack()
 {
+    if (!m_armed.has_value()) {
+        return;
+    }
+    const std::string userId = m_armed->attackerId;
     m_armed.reset();
     if (m_swordCursor) {
         QApplication::restoreOverrideCursor();
         m_swordCursor = false;
     }
+    // The targets' highlight goes; the action's user is selected again.
+    selectRow(userId);
 }
 
 void CombatPage::onTargetClicked(QTreeWidgetItem* item, int /*column*/)
@@ -4738,7 +5044,12 @@ void CombatPage::onTargetClicked(QTreeWidgetItem* item, int /*column*/)
     if (!m_armed.has_value() || item == nullptr) {
         return;
     }
-    resolveArmedOn(item->data(0, Qt::UserRole).toString().toStdString());
+    const std::string targetId = item->data(0, Qt::UserRole).toString().toStdString();
+    showArmedTargets();  // the click moved the current row; it belongs to the user
+    resolveArmedOn(targetId);
+    // Still choosing (an area, or a target that was turned down): the picked
+    // creatures stay highlighted, not the one just clicked.
+    showArmedTargets();
 }
 
 void CombatPage::resolveArmedOn(const std::string& targetId)
@@ -4760,6 +5071,15 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     if (target->dead || (isMonsterCombatant(*target) && !isInInitiative(*target))) {
         addLog(tr("%1 is already down. Pick another target, or Escape.").arg(QString::fromStdString(target->name)));
         return;
+    }
+    // Charmed: no attacking the charmer, and nothing harmful aimed at it.
+    // Helping it (healing, a benefit) is still allowed.
+    if (!armed.fixedHealing.has_value() && !armed.attack.benefit.has_value()) {
+        const std::string problem = charmedProblem(*attacker, *target);
+        if (!problem.empty()) {
+            addLog(QString::fromStdString(problem) + tr(" Pick another target, or Escape."));
+            return;
+        }
     }
     // "One Frightened creature", "one creature Grappled by the chuul", "one
     // Medium or smaller creature".
@@ -4964,104 +5284,42 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
                 applyDrainTo(*attacker, *target, *attack.drain, damage, result);
             }
             applyRiders(*attacker, *target, attack, kRiderOnHit, mode, result.taken);
-            if (target->hp == 0 && !target->dead && isCharacterCombatant(*target)) {
+            // "If this damage reduces the target to 0 Hit Points": not a target
+            // already at 0, which takes a death save failure instead.
+            if (result.droppedToZero && !target->dead && isCharacterCombatant(*target)) {
                 applyRiders(*attacker, *target, attack, kRiderOnZeroHp, mode, result.taken);
             }
             // "If the target is a creature, it is subjected to the following effect."
             if (attack.riderSave.has_value() && !target->dead &&
                 (!ridersFor(attack, kRiderOnFailure).empty() || !ridersFor(attack, kRiderOnFailureBy5).empty())) {
-                const SaveRoll save = rollSave(*target, attack.riderSave->ability, attack.riderSave->dc, rollD20());
-                addLog(tr("%1 %2 save %3 (%4) against DC %5: %6.")
-                           .arg(QString::fromStdString(target->name),
-                                QString::fromLatin1(abilityShort(attack.riderSave->ability)))
-                           .arg(save.total)
-                           .arg(save.face)
-                           .arg(attack.riderSave->dc)
-                           .arg(save.success ? tr("success") : tr("failure")));
-                if (!save.success) {
-                    const bool byFive = save.total <= attack.riderSave->dc - 5 &&
-                                        !ridersFor(attack, kRiderOnFailureBy5).empty();
-                    applyRiders(*attacker, *target, attack, byFive ? kRiderOnFailureBy5 : kRiderOnFailure, mode,
-                                0);
-                }
+                Prompt prompt;
+                prompt.kind = Prompt::Kind::ActionSave;
+                prompt.combatantId = target->id;
+                prompt.sourceId = attacker->id;
+                prompt.ability = attack.riderSave->ability;
+                prompt.dc = attack.riderSave->dc;
+                prompt.attack = attack;
+                prompt.afterHit = true;
+                prompt.advantage = mode == RollMode::Advantage;
+                askActionSave(std::move(prompt));
             }
         }
     } else if (attack.save.has_value()) {
-        // "With Advantage if you or your allies are fighting it": the GM's tick.
-        const bool saveAdvantage = !attack.save->advantageIf.empty() &&
-                                   choiceTicked(attacker->id, attack.name, kSaveAdvantageChoice);
-        int face = rollD20();
-        if (saveAdvantage) {
-            const int second = rollD20();
-            addLog(tr("%1 saves with Advantage (%2 and %3).")
-                       .arg(QString::fromStdString(target->name))
-                       .arg(face)
-                       .arg(second));
-            face = std::max(face, second);
-        }
-        const SaveRoll roll = rollSave(*target, attack.save->ability, attack.save->dc, face);
-        const QString saveText = tr("%1 %2 save %3 (%4) against DC %5: %6")
-                                     .arg(QString::fromStdString(target->name),
-                                          QString::fromLatin1(abilityShort(attack.save->ability)))
-                                     .arg(roll.total)
-                                     .arg(roll.face)
-                                     .arg(attack.save->dc)
-                                     .arg(roll.automaticFailure ? tr("fails automatically")
-                                          : roll.success         ? tr("success")
-                                                                 : tr("failure"));
-        std::vector<TypedDamage> damage;
-        if (!roll.success) {
-            damage = armed.saveDamage;
-        } else if (attack.save->halfOnSuccess) {
-            damage = halveDamage(armed.saveDamage);
-        }
-        addLog(tr("%1: %2.").arg(source, saveText));
-        // Death Glare, Slaying Bow: low enough Hit Points and the target drops
-        // to 0 or dies instead of taking the damage.
-        if (!roll.success && attack.failureHpThreshold.has_value() && target->hp <= *attack.failureHpThreshold) {
-            const QString targetName = QString::fromStdString(target->name);
-            if (attack.failureHpEffect == "dies") {
-                killOutright(*target);
-                addLog(tr("%1 has %2 Hit Points or fewer and dies.").arg(targetName).arg(*attack.failureHpThreshold));
-            } else {
-                setHitPoints(*target, 0);
-                addLog(isCharacterCombatant(*target)
-                           ? tr("%1 has %2 Hit Points or fewer and drops to 0: dying.")
-                                 .arg(targetName)
-                                 .arg(*attack.failureHpThreshold)
-                           : tr("%1 has %2 Hit Points or fewer and drops to 0.")
-                                 .arg(targetName)
-                                 .arg(*attack.failureHpThreshold));
-            }
-            carryToSheet(*target);
-            damage.clear();
-        }
-        // The Incubus's Nightmare: a target with few enough Hit Points falls
-        // Unconscious instead of taking the damage.
-        if (!roll.success) {
-            for (const ConditionRider* rider : ridersFor(attack, kRiderOnFailure)) {
-                if (rider->targetMaxHp.has_value() && target->hp <= *rider->targetMaxHp) {
-                    damage.clear();
-                }
-            }
-        }
-        if (totalDamage(damage) > 0) {
-            const DamageResult result = applyDamage(*target, damage);
-            dealtDamage = dealtDamage || result.taken > 0;
-            afterDamage(*target, result, source);
-            if (attack.drain.has_value()) {
-                applyDrainTo(*attacker, *target, *attack.drain, damage, result);
-            }
-        }
-        if (!roll.success && !target->dead) {
-            const bool byFive =
-                roll.total <= attack.save->dc - 5 && !ridersFor(attack, kRiderOnFailureBy5).empty();
-            applyRiders(*attacker, *target, attack, byFive ? kRiderOnFailureBy5 : kRiderOnFailure, RollMode::Normal,
-                        0);
-            if (attack.riders.empty() && totalDamage(damage) == 0 && !attack.failureHpThreshold.has_value()) {
-                addLog(tr("Apply the effect's conditions to %1 by hand.").arg(QString::fromStdString(target->name)));
-            }
-        }
+        // The save is asked at the top of the page: rolled here, or the
+        // table's result entered. "With Advantage if you or your allies are
+        // fighting it" is the GM's tick.
+        Prompt prompt;
+        prompt.kind = Prompt::Kind::ActionSave;
+        prompt.combatantId = target->id;
+        prompt.sourceId = attacker->id;
+        prompt.ability = attack.save->ability;
+        prompt.dc = attack.save->dc;
+        prompt.attack = attack;
+        prompt.damage = armed.saveDamage;
+        prompt.advantage =
+            !attack.save->advantageIf.empty() && choiceTicked(attacker->id, attack.name, kSaveAdvantageChoice);
+        prompt.wasBloodied = targetWasBloodied;
+        askActionSave(std::move(prompt));
         keepArmed = attack.area;
     } else {
         const std::vector<TypedDamage> damage =
@@ -5091,6 +5349,166 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     commit(std::move(before), EditKind::Once, attackerId);
     if (!m_armed.has_value()) {
         maybeAutoPass(attackerId);
+    }
+}
+
+void CombatPage::askActionSave(Prompt prompt)
+{
+    Combatant* target = combatantById(prompt.combatantId);
+    if (target == nullptr) {
+        return;
+    }
+    // A save it fails automatically (Paralyzed, for Strength and Dexterity)
+    // has nothing to ask.
+    if (rollSave(*target, prompt.ability, prompt.dc, 20).automaticFailure) {
+        resolveActionSave(prompt, 0);
+        return;
+    }
+    m_prompts.push_back(std::move(prompt));
+    rebuildPrompts();
+}
+
+void CombatPage::resolveActionSave(const Prompt& prompt, int outcome)
+{
+    Combatant* target = combatantById(prompt.combatantId);
+    Combatant* attacker = combatantById(prompt.sourceId);
+    if (target == nullptr || attacker == nullptr || !prompt.attack.has_value()) {
+        return;
+    }
+    const MonsterAttack& attack = *prompt.attack;
+    const std::optional<SaveSpec>& spec = prompt.afterHit ? attack.riderSave : attack.save;
+    if (!spec.has_value()) {
+        return;
+    }
+    // Damage from here on is this action's (a condition that spares it stays).
+    struct DamageSource {
+        CombatPage* page;
+        std::string attackerId;
+        std::string action;
+        ~DamageSource()
+        {
+            page->m_damageAttackerId = attackerId;
+            page->m_damageAction = action;
+        }
+    } restore{this, m_damageAttackerId, m_damageAction};
+    m_damageAttackerId = attacker->id;
+    m_damageAction = attack.name;
+
+    const QString targetName = QString::fromStdString(target->name);
+    const QString source = tr("%1's %2").arg(QString::fromStdString(attacker->name),
+                                             QString::fromStdString(attack.name));
+    bool success = outcome == 1;
+    bool byFive = outcome == 4;
+    if (outcome == 0) {
+        int face = rollD20();
+        if (!prompt.afterHit && prompt.advantage) {
+            const int second = rollD20();
+            addLog(tr("%1 saves with Advantage (%2 and %3).").arg(targetName).arg(face).arg(second));
+            face = std::max(face, second);
+        }
+        const SaveRoll roll = rollSave(*target, spec->ability, spec->dc, face);
+        success = roll.success;
+        byFive = !success && roll.total <= spec->dc - 5;
+        addLog(tr("%1: %2 %3 save %4 (%5) against DC %6: %7.")
+                   .arg(source, targetName, QString::fromLatin1(abilityShort(spec->ability)))
+                   .arg(roll.total)
+                   .arg(roll.face)
+                   .arg(spec->dc)
+                   .arg(roll.automaticFailure ? tr("fails automatically")
+                        : success             ? tr("success")
+                                              : tr("failure")));
+    } else {
+        addLog(tr("%1: %2 %3 the DC %4 %5 save%6.")
+                   .arg(source, targetName, success ? tr("succeeds on") : tr("fails"))
+                   .arg(spec->dc)
+                   .arg(QString::fromLatin1(abilityLabel(spec->ability)), byFive ? tr(" by 5 or more") : QString()));
+    }
+    const bool fiveRiders = !ridersFor(attack, kRiderOnFailureBy5).empty();
+    const std::string failureRiders = byFive && fiveRiders ? kRiderOnFailureBy5 : kRiderOnFailure;
+
+    if (prompt.afterHit) {
+        if (!success && !target->dead) {
+            applyRiders(*attacker, *target, attack, failureRiders,
+                        prompt.advantage ? RollMode::Advantage : RollMode::Normal, 0);
+        }
+        carryToSheet(*target);
+        return;
+    }
+
+    std::vector<TypedDamage> damage;
+    if (!success) {
+        damage = prompt.damage;
+    } else if (attack.save->halfOnSuccess) {
+        damage = halveDamage(prompt.damage);
+    }
+    // Death Glare, Slaying Bow, Consume Life: low enough Hit Points and the
+    // target drops to 0 or dies instead of taking the damage.
+    bool tookLife = false;
+    if (!success && attack.failureHpThreshold.has_value() && target->hp <= *attack.failureHpThreshold) {
+        if (attack.failureHpEffect == "dies") {
+            killOutright(*target);
+            tookLife = true;
+            addLog(attack.targetAtZeroHp ? tr("%1 dies.").arg(targetName)
+                                         : tr("%1 has %2 Hit Points or fewer and dies.")
+                                               .arg(targetName)
+                                               .arg(*attack.failureHpThreshold));
+        } else {
+            setHitPoints(*target, 0);
+            addLog(isCharacterCombatant(*target)
+                       ? tr("%1 has %2 Hit Points or fewer and drops to 0: dying.")
+                             .arg(targetName)
+                             .arg(*attack.failureHpThreshold)
+                       : tr("%1 has %2 Hit Points or fewer and drops to 0.")
+                             .arg(targetName)
+                             .arg(*attack.failureHpThreshold));
+        }
+        carryToSheet(*target);
+        damage.clear();
+    }
+    // "The target dies, and the wisp regains 10 (3d6) Hit Points."
+    if (!success && !attack.failureSelfHealing.empty() && (tookLife || !attack.failureHpThreshold.has_value())) {
+        if (const std::optional<Dice> dice = parseDice(attack.failureSelfHealing)) {
+            const HealingResult healed = applyHealing(*attacker, rollDice(*dice, dieRoller(), false));
+            addLog(tr("%1 regains %2 Hit Points (%3 HP).")
+                       .arg(QString::fromStdString(attacker->name))
+                       .arg(healed.healed)
+                       .arg(attacker->hp));
+            carryToSheet(*attacker);
+        }
+    }
+    // The Incubus's Nightmare: a target with few enough Hit Points falls
+    // Unconscious instead of taking the damage.
+    if (!success) {
+        for (const ConditionRider* rider : ridersFor(attack, kRiderOnFailure)) {
+            if (rider->targetMaxHp.has_value() && target->hp <= *rider->targetMaxHp) {
+                damage.clear();
+            }
+        }
+    }
+    bool dealtDamage = false;
+    if (totalDamage(damage) > 0) {
+        const DamageResult result = applyDamage(*target, damage);
+        dealtDamage = result.taken > 0;
+        afterDamage(*target, result, source);
+        if (attack.drain.has_value()) {
+            applyDrainTo(*attacker, *target, *attack.drain, damage, result);
+        }
+    }
+    if (!success && !target->dead) {
+        applyRiders(*attacker, *target, attack, failureRiders, RollMode::Normal, 0);
+        if (attack.riders.empty() && totalDamage(damage) == 0 && !attack.failureHpThreshold.has_value() &&
+            attack.failureSelfHealing.empty()) {
+            addLog(tr("Apply the effect's conditions to %1 by hand.").arg(targetName));
+        }
+    }
+    if (dealtDamage) {
+        if (prompt.wasBloodied && isMonsterCombatant(*attacker)) {
+            for (const std::string& ready : noteDamagedBloodied(*attacker)) {
+                addLog(tr("%1 damaged a creature that was already Bloodied: %2 can be used now.")
+                           .arg(QString::fromStdString(attacker->name), QString::fromStdString(ready)));
+            }
+        }
+        endByEvents(*attacker, {kEndsOnDealsDamage});
     }
 }
 

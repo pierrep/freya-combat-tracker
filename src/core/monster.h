@@ -226,10 +226,16 @@ struct MonsterAttack {
     std::string targetMaxSize{};
     // Only these creature types ("humanoid" for Charm Person); empty is any.
     std::vector<std::string> targetTypes{};
+    // Never these ("one living creature" skips Undead and Constructs).
+    std::vector<std::string> targetExceptTypes{};
+    // Only a creature with 0 Hit Points (the Will-o'-Wisp's Consume Life).
+    bool targetAtZeroHp = false;
     // On a failed save, a target with this many Hit Points or fewer drops to
     // 0 (Death Glare) or dies (Slaying Bow) instead of taking the damage.
     std::optional<int> failureHpThreshold{};
     std::string failureHpEffect{};  // "dropsToZero" or "dies"
+    // A failed save heals the monster this much ("the wisp regains 10 (3d6)").
+    std::string failureSelfHealing{};
     std::vector<ConditionRider> riders{};
     // An attack roll whose hit makes the target save before its riders
     // ("If the target is a creature, it is subjected to the following effect").

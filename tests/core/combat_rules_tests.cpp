@@ -1059,6 +1059,104 @@ TEST_CASE("a drain lowers the Hit Point maximum, kills at 0, and can heal the mo
     CHECK(frail.dead);
 }
 
+TEST_CASE("a Charmed creature can't target its charmer, only other creatures")
+{
+    Combatant aria = hero();
+    Combatant vampire;
+    vampire.id = "vampire";
+    vampire.name = "Vampire";
+    Combatant spawn;
+    spawn.id = "spawn";
+    spawn.name = "Vampire Spawn";
+    CHECK(charmedProblem(aria, vampire).empty());
+    ActiveCondition charmed;
+    charmed.id = "charmed";
+    charmed.byId = "vampire";
+    aria.conditions.push_back(charmed);
+    CHECK(charmedProblem(aria, vampire).find("Charmed by Vampire") != std::string::npos);
+    CHECK(charmedProblem(aria, spawn).empty());
+    // Charmed added by hand, with no known charmer, blocks nothing.
+    Combatant bryn = hero();
+    addCondition(bryn, "charmed");
+    CHECK(charmedProblem(bryn, vampire).empty());
+}
+
+TEST_CASE("a grapple keeps its escape DC, and the better of Athletics and Acrobatics is used to escape")
+{
+    ActiveCondition old;
+    old.id = "grappled";
+    old.source = "Vampire's Grave Strike, escape DC 14";
+    CHECK(grappleEscapeDc(old) == std::optional<int>{14});  // saved before the DC had its own field
+    ActiveCondition plainGrapple;
+    plainGrapple.id = "grappled";
+    CHECK(!grappleEscapeDc(plainGrapple).has_value());
+
+    Character sheet;
+    sheet.abilities.strength = 16;   // +3
+    sheet.abilities.dexterity = 12;  // +1
+    sheet.skills.acrobatics = true;  // +1 + 2
+    Combatant aria = hero();
+    EscapeCheck check = escapeCheck(aria, &sheet);
+    CHECK_EQ(check.skill, std::string("Athletics"));
+    CHECK_EQ(check.bonus, 3);
+    sheet.abilities.dexterity = 18;  // +4 + 2
+    check = escapeCheck(aria, &sheet);
+    CHECK_EQ(check.skill, std::string("Acrobatics"));
+    CHECK_EQ(check.bonus, 6);
+
+    ActiveCondition grappled;
+    grappled.id = "grappled";
+    grappled.byId = "vampire";
+    aria.conditions.push_back(grappled);
+    CHECK(!escapeGrapple(aria, "spawn"));
+    CHECK(escapeGrapple(aria, "vampire"));
+    CHECK(!hasCondition(aria, "grappled"));
+}
+
+TEST_CASE("the dead lose all their conditions")
+{
+    Combatant aria = hero();
+    addCondition(aria, "poisoned");
+    addCondition(aria, "prone");
+    killOutright(aria);
+    CHECK(aria.conditions.empty());
+
+    Monster goblin;
+    goblin.id = "goblin";
+    goblin.name = "Goblin";
+    goblin.hp = 7;
+    Combatant monster = makeMonsterCombatant(goblin, "goblin");
+    addCondition(monster, "frightened");
+    applyDamage(monster, 20, "slashing");
+    CHECK(monster.conditions.empty());
+
+    Combatant other = makeMonsterCombatant(goblin, "goblin-2");
+    addCondition(other, "restrained");
+    setHitPoints(other, 0);
+    CHECK(other.conditions.empty());
+}
+
+TEST_CASE("Consume Life needs a living creature at 0 Hit Points")
+{
+    MonsterAttack consume;
+    consume.name = "Consume Life";
+    consume.targetAtZeroHp = true;
+    consume.targetExceptTypes = {"undead", "construct"};
+    Combatant aria = hero();
+    CHECK(!targetRequirementProblem(consume, aria).empty());  // still standing
+    aria.hp = 0;
+    aria.stable = true;
+    addCondition(aria, "paralyzed");
+    CHECK(targetRequirementProblem(consume, aria).empty());
+    Monster zombie;
+    zombie.id = "zombie";
+    zombie.name = "Zombie";
+    zombie.creatureType = "Undead";
+    Combatant shambler = makeMonsterCombatant(zombie, "zombie");
+    shambler.hp = 0;
+    CHECK(targetRequirementProblem(consume, shambler).find("living") != std::string::npos);
+}
+
 TEST_CASE("Grappled by this monster means this one, and a list of conditions means any of them")
 {
     MonsterAttack consume;

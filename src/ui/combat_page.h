@@ -56,7 +56,13 @@ public:
         // ("did the boar move 20+ feet straight toward Aria?").
         // Hide: a monster took the Hide action; its Stealth check (auraName
         // holds the feature that granted it).
-        enum class Kind { Concentration, SaveToEnd, DeathSave, Aura, Rider, Hide };
+        // ActionSave: a monster's action calls for a save (a breath weapon,
+        // Consume Life, a hit's "subjected to the following effect"); the GM
+        // rolls it here or enters the table's result.
+        // Escape: a grappled creature spends its action on a Strength
+        // (Athletics) or Dexterity (Acrobatics) check against the grapple's
+        // escape DC (sourceId is the grappler; dc 0 when not known).
+        enum class Kind { Concentration, SaveToEnd, DeathSave, Aura, Rider, Hide, ActionSave, Escape };
         Kind kind = Kind::Concentration;
         std::string combatantId;
         std::string conditionId;
@@ -70,6 +76,17 @@ public:
         std::optional<MonsterAttack> attack;
         std::vector<std::size_t> riders;
         int refund = 0;
+        // An action save: the damage a failure deals (rolled once for an area,
+        // so every creature in it shares the roll), Advantage on the save (or,
+        // after a hit, on the attack roll), whether it follows a hit (the
+        // action's riderSave) rather than being the action's own save, and
+        // whether the target was Bloodied before the action (Rampage).
+        std::vector<TypedDamage> damage;
+        bool advantage = false;
+        bool afterHit = false;
+        bool wasBloodied = false;
+
+        bool operator==(const Prompt&) const = default;
     };
 
     CombatPage(CharacterStore& characters, MonsterCatalog& catalog, EncounterStore& encounters,
@@ -139,6 +156,9 @@ private:
     void rebuildPrompts();
     void rebuildActions(const Combatant& combatant);
     void addCharacterAttackRow(const Combatant& combatant);
+    // Each grapple on the creature, with an Escape button that spends its action.
+    void addEscapeRows(const Combatant& combatant);
+    void onEscapeClicked(const std::string& combatantId, const std::string& grapplerId);
     void onCharacterAttackClicked(const std::string& attackerId);
     void onCharacterHealClicked(const std::string& healerId);
     void rebuildConditionList(const Combatant& combatant);
@@ -193,6 +213,12 @@ private:
     void onFeatureClicked(const std::string& combatantId, FeatureKind kind, const MonsterFeature& feature);
     void armAction(ArmedAction action);
     void disarmAttack();
+    // Done choosing targets (Escape, or the action's button again).
+    void stopTargeting();
+    // While choosing targets, highlights the creatures picked so far.
+    void showArmedTargets();
+    // Selects one creature's row (and no others), without signals.
+    void selectRow(const std::string& id);
     void onTargetClicked(QTreeWidgetItem* item, int column);
     void resolveArmedOn(const std::string& targetId);
     void afterDamage(Combatant& target, const DamageResult& result, const QString& source);
@@ -231,6 +257,11 @@ private:
     void toggleAura(const std::string& monsterId, const std::string& auraName);
     void resolveAura(Combatant& target, const AuraCheck& check, bool saved);
     void resolvePrompt(std::size_t index, int outcome);
+    // Puts an action's save at the top of the page, or settles it at once
+    // when the target fails it automatically.
+    void askActionSave(Prompt prompt);
+    // outcome: 0 roll it, 1 saved, 2 failed, 4 failed by 5 or more.
+    void resolveActionSave(const Prompt& prompt, int outcome);
 
     // Undo helpers. capture() before a change; commit() after it pushes the
     // snapshot when something changed, saves, and redraws.
@@ -314,6 +345,11 @@ private:
     // The GM's ticks for an action's "or" and extra damage, by
     // choiceKey(attacker, action, condition). Cleared once the action is used.
     std::map<std::string, bool> m_damageChoices;
+    // The card's tab (Actions, Conditions, Details) last open for each
+    // creature, and the creature the card shows, so selecting it again
+    // returns to that tab.
+    std::map<std::string, int> m_tabByCombatant;
+    std::string m_cardCombatantId;
     // Ticked trait questions for attack rolls, by "<attacker>|<question key>".
     std::map<std::string, bool> m_rollTicks;
     QLabel* m_rollNote = nullptr;
@@ -379,6 +415,7 @@ private:
     QWidget* m_deathSavesHost = nullptr;
     QLabel* m_deathStatus = nullptr;
     QPushButton* m_stabilizeButton = nullptr;
+    QWidget* m_deathSaveButtons = nullptr;  // + success, − success, + failure, − failure
     QPushButton* m_removeButton = nullptr;
 
     // One row of the initiative list.
@@ -394,7 +431,6 @@ private:
     QGridLayout* m_entryGrid = nullptr;
     QLabel* m_entryCount = nullptr;
     QLabel* m_entryEmpty = nullptr;
-    QPushButton* m_entryStartButton = nullptr;
     QPushButton* m_backToEntryButton = nullptr;
     std::vector<InitiativeEntryRow> m_entryRows;
     std::string m_entryEncounterId;

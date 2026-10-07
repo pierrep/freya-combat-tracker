@@ -68,6 +68,8 @@ struct ActiveCondition {
     // (kOngoingAtTarget) or of the causing monster's turns (kOngoingAtSource).
     std::vector<DamagePart> ongoing{};
     std::string ongoingAt{};
+    // A grapple's escape DC ("Grappled (escape DC 14)").
+    std::optional<int> escapeDc{};
 
     bool operator==(const ActiveCondition&) const = default;
 };

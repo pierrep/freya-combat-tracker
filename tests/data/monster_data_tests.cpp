@@ -369,6 +369,28 @@ TEST_CASE("an SRD monster exposes a trait and a legendary action, and one withou
     CHECK(axeBeak->legendaryActions.empty());
 }
 
+TEST_CASE("the Will-o'-Wisp's Consume Life knows its target and what a failure does")
+{
+    const auto monsters = loadSrdMonsters(fs::path{COMBAT_TRACKER_SRD_DIR} / "monsters.json");
+    const MonsterAttack* consume = nullptr;
+    for (const Monster& monster : monsters) {
+        for (const MonsterFeature& feature : monster.bonusActions) {
+            if (monster.id == "will-o-wisp" && feature.name == "Consume Life" && feature.targeted.has_value()) {
+                consume = &*feature.targeted;
+            }
+        }
+    }
+    CHECK(consume != nullptr);
+    if (consume == nullptr) {
+        return;
+    }
+    CHECK(consume->targetAtZeroHp);
+    CHECK((consume->targetExceptTypes == std::vector<std::string>{"undead", "construct"}));
+    CHECK(consume->failureHpThreshold == std::optional<int>{0});
+    CHECK_EQ(consume->failureHpEffect, std::string("dies"));
+    CHECK_EQ(consume->failureSelfHealing, std::string("3d6"));
+}
+
 TEST_CASE("missing custom monster file loads as an empty list")
 {
     TempDir dir;

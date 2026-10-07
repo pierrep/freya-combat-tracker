@@ -8,6 +8,8 @@
 #include "ui/theme.h"
 
 #include <QApplication>
+#include <QIcon>
+#include <QSize>
 #include <QStringList>
 
 #include <fstream>
@@ -21,6 +23,15 @@ int main(int argc, char* argv[])
     combat::ui::applyTheme(app);
 
     QApplication::setApplicationDisplayName(QStringLiteral("Freya Combat Tracker"));
+    // The shield and d20, every size, for the title bar, task switcher, and
+    // dock; the desktop file name lets Wayland docks match the window to the
+    // installed entry.
+    QIcon icon;
+    for (const int size : {16, 22, 24, 32, 48, 64, 128, 256}) {
+        icon.addFile(QStringLiteral(":/icons/%1x%1/apps/freya-combat-tracker.png").arg(size), QSize(size, size));
+    }
+    QApplication::setWindowIcon(icon);
+    QGuiApplication::setDesktopFileName(QStringLiteral("freya-combat-tracker"));
 
     // No organization name, so AppDataLocation is <data root>/<application name>,
     // matching the folder names in the plan.

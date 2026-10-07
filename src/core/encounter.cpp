@@ -560,6 +560,18 @@ bool upgradeSrdSnapshot(Monster& stored, const Monster& catalog)
                 attack.failureHpEffect = fresh.failureHpEffect;
                 changed = true;
             }
+            if (attack.failureSelfHealing.empty() && !fresh.failureSelfHealing.empty()) {
+                attack.failureSelfHealing = fresh.failureSelfHealing;
+                changed = true;
+            }
+            if (!attack.targetAtZeroHp && fresh.targetAtZeroHp) {
+                attack.targetAtZeroHp = true;
+                changed = true;
+            }
+            if (attack.targetExceptTypes.empty() && !fresh.targetExceptTypes.empty()) {
+                attack.targetExceptTypes = fresh.targetExceptTypes;
+                changed = true;
+            }
             if (!attack.selfEffect.has_value() && fresh.selfEffect.has_value()) {
                 attack.selfEffect = fresh.selfEffect;
                 changed = true;
@@ -589,6 +601,29 @@ bool upgradeSrdSnapshot(Monster& stored, const Monster& catalog)
                 if (!feature.targeted.has_value() && fresh.targeted.has_value()) {
                     feature.targeted = fresh.targeted;
                     changed = true;
+                }
+                // Consume Life was aimed before it knew whom it can take and
+                // what a failure does.
+                if (feature.targeted.has_value() && fresh.targeted.has_value()) {
+                    MonsterAttack& aimed = *feature.targeted;
+                    const MonsterAttack& wanted = *fresh.targeted;
+                    if (!aimed.failureHpThreshold.has_value() && wanted.failureHpThreshold.has_value()) {
+                        aimed.failureHpThreshold = wanted.failureHpThreshold;
+                        aimed.failureHpEffect = wanted.failureHpEffect;
+                        changed = true;
+                    }
+                    if (aimed.failureSelfHealing.empty() && !wanted.failureSelfHealing.empty()) {
+                        aimed.failureSelfHealing = wanted.failureSelfHealing;
+                        changed = true;
+                    }
+                    if (!aimed.targetAtZeroHp && wanted.targetAtZeroHp) {
+                        aimed.targetAtZeroHp = true;
+                        changed = true;
+                    }
+                    if (aimed.targetExceptTypes.empty() && !wanted.targetExceptTypes.empty()) {
+                        aimed.targetExceptTypes = wanted.targetExceptTypes;
+                        changed = true;
+                    }
                 }
                 if (!feature.aura.has_value() && fresh.aura.has_value()) {
                     feature.aura = fresh.aura;

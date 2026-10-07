@@ -340,8 +340,11 @@ void readAttackFields(const json& value, MonsterAttack& attack, const std::strin
     attack.targetCondition = asciiLower(json_util::readOptionalString<Error>(value, "targetCondition", attackContext));
     attack.targetMaxSize = json_util::readOptionalString<Error>(value, "targetMaxSize", attackContext);
     attack.targetTypes = lowerList(json_util::readStringList<Error>(value, "targetTypes", attackContext));
+    attack.targetExceptTypes = lowerList(json_util::readStringList<Error>(value, "targetExceptTypes", attackContext));
+    attack.targetAtZeroHp = json_util::readBoolOr<Error>(value, "targetAtZeroHp", false, attackContext);
     attack.failureHpThreshold = json_util::readOptionalInt<Error>(value, "failureHpThreshold", attackContext);
     attack.failureHpEffect = json_util::readOptionalString<Error>(value, "failureHpEffect", attackContext);
+    attack.failureSelfHealing = json_util::readOptionalString<Error>(value, "failureSelfHealing", attackContext);
     attack.riders = readRiders(value, attackContext);
     attack.riderSave = readSave(value, "riderSave", attackContext);
     const auto drain = value.find("drain");
@@ -404,9 +407,18 @@ void writeAttackFields(json& row, const MonsterAttack& attack)
     if (!attack.targetTypes.empty()) {
         row["targetTypes"] = attack.targetTypes;
     }
+    if (!attack.targetExceptTypes.empty()) {
+        row["targetExceptTypes"] = attack.targetExceptTypes;
+    }
+    if (attack.targetAtZeroHp) {
+        row["targetAtZeroHp"] = true;
+    }
     if (attack.failureHpThreshold.has_value()) {
         row["failureHpThreshold"] = *attack.failureHpThreshold;
         row["failureHpEffect"] = attack.failureHpEffect;
+    }
+    if (!attack.failureSelfHealing.empty()) {
+        row["failureSelfHealing"] = attack.failureSelfHealing;
     }
     if (!attack.riders.empty()) {
         row["riders"] = ridersJson(attack.riders);

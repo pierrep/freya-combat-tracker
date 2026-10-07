@@ -1,6 +1,6 @@
 # Freya Combat Tracker
 
-A local desktop combat tracker for fifth edition (2024 rules, SRD 5.2.1), built with C++20 and Qt 6 Widgets. It runs offline, never logs in, and keeps everything in JSON files in your app data folder.
+A local desktop combat tracker for fifth edition (2024 rules, SRD 5.2.1), built with C++20 and Qt 6 Widgets. It runs offline, and keeps everything in JSON files in your app data folder.
 
 ## What it does
 
@@ -58,7 +58,7 @@ A local desktop combat tracker for fifth edition (2024 rules, SRD 5.2.1), built 
 | `src/ui` | `combat_ui` (static library) and `combat_app` (`freya-combat-tracker`) | `combat_core`, `combat_data`, Qt 6 Widgets |
 | `tests/core`, `tests/data` | `core_tests`, `data_tests` | No Qt; run without a display |
 | `tests/ui` | `ui_tests` | Drives the real pages offscreen |
-| `tools/build_srd_monsters.py` | Rebuilds `data/srd/monsters.json` | Python 3 and a 5e-database checkout |
+| `tools/build_srd_monsters.py` | Rebuilds `data/srd/monsters.json` | Python 3 and a 5e-srd-api checkout |
 
 ## Build
 
@@ -74,6 +74,8 @@ ctest --test-dir build --output-on-failure      # ui_tests runs with QT_QPA_PLAT
 `-DCOMBAT_TRACKER_BUILD_APP=OFF` builds only the Qt-free libraries and tests. Warnings are errors by default; `-DCOMBAT_TRACKER_WARNINGS_AS_ERRORS=OFF` relaxes that.
 
 `cmake --install build --prefix <dir>` installs the executable to `<dir>/bin` and the SRD files to `<dir>/share/freya-combat-tracker/srd`. The app looks for the SRD folder in `$FREYA_SRD_DIR`, then `../share/freya-combat-tracker/srd` and `srd` beside the executable, then the source tree it was built from.
+
+On Linux the install also adds a menu entry (`share/applications/freya-combat-tracker.desktop`) and the app icon in the hicolor theme (`share/icons/hicolor/<size>/apps/`). `cmake --install build --prefix ~/.local` puts it in your own menu; `~/.local/bin` must be on `PATH` for the entry to launch. The window icon is compiled into the app, so it shows even without installing. The PNGs are rendered from `data/icons/*.svg` by `tools/render_icons.py` (needs Python Playwright; set `CHROMIUM` to use a specific browser).
 
 ## Saved data
 
@@ -95,10 +97,12 @@ Edits are saved by writing a temporary file and renaming it over the old one; ty
 
 ## SRD data
 
-`data/srd/*.json` is SRD 5.2.1 material (CC-BY-4.0; see `data/srd/ATTRIBUTION.txt`). `monsters.json` is schemaVersion 2. `tools/build_srd_monsters.py` produced its structured fields from the stat-block text, and took damage and condition immunities, resistances, vulnerabilities, saving throws, and XP (and `spells.json` its spell components) from [5e-bits/5e-database](https://github.com/5e-bits/5e-database) (MIT), which is built from the same SRD. Rerun it with:
+`data/srd/*.json` is SRD 5.2.1 material (CC-BY-4.0; see `data/srd/ATTRIBUTION.txt`). `monsters.json` is schemaVersion 2. `tools/build_srd_monsters.py` produced its structured fields from the stat-block text, and took damage and condition immunities, resistances, vulnerabilities, saving throws, skills, and XP (and `spells.json` its spell components) from the 2024 data in [5e-bits/5e-srd-api](https://github.com/5e-bits/5e-srd-api/tree/main/packages/5e-database/src/2024/en) (`packages/5e-database`, MIT), which is built from the same SRD. (The separate 5e-bits/5e-database repository is deprecated.) Only that folder is needed:
 
 ```sh
-python3 tools/build_srd_monsters.py data/srd/monsters.json /path/to/5e-database/src/2024/en/5e-SRD-Monsters.json
+git clone --depth 1 --filter=blob:none --sparse https://github.com/5e-bits/5e-srd-api.git
+git -C 5e-srd-api sparse-checkout set packages/5e-database/src/2024/en
+python3 tools/build_srd_monsters.py data/srd/monsters.json 5e-srd-api/packages/5e-database/src/2024/en/5e-SRD-Monsters.json
 ```
 
 An ability that gives its user a condition carries a `selfEffect` (`condition`, `source`, `concentration`, `endsOn`), written by hand in the script's `SELF_EFFECTS` table. `endsOn` lists `attackRoll`, `saveEffect`, `verbalSpell`, `anySpell`, `dealsDamage`, or `action:<name>`.

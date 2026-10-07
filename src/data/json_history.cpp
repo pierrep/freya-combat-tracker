@@ -88,6 +88,22 @@ json promptJson(const HistoryPrompt& prompt)
     }
     row["riders"] = riders;
     row["refund"] = prompt.refund;
+    if (!prompt.damage.empty()) {
+        json damage = json::array();
+        for (const auto& [amount, type] : prompt.damage) {
+            damage.push_back(json{{"amount", amount}, {"type", type}});
+        }
+        row["damage"] = std::move(damage);
+    }
+    if (prompt.advantage) {
+        row["advantage"] = true;
+    }
+    if (prompt.afterHit) {
+        row["afterHit"] = true;
+    }
+    if (prompt.wasBloodied) {
+        row["wasBloodied"] = true;
+    }
     return row;
 }
 
@@ -114,6 +130,20 @@ HistoryPrompt promptFrom(const json& row, const std::string& context)
         }
     }
     prompt.refund = json_util::readIntOr<Error>(row, "refund", 0, context);
+    if (const auto damage = row.find("damage"); damage != row.end()) {
+        if (!damage->is_array()) {
+            throw Error(context + ": field \"damage\" must be an array.");
+        }
+        for (std::size_t i = 0; i < damage->size(); ++i) {
+            const std::string partContext = context + " damage " + std::to_string(i + 1);
+            json_util::requireObject<Error>((*damage)[i], partContext);
+            prompt.damage.emplace_back(json_util::readInt<Error>((*damage)[i], "amount", partContext),
+                                       json_util::readOptionalString<Error>((*damage)[i], "type", partContext));
+        }
+    }
+    prompt.advantage = json_util::readBoolOr<Error>(row, "advantage", false, context);
+    prompt.afterHit = json_util::readBoolOr<Error>(row, "afterHit", false, context);
+    prompt.wasBloodied = json_util::readBoolOr<Error>(row, "wasBloodied", false, context);
     return prompt;
 }
 

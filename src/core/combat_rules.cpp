@@ -61,6 +61,8 @@ void die(Combatant& combatant)
     combatant.stable = false;
     combatant.hp = 0;
     endConcentration(combatant);
+    // The dead have no conditions.
+    combatant.conditions.clear();
 }
 
 std::string baseActionName(const std::string& name)
@@ -176,6 +178,7 @@ DamageResult applyDamage(Combatant& combatant, const std::vector<TypedDamage>& p
                     }
                 } else {
                     result.died = true;
+                    combatant.conditions.clear();  // a monster at 0 HP is dead
                 }
             }
         }
@@ -237,6 +240,7 @@ void setHitPoints(Combatant& combatant, int current)
         becomeDying(combatant);
     } else if (next == 0 && combatant.hp > 0) {
         endConcentration(combatant);
+        combatant.conditions.clear();  // a monster at 0 HP is dead
     }
     combatant.hp = next;
 }
@@ -383,6 +387,17 @@ bool isGrappledBy(const Combatant& target, const std::string& grapplerId)
     return false;
 }
 
+std::string charmedProblem(const Combatant& actor, const Combatant& target)
+{
+    for (const ActiveCondition& condition : actor.conditions) {
+        if (condition.id == "charmed" && !condition.byId.empty() && condition.byId == target.id) {
+            return actor.name + " is Charmed by " + target.name + " and can't attack it or target it with "
+                   "harmful abilities or magic.";
+        }
+    }
+    return {};
+}
+
 std::string targetRequirementProblem(const MonsterAttack& attack, const Combatant& target, const std::string& species,
                                      const std::string& attackerId)
 {
@@ -447,6 +462,18 @@ std::string targetRequirementProblem(const MonsterAttack& attack, const Combatan
                    ".";
         }
     }
+    if (!attack.targetExceptTypes.empty()) {
+        const std::string type = creatureTypeKey(target);
+        if (std::find(attack.targetExceptTypes.begin(), attack.targetExceptTypes.end(), type) !=
+            attack.targetExceptTypes.end()) {
+            return name + " needs a living creature, and " + target.name + " is " +
+                   (std::string("aeiou").find(type[0]) != std::string::npos ? "an " : "a ") + capitalized(type) + ".";
+        }
+    }
+    if (attack.targetAtZeroHp && (target.hp > 0 || target.dead)) {
+        return name + " needs a creature with 0 Hit Points, and " + target.name + " has " + std::to_string(target.hp) +
+               ".";
+    }
     return {};
 }
 
@@ -499,6 +526,10 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
                         const MonsterAttack& attack, const ConditionRider& rider)
 {
     RiderOutcome outcome;
+    // Nothing more lands on a creature the hit killed.
+    if (target.dead || (isMonsterCombatant(target) && target.hp <= 0)) {
+        return outcome;
+    }
     // "Swallowed, and no longer Grappled."
     for (const std::string& id : rider.removes) {
         for (auto it = target.conditions.begin(); it != target.conditions.end();) {
@@ -522,6 +553,9 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
         condition.source = source;
         condition.byId = attacker.id;
         condition.tiedTo = rider.tiedTo;
+        if (condition.id == "grappled") {
+            condition.escapeDc = rider.escapeDc;
+        }
         condition.endsOn = rider.endsOn;
         if (rider.until == kUntilSourceStart) {
             condition.duration = makeDuration(encounter, attacker.id, TurnBoundary::Start, 1);
@@ -772,9 +806,17 @@ std::vector<std::string> describeActionRules(const MonsterAttack& attack)
     if (attack.advantageIfGrappled) {
         lines.push_back("Advantage against a creature it is grappling.");
     }
-    if (attack.failureHpThreshold.has_value()) {
+    if (attack.targetAtZeroHp) {
+        lines.push_back("Only a target with 0 Hit Points.");
+    }
+    if (attack.failureHpThreshold.has_value() && !attack.targetAtZeroHp) {
         lines.push_back("On a failure, a target with " + std::to_string(*attack.failureHpThreshold) +
                         (attack.failureHpEffect == "dies" ? " HP or fewer dies." : " HP or fewer drops to 0."));
+    } else if (attack.failureHpThreshold.has_value()) {
+        lines.push_back(attack.failureHpEffect == "dies" ? "On a failure, the target dies." : "On a failure, the target drops to 0.");
+    }
+    if (!attack.failureSelfHealing.empty()) {
+        lines.push_back("On a failure, the monster regains " + attack.failureSelfHealing + " Hit Points.");
     }
     if (attack.riderSave.has_value()) {
         lines.push_back("A hit makes the target roll a DC " + std::to_string(attack.riderSave->dc) + " " +
@@ -1217,6 +1259,61 @@ int hideCheckBonus(const Combatant& combatant)
                     : abilityModifier(combatant.statBlock->abilities.dexterity);
     }
     return bonus - d20Penalty(combatant);
+}
+
+std::optional<int> grappleEscapeDc(const ActiveCondition& condition)
+{
+    if (condition.escapeDc.has_value()) {
+        return condition.escapeDc;
+    }
+    // Saved before the DC was kept on its own: "Vampire's Grave Strike, escape DC 14".
+    const std::string marker = "escape DC ";
+    const auto at = condition.source.find(marker);
+    if (at == std::string::npos) {
+        return std::nullopt;
+    }
+    int dc = 0;
+    bool any = false;
+    for (std::size_t i = at + marker.size(); i < condition.source.size() && condition.source[i] >= '0' &&
+                                             condition.source[i] <= '9';
+         ++i) {
+        dc = dc * 10 + (condition.source[i] - '0');
+        any = true;
+    }
+    return any ? std::optional<int>{dc} : std::nullopt;
+}
+
+EscapeCheck escapeCheck(const Combatant& combatant, const Character* sheet)
+{
+    EscapeCheck athletics{0, "Athletics", Ability::Strength};
+    EscapeCheck acrobatics{0, "Acrobatics", Ability::Dexterity};
+    if (sheet != nullptr) {
+        const int proficiency = proficiencyBonus(*sheet);
+        athletics.bonus = abilityModifier(sheet->abilities.strength) + (sheet->skills.athletics ? proficiency : 0);
+        acrobatics.bonus = abilityModifier(sheet->abilities.dexterity) + (sheet->skills.acrobatics ? proficiency : 0);
+    } else if (combatant.statBlock.has_value()) {
+        const Monster& block = *combatant.statBlock;
+        const auto skill = [&block](const char* name, int score) {
+            const auto found = block.skills.find(name);
+            return found != block.skills.end() ? found->second : abilityModifier(score);
+        };
+        athletics.bonus = skill("athletics", block.abilities.strength);
+        acrobatics.bonus = skill("acrobatics", block.abilities.dexterity);
+    }
+    EscapeCheck best = acrobatics.bonus > athletics.bonus ? acrobatics : athletics;
+    best.bonus -= d20Penalty(combatant);
+    return best;
+}
+
+bool escapeGrapple(Combatant& combatant, const std::string& grapplerId)
+{
+    const auto before = combatant.conditions.size();
+    combatant.conditions.erase(std::remove_if(combatant.conditions.begin(), combatant.conditions.end(),
+                                              [&grapplerId](const ActiveCondition& condition) {
+                                                  return condition.id == "grappled" && condition.byId == grapplerId;
+                                              }),
+                               combatant.conditions.end());
+    return combatant.conditions.size() != before;
 }
 
 std::vector<std::string> conditionNotes(const ActiveCondition& condition, const Encounter& encounter)
