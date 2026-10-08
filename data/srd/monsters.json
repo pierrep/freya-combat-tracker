@@ -9709,6 +9709,9 @@
               "on": "failure",
               "until": "sourceStart"
             }
+          ],
+          "targetExceptTypes": [
+            "undead"
           ]
         },
         {
@@ -9732,6 +9735,9 @@
                 "sourceGone"
               ]
             }
+          ],
+          "targetTypes": [
+            "humanoid"
           ]
         }
       ],
@@ -13098,6 +13104,10 @@
               "on": "failure",
               "tiedTo": "charmed"
             }
+          ],
+          "targetTypes": [
+            "humanoid",
+            "giant"
           ]
         }
       ],
@@ -15322,7 +15332,10 @@
               "when": "always"
             }
           ],
-          "area": true
+          "area": true,
+          "targetExceptTypes": [
+            "undead"
+          ]
         },
         {
           "name": "Frightening Gaze",
@@ -25384,12 +25397,6 @@
         {
           "name": "Consume Life",
           "effect": "Constitution Saving Throw: DC 10, one living creature the wisp can see within 5 feet that has 0 Hit Points. Failure: The target dies, and the wisp regains 10 (3d6) Hit Points.",
-          "save": {
-            "ability": "constitution",
-            "dc": 10,
-            "onSuccess": "none"
-          },
-          "damage": [],
           "targetAtZeroHp": true,
           "targetExceptTypes": [
             "undead",
@@ -25397,7 +25404,13 @@
           ],
           "failureHpThreshold": 0,
           "failureHpEffect": "dies",
-          "failureSelfHealing": "3d6"
+          "failureSelfHealing": "3d6",
+          "save": {
+            "ability": "constitution",
+            "dc": 10,
+            "onSuccess": "none"
+          },
+          "damage": []
         },
         {
           "name": "Vanish",

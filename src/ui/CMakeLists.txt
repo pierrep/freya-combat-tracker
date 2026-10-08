@@ -12,6 +12,7 @@ add_library(combat_ui STATIC
     options_page.cpp
     effects_dialog.cpp
     flow_layout.cpp
+    dice_overlay.cpp
 )
 set_target_properties(combat_ui PROPERTIES AUTOMOC ON)
 target_include_directories(combat_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

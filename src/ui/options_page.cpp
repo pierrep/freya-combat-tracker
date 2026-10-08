@@ -17,6 +17,7 @@ namespace {
 
 const QString kGroupInitiativeKey = QStringLiteral("combat/groupInitiative");
 const QString kAutoPassKey = QStringLiteral("combat/autoPass");
+const QString kShowDiceKey = QStringLiteral("combat/showDice");
 
 // A choice with a line under it saying what it does.
 QWidget* option(QCheckBox* box, const QString& explanation)
@@ -68,6 +69,13 @@ OptionsPage::OptionsPage(QWidget* parent)
                              tr("Once a monster has used its action and has no attacks left, the turn goes to the "
                                 "next creature. Turn this off to end each turn yourself.")));
 
+    m_showDice = new QCheckBox(tr("Throw dice across the Dashboard"));
+    m_showDice->setObjectName(QStringLiteral("showDice"));
+    m_showDice->setChecked(true);
+    layout->addWidget(option(m_showDice,
+                             tr("The dice the app rolls (attacks, damage, saves, initiative) and the Dice tray's tumble "
+                                "across the Dashboard and show what they came up. The log has every roll either way.")));
+
     outer->addWidget(card);
     outer->addStretch(1);
 
@@ -79,6 +87,10 @@ OptionsPage::OptionsPage(QWidget* parent)
         save();
         emit autoPassChanged(on);
     });
+    connect(m_showDice, &QCheckBox::toggled, this, [this](bool on) {
+        save();
+        emit showDiceChanged(on);
+    });
 
 }
 
@@ -88,6 +100,12 @@ void OptionsPage::setFile(const QString& path)
     const QSettings settings(m_file, QSettings::IniFormat);
     m_groupInitiative->setChecked(settings.value(kGroupInitiativeKey, m_groupInitiative->isChecked()).toBool());
     m_autoPass->setChecked(settings.value(kAutoPassKey, m_autoPass->isChecked()).toBool());
+    m_showDice->setChecked(settings.value(kShowDiceKey, m_showDice->isChecked()).toBool());
+}
+
+bool OptionsPage::showDice() const
+{
+    return m_showDice->isChecked();
 }
 
 bool OptionsPage::groupInitiative() const
@@ -108,6 +126,7 @@ void OptionsPage::save()
     QSettings settings(m_file, QSettings::IniFormat);
     settings.setValue(kGroupInitiativeKey, m_groupInitiative->isChecked());
     settings.setValue(kAutoPassKey, m_autoPass->isChecked());
+    settings.setValue(kShowDiceKey, m_showDice->isChecked());
 }
 
 }  // namespace combat::ui

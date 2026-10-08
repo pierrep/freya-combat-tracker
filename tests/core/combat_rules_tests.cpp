@@ -1154,7 +1154,7 @@ TEST_CASE("Consume Life needs a living creature at 0 Hit Points")
     zombie.creatureType = "Undead";
     Combatant shambler = makeMonsterCombatant(zombie, "zombie");
     shambler.hp = 0;
-    CHECK(targetRequirementProblem(consume, shambler).find("living") != std::string::npos);
+    CHECK(targetRequirementProblem(consume, shambler).find("doesn't affect Undead") != std::string::npos);
 }
 
 TEST_CASE("Grappled by this monster means this one, and a list of conditions means any of them")

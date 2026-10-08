@@ -20,10 +20,12 @@ public:
 
     bool groupInitiative() const;
     bool autoPass() const;
+    bool showDice() const;
 
 signals:
     void groupInitiativeChanged(bool on);
     void autoPassChanged(bool on);
+    void showDiceChanged(bool on);
 
 private:
     void save();
@@ -31,6 +33,7 @@ private:
     QString m_file;
     QCheckBox* m_groupInitiative = nullptr;
     QCheckBox* m_autoPass = nullptr;
+    QCheckBox* m_showDice = nullptr;
 };
 
 }  // namespace combat::ui

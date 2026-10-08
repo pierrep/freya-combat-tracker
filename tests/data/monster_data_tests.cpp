@@ -391,6 +391,41 @@ TEST_CASE("the Will-o'-Wisp's Consume Life knows its target and what a failure d
     CHECK_EQ(consume->failureSelfHealing, std::string("3d6"));
 }
 
+TEST_CASE("saves that only some creature types take carry those types")
+{
+    const auto monsters = loadSrdMonsters(fs::path{COMBAT_TRACKER_SRD_DIR} / "monsters.json");
+    const auto action = [&monsters](const std::string& id, const std::string& name) -> const MonsterAttack* {
+        for (const Monster& monster : monsters) {
+            for (const MonsterAttack& attack : monster.attacks) {
+                if (monster.id == id && attack.name.rfind(name, 0) == 0) {
+                    return &attack;
+                }
+            }
+            for (const MonsterFeature& feature : monster.legendaryActions) {
+                if (monster.id == id && feature.name.rfind(name, 0) == 0 && feature.targeted.has_value()) {
+                    return &*feature.targeted;
+                }
+            }
+        }
+        return nullptr;
+    };
+    const MonsterAttack* visage = action("ghost", "Horrific Visage");
+    const MonsterAttack* possession = action("ghost", "Possession");
+    const MonsterAttack* song = action("harpy", "Luring Song");
+    const MonsterAttack* disrupt = action("lich", "Disrupt Life");
+    CHECK(visage != nullptr);
+    CHECK(possession != nullptr);
+    CHECK(song != nullptr);
+    CHECK(disrupt != nullptr);
+    if (visage == nullptr || possession == nullptr || song == nullptr || disrupt == nullptr) {
+        return;
+    }
+    CHECK((visage->targetExceptTypes == std::vector<std::string>{"undead"}));
+    CHECK((possession->targetTypes == std::vector<std::string>{"humanoid"}));
+    CHECK((song->targetTypes == std::vector<std::string>{"humanoid", "giant"}));
+    CHECK((disrupt->targetExceptTypes == std::vector<std::string>{"undead"}));
+}
+
 TEST_CASE("missing custom monster file loads as an empty list")
 {
     TempDir dir;

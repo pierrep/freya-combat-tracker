@@ -101,6 +101,8 @@ MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, Cus
     m_combat->setAutoPass(m_options->autoPass());
     connect(m_options, &OptionsPage::groupInitiativeChanged, m_combat, &CombatPage::setGroupInitiative);
     connect(m_options, &OptionsPage::autoPassChanged, m_combat, &CombatPage::setAutoPass);
+    m_combat->setShowDice(m_options->showDice());
+    connect(m_options, &OptionsPage::showDiceChanged, m_combat, &CombatPage::setShowDice);
 
     auto* central = new QWidget;
     auto* layout = new QHBoxLayout(central);

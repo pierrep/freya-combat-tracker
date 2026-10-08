@@ -10,11 +10,14 @@ runtime. It:
 - adds, per action: attackBonus, save (ability, dc, onSuccess), damage parts
   (dice, type, when), recharge, perDay, area, and inMultiattack;
 - corrects Multiattack counts the prose numbers differently;
-- adds legendaryActionUses, and, from a 5e-database checkout (MIT, itself built
-  from the SRD 5.2.1), damage resistances, immunities, vulnerabilities,
-  condition immunities, saving-throw bonuses, and XP.
+- adds legendaryActionUses, and, from the 2024 data in a 5e-bits/5e-srd-api
+  checkout (packages/5e-database, MIT, itself built from the SRD 5.2.1;
+  https://github.com/5e-bits/5e-srd-api/tree/main/packages/5e-database/src/2024/en),
+  damage resistances, immunities, vulnerabilities, condition immunities,
+  saving-throw bonuses, skills, and XP. (The separate 5e-bits/5e-database
+  repository is deprecated.)
 
-Usage: build_srd_monsters.py <monsters.json> <5e-database/src/2024/en/5e-SRD-Monsters.json>
+Usage: build_srd_monsters.py <monsters.json> <5e-srd-api/packages/5e-database/src/2024/en/5e-SRD-Monsters.json>
 The file is rewritten in place.
 """
 import json
@@ -264,6 +267,11 @@ TARGET_RULES = {
     ("sea-hag", "Death Glare"): {"targetCondition": "frightened", "failureHpThreshold": 20,
                                  "failureHpEffect": "dropsToZero"},
     ("solar", "Slaying Bow"): {"failureHpThreshold": 100, "failureHpEffect": "dies"},
+    # "One living creature ... that has 0 Hit Points. Failure: The target dies,
+    # and the wisp regains 10 (3d6) Hit Points."
+    ("will-o-wisp", "Consume Life"): {"targetAtZeroHp": True, "targetExceptTypes": ["undead", "construct"],
+                                      "failureHpThreshold": 0, "failureHpEffect": "dies",
+                                      "failureSelfHealing": "3d6"},
     ("chuul", "Paralyzing Tentacles"): {"targetCondition": "grappled"},
     ("glabrezu", "Pummel"): {"targetCondition": "grappled"},
     ("kraken", "Swallow"): {"targetCondition": "grappled"},
@@ -276,13 +284,65 @@ TARGET_RULES = {
 def apply_target_rules(document, report):
     found = set()
     for monster in document["monsters"]:
-        for row in monster.get("attacks", []):
+        rows = [row for part in ("attacks", "bonusActions", "reactions", "legendaryActions")
+                for row in monster.get(part, [])]
+        for row in rows:
             key = (monster["id"], re.sub(r"\s*\(.*\)$", "", row["name"]))
             if key in TARGET_RULES:
                 row.update(TARGET_RULES[key])
                 found.add(key)
     for key in sorted(set(TARGET_RULES) - found):
         report.append(f"no action for target rule {key}")
+
+
+CREATURE_TYPES = ["Aberration", "Beast", "Celestial", "Construct", "Dragon", "Elemental", "Fey", "Fiend",
+                  "Giant", "Humanoid", "Monstrosity", "Ooze", "Plant", "Undead"]
+_TYPE = "(" + "|".join(CREATURE_TYPES) + ")s?"
+
+
+def target_clause(effect):
+    """The sentence naming whom a save affects: 'DC 13, each creature in a
+    60-foot Cone that can see the ghost and isn't an Undead.'"""
+    match = re.search(r"Saving Throw: DC \d+, (.*?)(?:\. (?:Failure|Success|First Failure)|$)", effect)
+    return match.group(1) if match else ""
+
+
+def type_limits(effect):
+    """(only these types, never these types) from the target clause:
+    'one Humanoid', 'each Humanoid and Giant', 'isn't an Undead or a Construct'."""
+    clause = target_clause(effect).replace("\u2019", "'")
+    only, never = [], []
+    for found in re.finditer(r"isn't (?:an? )?" + _TYPE + r"((?: or (?:an? )?" + _TYPE + r")*)", clause):
+        never.append(found.group(1).lower())
+        never += [t.lower() for t in re.findall(_TYPE, found.group(2))]
+    lead = re.match(r"(?:one|each|up to \w+) " + _TYPE + r"((?:,? (?:and|or) " + _TYPE + r")*)\b", clause)
+    if lead:
+        only.append(lead.group(1).lower())
+        only += [t.lower() for t in re.findall(_TYPE, lead.group(2))]
+    return only, never
+
+
+def apply_type_limits(document, report):
+    """Whom a save can affect, by creature type, written onto the action (or
+    the aimed feature) so the app turns the rest away: the Ghost's Horrific
+    Visage skips Undead; its Possession takes only a Humanoid."""
+    count = 0
+    for monster in document["monsters"]:
+        for part in ("attacks", "bonusActions", "reactions", "legendaryActions"):
+            for row in monster.get(part, []):
+                aimed = row.get("targeted", row)
+                if "save" not in aimed:
+                    continue
+                only, never = type_limits(row.get("effect", ""))
+                if only and not aimed.get("targetTypes"):
+                    aimed["targetTypes"] = only
+                    count += 1
+                if never and not aimed.get("targetExceptTypes"):
+                    aimed["targetExceptTypes"] = never
+                    count += 1
+                if only or never:
+                    report.append(f"type limit {monster['id']}/{row['name']}: only {only} never {never}")
+    report.append(f"type limits: {count}")
 
 
 def apply_auras(document, report):
@@ -782,7 +842,7 @@ def main(path, db_path):
                     monster["legendaryActionUses"] = int(uses.group(1))
         source = db.get(DB_ALIASES.get(monster["id"], monster["id"]))
         if source is None:
-            report.append(f"no 5e-database row for {monster['id']}")
+            report.append(f"no 5e-srd-api row for {monster['id']}")
             continue
         monster["damageResistances"] = defense_list(source.get("damage_resistances", []))
         monster["damageImmunities"] = defense_list(source.get("damage_immunities", []))
@@ -831,6 +891,7 @@ def main(path, db_path):
     apply_self_effects(document, report)
     apply_auras(document, report)
     apply_target_rules(document, report)
+    apply_type_limits(document, report)
     document["schemaVersion"] = 2
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(document, handle, ensure_ascii=False, indent=2)

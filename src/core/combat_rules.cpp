@@ -466,7 +466,11 @@ std::string targetRequirementProblem(const MonsterAttack& attack, const Combatan
         const std::string type = creatureTypeKey(target);
         if (std::find(attack.targetExceptTypes.begin(), attack.targetExceptTypes.end(), type) !=
             attack.targetExceptTypes.end()) {
-            return name + " needs a living creature, and " + target.name + " is " +
+            std::string never;
+            for (const std::string& except : attack.targetExceptTypes) {
+                never += (never.empty() ? "" : " or ") + capitalized(except);
+            }
+            return name + " doesn't affect " + never + ", and " + target.name + " is " +
                    (std::string("aeiou").find(type[0]) != std::string::npos ? "an " : "a ") + capitalized(type) + ".";
         }
     }

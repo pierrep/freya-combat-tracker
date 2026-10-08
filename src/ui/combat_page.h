@@ -4,6 +4,7 @@
 #include "core/combat_rules.h"
 #include "core/encounter.h"
 #include "core/sheet.h"
+#include "ui/dice_overlay.h"
 
 #include <QString>
 #include <QStringList>
@@ -16,6 +17,7 @@
 #include <vector>
 
 class QCheckBox;
+class QScrollArea;
 class QComboBox;
 class QFormLayout;
 class QFrame;
@@ -99,6 +101,8 @@ public:
     // Options page choices.
     void setGroupInitiative(bool on) { m_groupInitiative = on; }
     void setAutoPass(bool on) { m_autoPass = on; }
+    // Throws the dice the app rolls across the page (Options can turn it off).
+    void setShowDice(bool on) { m_showDice = on; }
     // Remembers the encounter shown here in this file, and opens it next time.
     void setStateFile(const QString& path);
     // Keeps the undo history and the log in this file between runs: written
@@ -213,6 +217,13 @@ private:
     void onFeatureClicked(const std::string& combatantId, FeatureKind kind, const MonsterFeature& feature);
     void armAction(ArmedAction action);
     void disarmAttack();
+    // The dice rolled since the last throw go across the page, captioned with
+    // the log lines they produced.
+    void flushDice();
+    // The dice tray: add a die, roll what is in it, empty it.
+    void addTrayDie(int sides);
+    void rollTray();
+    void refreshTray();
     // Done choosing targets (Escape, or the action's button again).
     void stopTargeting();
     // While choosing targets, highlights the creatures picked so far.
@@ -349,6 +360,25 @@ private:
     // creature, and the creature the card shows, so selecting it again
     // returns to that tab.
     std::map<std::string, int> m_tabByCombatant;
+
+    // Dice: the overlay they are thrown on, those rolled and not yet thrown,
+    // and where the log stood at the first of them.
+    DiceOverlay* m_diceOverlay = nullptr;
+    bool m_showDice = true;
+    std::vector<ThrownDie> m_rolledDice;
+    bool m_diceFlushPending = false;
+    qsizetype m_diceLogMark = 0;
+
+    // The dice tray: its panel, the dice in it (by sides), and its modifier.
+    QFrame* m_dicePanel = nullptr;
+    QPushButton* m_openDiceButton = nullptr;
+    QLabel* m_trayLabel = nullptr;
+    QSpinBox* m_trayModifier = nullptr;
+    std::map<int, int> m_tray;
+
+    // The Actions tab's scroll area, and whose actions it last showed.
+    QScrollArea* m_actionsScroll = nullptr;
+    std::string m_actionsShownId;
     std::string m_cardCombatantId;
     // Ticked trait questions for attack rolls, by "<attacker>|<question key>".
     std::map<std::string, bool> m_rollTicks;

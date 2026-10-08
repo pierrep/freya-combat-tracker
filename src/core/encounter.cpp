@@ -564,6 +564,11 @@ bool upgradeSrdSnapshot(Monster& stored, const Monster& catalog)
                 attack.failureSelfHealing = fresh.failureSelfHealing;
                 changed = true;
             }
+            // Whom it can affect by creature type (Horrific Visage skips Undead).
+            if (attack.targetTypes.empty() && !fresh.targetTypes.empty()) {
+                attack.targetTypes = fresh.targetTypes;
+                changed = true;
+            }
             if (!attack.targetAtZeroHp && fresh.targetAtZeroHp) {
                 attack.targetAtZeroHp = true;
                 changed = true;
@@ -622,6 +627,10 @@ bool upgradeSrdSnapshot(Monster& stored, const Monster& catalog)
                     }
                     if (aimed.targetExceptTypes.empty() && !wanted.targetExceptTypes.empty()) {
                         aimed.targetExceptTypes = wanted.targetExceptTypes;
+                        changed = true;
+                    }
+                    if (aimed.targetTypes.empty() && !wanted.targetTypes.empty()) {
+                        aimed.targetTypes = wanted.targetTypes;
                         changed = true;
                     }
                 }

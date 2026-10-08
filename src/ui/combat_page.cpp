@@ -35,7 +35,9 @@
 #include <QPen>
 #include <QPixmap>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
@@ -467,6 +469,18 @@ void paintD20(QPainter& painter, const QRectF& box)
         painter.drawLine(right, corner(degrees));
     }
     painter.restore();
+}
+
+// The Dice button's icon: the turn order's d20, small.
+QIcon diceIcon()
+{
+    const qreal scale = 2.0;
+    QPixmap pixmap(static_cast<int>(32 * scale), static_cast<int>(32 * scale));
+    pixmap.setDevicePixelRatio(scale);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    paintD20(painter, QRectF(4.0, 3.0, 24.0, 26.0));
+    return QIcon(pixmap);
 }
 
 // A tree header that draws some column titles as icons: the d20 for
@@ -1059,9 +1073,18 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_openHealButton->setObjectName(QStringLiteral("openHeal"));
     m_openHealButton->setToolTip(tr("Heal the selected creatures."));
     makeQuiet(m_openHealButton);
+
+    // Dice to roll by hand, thrown across the page like the app's own.
+    m_openDiceButton = new QPushButton(diceIcon(), tr("Dice"));
+    m_openDiceButton->setObjectName(QStringLiteral("openDice"));
+    m_openDiceButton->setToolTip(tr("Roll dice by hand."));
+    makeQuiet(m_openDiceButton);
+
+    orderHeader->addWidget(m_openDiceButton);
     orderHeader->addWidget(m_openDamageButton);
     orderHeader->addWidget(m_openHealButton);
     static_cast<QVBoxLayout*>(orderCard->layout())->addLayout(orderHeader);
+
     // Status takes the spare width; nothing overflows, so the list never
     // scrolls sideways when a row is picked.
     m_initiativeList = makeCombatantTree({tr("Init"), tr("Name"), tr("AC"), tr("HP"), tr("Status")}, 4);
@@ -1069,6 +1092,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_initiativeList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_initiativeList->setTextElideMode(Qt::ElideRight);
     m_initiativeList->headerItem()->setTextAlignment(0, Qt::AlignRight | Qt::AlignVCenter);
+
     // Initiative as a d20 and "AC" on a small version of the card's shield.
     m_initiativeList->setHeader(
         new IconHeader({{0, IconHeader::Icon::D20}, {2, IconHeader::Icon::Shield}}, m_initiativeList));
@@ -1112,6 +1136,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_logList = new QListWidget;
     m_logList->setObjectName(QStringLiteral("fightLog"));
     m_logList->setWordWrap(true);
+
     // Never shorter than three lines; a long turn order takes the rest.
     m_logList->setMinimumHeight(3 * (QFontMetrics(m_logList->font()).lineSpacing() + 4) + 2 * m_logList->frameWidth());
     QFont logFont = m_logList->font();
@@ -1119,6 +1144,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_logList->setFont(logFont);
     m_downList->setFont(logFont);
     m_logList->setProperty("compact", true);
+
     // Lines wrap to the card's width; the wheel or the scroll bar shows older lines.
     m_logList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_logList->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -1363,6 +1389,67 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(m_openDamageButton, &QPushButton::clicked, this, [this] { openHitPanel(false); });
     connect(m_openHealButton, &QPushButton::clicked, this, [this] { openHitPanel(true); });
 
+    // The dice tray: a die of each kind to add, a modifier, Roll and Clear.
+    m_dicePanel = new QFrame;
+    m_dicePanel->setObjectName(QStringLiteral("dicePanel"));
+    m_dicePanel->setProperty("role", QStringLiteral("tile"));
+    auto* tray = new QVBoxLayout(m_dicePanel);
+    tray->setContentsMargins(12, 10, 12, 10);
+    tray->setSpacing(8);
+    auto* kinds = new QHBoxLayout;
+    kinds->setSpacing(6);
+    for (const int sides : {4, 6, 8, 10, 12, 20, 100}) {
+        auto* die = new QPushButton(sides == 100 ? tr("d%") : tr("d%1").arg(sides));
+        die->setObjectName(QStringLiteral("trayDie"));
+        die->setProperty("sides", sides);
+        die->setToolTip(sides == 100 ? tr("Add a percentile roll (d100).") : tr("Add a d%1.").arg(sides));
+        connect(die, &QPushButton::clicked, this, [this, sides] { addTrayDie(sides); });
+        kinds->addWidget(die);
+    }
+    kinds->addStretch(1);
+    tray->addLayout(kinds);
+    auto* trayRow = new QHBoxLayout;
+    trayRow->setSpacing(8);
+    m_trayLabel = makeMuted(QString());
+    m_trayLabel->setObjectName(QStringLiteral("trayDice"));
+    trayRow->addWidget(m_trayLabel, 1);
+    trayRow->addWidget(makeMuted(tr("Modifier")));
+    m_trayModifier = makeNumberBox(-99, 99);
+    m_trayModifier->setObjectName(QStringLiteral("trayModifier"));
+    trayRow->addWidget(m_trayModifier);
+    auto* clearTray = new QPushButton(tr("Clear"));
+    clearTray->setObjectName(QStringLiteral("clearTray"));
+    makeQuiet(clearTray);
+    trayRow->addWidget(clearTray);
+    auto* rollTrayButton = new QPushButton(tr("Roll"));
+    rollTrayButton->setObjectName(QStringLiteral("rollTray"));
+    makePrimary(rollTrayButton);
+    trayRow->addWidget(rollTrayButton);
+    auto* closeTray = new QPushButton(tr("Close"));
+    makeQuiet(closeTray);
+    trayRow->addWidget(closeTray);
+    tray->addLayout(trayRow);
+    m_dicePanel->hide();
+    static_cast<QVBoxLayout*>(m_initiativeList->parentWidget()->layout())->insertWidget(1, m_dicePanel);
+    connect(m_openDiceButton, &QPushButton::clicked, this, [this] {
+        m_hitPanel->hide();
+        m_dicePanel->setVisible(!m_dicePanel->isVisible());
+        refreshTray();
+    });
+    connect(m_openDamageButton, &QPushButton::clicked, m_dicePanel, &QWidget::hide);
+    connect(m_openHealButton, &QPushButton::clicked, m_dicePanel, &QWidget::hide);
+    connect(clearTray, &QPushButton::clicked, this, [this] {
+        m_tray.clear();
+        m_trayModifier->setValue(0);
+        refreshTray();
+    });
+    connect(rollTrayButton, &QPushButton::clicked, this, &CombatPage::rollTray);
+    connect(closeTray, &QPushButton::clicked, m_dicePanel, &QWidget::hide);
+    refreshTray();
+
+    // Dice are thrown over the whole page, above everything on it.
+    m_diceOverlay = new DiceOverlay(this);
+
     m_detailTabs = new QTabWidget;
     m_detailTabs->setObjectName(QStringLiteral("combatantTabs"));
     // Not document mode: that draws a tab-bar base over the corner button.
@@ -1413,7 +1500,8 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_actionRows->setSpacing(8);
     actionsLayout->addWidget(m_actionsSection);
     actionsLayout->addStretch(1);
-    m_detailTabs->addTab(scrollingTab(actionsPage), tr("Actions"));
+    m_actionsScroll = scrollingTab(actionsPage);
+    m_detailTabs->addTab(m_actionsScroll, tr("Actions"));
 
     // Conditions tab: conditions, their durations, and concentration.
     auto* conditionsPage = new QWidget;
@@ -2242,12 +2330,90 @@ int CombatPage::rollD20()
 int CombatPage::rollDie(int sides)
 {
     std::uniform_int_distribution<int> face(1, std::max(1, sides));
-    return face(m_dice);
+    const int rolled = face(m_dice);
+    // Every die the app rolls is thrown across the page, once whatever rolled
+    // it has finished (an attack's d20 and its damage go together).
+    if (m_showDice && m_diceOverlay != nullptr) {
+        m_rolledDice.push_back(ThrownDie{sides, rolled});
+        if (!m_diceFlushPending) {
+            m_diceFlushPending = true;
+            m_diceLogMark = m_log.size();
+            QTimer::singleShot(0, this, &CombatPage::flushDice);
+        }
+    }
+    return rolled;
+}
+
+void CombatPage::flushDice()
+{
+    m_diceFlushPending = false;
+    std::vector<ThrownDie> dice;
+    dice.swap(m_rolledDice);
+    if (dice.empty() || m_diceOverlay == nullptr || !isVisible()) {
+        return;
+    }
+    // The lines the roll added to the log (newest first there), oldest first
+    // and without the round, at most two of them.
+    QStringList lines;
+    const qsizetype added = std::min<qsizetype>(m_log.size() - m_diceLogMark, 2);
+    for (qsizetype i = added - 1; i >= 0; --i) {
+        QString line = m_log.at(i);
+        static const QRegularExpression round(QStringLiteral("^R\\d+\\s+"));
+        line.remove(round);
+        lines << line;
+    }
+    m_diceOverlay->throwDice(dice, lines.join(QLatin1Char('\n')));
 }
 
 RollDie CombatPage::dieRoller()
 {
     return [this](int sides) { return rollDie(sides); };
+}
+
+void CombatPage::addTrayDie(int sides)
+{
+    ++m_tray[sides];
+    refreshTray();
+}
+
+void CombatPage::refreshTray()
+{
+    if (m_trayLabel == nullptr) {
+        return;
+    }
+    QStringList parts;
+    for (const auto& [sides, count] : m_tray) {
+        parts << (sides == 100 ? tr("%1d%").arg(count) : tr("%1d%2").arg(count).arg(sides));
+    }
+    m_trayLabel->setText(parts.isEmpty() ? tr("Click dice to add them (or just Roll for a d20).")
+                                         : parts.join(QStringLiteral(" + ")));
+}
+
+void CombatPage::rollTray()
+{
+    if (m_tray.empty()) {
+        m_tray[20] = 1;  // Roll on its own throws a d20
+    }
+    QStringList groups;
+    int total = 0;
+    for (const auto& [sides, count] : m_tray) {
+        QStringList faces;
+        for (int i = 0; i < count; ++i) {
+            const int face = rollDie(sides);
+            total += face;
+            faces << QString::number(face);
+        }
+        groups << tr("%1 (%2)").arg(sides == 100 ? tr("%1d%").arg(count) : tr("%1d%2").arg(count).arg(sides),
+                                    faces.join(QStringLiteral(", ")));
+    }
+    const int modifier = m_trayModifier->value();
+    total += modifier;
+    QString line = tr("Dice: %1").arg(groups.join(QStringLiteral(" + ")));
+    if (modifier != 0) {
+        line += modifier > 0 ? tr(" + %1").arg(modifier) : tr(" - %1").arg(-modifier);
+    }
+    addLog(tr("%1 = %2").arg(line).arg(total));
+    refreshTray();
 }
 
 Encounter* CombatPage::selectedEncounter()
@@ -2817,6 +2983,25 @@ void CombatPage::showConditionText()
 // The monster's stat block, with a button for each thing it can do now.
 void CombatPage::rebuildActions(const Combatant& combatant)
 {
+    // The rows are rebuilt after every click. The clicked button goes with
+    // them, and Qt would hand the focus to a later button and scroll to it
+    // (the Vampire's Legendary Actions): the focus waits on the scroll area,
+    // and the same creature keeps its scroll position.
+    if (QWidget* focus = QApplication::focusWidget(); focus != nullptr && m_actionsScroll->isAncestorOf(focus)) {
+        m_actionsScroll->setFocus(Qt::OtherFocusReason);
+    }
+    struct KeepScroll {
+        QScrollArea* scroll;
+        int value;
+        ~KeepScroll()
+        {
+            QScrollBar* bar = scroll->verticalScrollBar();
+            bar->setValue(value);
+            // Once the new rows are laid out, too.
+            QTimer::singleShot(0, scroll, [bar, keep = value] { bar->setValue(keep); });
+        }
+    } keepScroll{m_actionsScroll, combatant.id == m_actionsShownId ? m_actionsScroll->verticalScrollBar()->value() : 0};
+    m_actionsShownId = combatant.id;
     clearLayout(m_actionRows);
     const bool monster = isMonsterCombatant(combatant);
     m_actionsSection->setVisible(true);
@@ -2910,7 +3095,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                         hint = tr("Click the target to roll the attack.");
                     } else if (feature.targeted->area) {
                         text = tr("Targets…");
-                        hint = tr("Click each creature in the area; Escape when done.");
+                        hint = tr("Click each creature in the area; End (or Escape) when done.");
                     } else {
                         text = tr("Target…");
                         hint = tr("Click the target.");
@@ -3055,7 +3240,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
             hint = tr("Click the target to roll the attack.");
         } else if (attack.save.has_value() && attack.area) {
             buttonText = tr("Targets…");
-            hint = tr("Click each creature in the area; Escape when done.");
+            hint = tr("Click each creature in the area; End (or Escape) when done.");
         } else if (attack.save.has_value() || !attackDamageParts(attack).empty()) {
             buttonText = tr("Target…");
             hint = tr("Click the target.");
@@ -5069,7 +5254,15 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
         return;
     }
     if (target->dead || (isMonsterCombatant(*target) && !isInInitiative(*target))) {
-        addLog(tr("%1 is already down. Pick another target, or Escape.").arg(QString::fromStdString(target->name)));
+        addLog(tr("%1 is already down. Pick another target, or End.").arg(QString::fromStdString(target->name)));
+        return;
+    }
+    // A creature's own attacks and effects are aimed at others (Horrific
+    // Visage, a breath weapon); help (healing, a benefit) can be its own.
+    if (targetId == attacker->id && !armed.fixedHealing.has_value() && !armed.attack.benefit.has_value()) {
+        addLog(tr("%1 can't target itself with %2. Pick another target, or End.")
+                   .arg(QString::fromStdString(attacker->name),
+                        QString::fromStdString(armed.featureKind.has_value() ? armed.feature.name : armed.attack.name)));
         return;
     }
     // Charmed: no attacking the charmer, and nothing harmful aimed at it.
@@ -5077,7 +5270,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     if (!armed.fixedHealing.has_value() && !armed.attack.benefit.has_value()) {
         const std::string problem = charmedProblem(*attacker, *target);
         if (!problem.empty()) {
-            addLog(QString::fromStdString(problem) + tr(" Pick another target, or Escape."));
+            addLog(QString::fromStdString(problem) + tr(" Pick another target, or End."));
             return;
         }
     }
@@ -5089,7 +5282,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
             targetRequirementProblem(armed.attack, *target, sheet != nullptr ? sheet->species : std::string(),
                                      attacker->id);
         if (!problem.empty()) {
-            addLog(QString::fromStdString(problem) + tr(" Pick another target, or Escape."));
+            addLog(QString::fromStdString(problem) + tr(" Pick another target, or End."));
             return;
         }
     }
@@ -5231,8 +5424,10 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
         default:
             break;
         }
+        // A second d20 only with Advantage or Disadvantage: every die rolled is
+        // thrown on the page, and a straight roll throws one.
         const int first = rollD20();
-        const int second = rollD20();
+        const int second = mode == RollMode::Normal ? first : rollD20();
         const int face = pickD20(mode, first, second);
         const AttackRoll roll = resolveAttackRoll(*attack.attackBonus, target->ac, d20Penalty(*attacker), face);
         const bool critical = roll.critical || (roll.hit && melee && meleeHitIsCritical(*target));

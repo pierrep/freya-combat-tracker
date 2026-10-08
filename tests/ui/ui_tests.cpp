@@ -8,6 +8,7 @@
 #include "data/json_sheet.h"
 #include "test_harness.h"
 #include "ui/combat_page.h"
+#include "ui/dice_overlay.h"
 #include "ui/main_window.h"
 #include "ui/monsters_page.h"
 
@@ -16,7 +17,11 @@
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QEvent>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
+#include <QThread>
+#include <QElapsedTimer>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
@@ -1692,6 +1697,152 @@ TEST_CASE("after its breath weapon, a dragon with nothing left passes its turn o
     CHECK(app.find<QLabel>("promptText")->text().contains(QStringLiteral("Cold Breath")));
 }
 
+TEST_CASE("using the Vampire's Multiattack and then an attack keeps the Actions tab where it was")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {300, 300};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Castle";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "vampire"), "vampire"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 5;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->resize(1100, 640);  // short enough that the actions scroll
+    app.window->show();
+    app.window->activateWindow();  // so buttons take the focus, as with a mouse
+    QApplication::processEvents();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("vampire");
+    QScrollBar* bar = nullptr;
+    for (QScrollArea* area : app.window->findChildren<QScrollArea*>()) {
+        if (area->isVisible() && area->isAncestorOf(app.window->findChildren<QPushButton*>(QStringLiteral("rollAttackDamage")).front())) {
+            bar = area->verticalScrollBar();
+        }
+    }
+    CHECK(bar != nullptr);
+    CHECK(bar->maximum() > 0);
+    const auto visibleButton = [&app](const QString& text) -> QPushButton* {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        for (QPushButton* button : app.window->findChildren<QPushButton*>(QStringLiteral("rollAttackDamage"))) {
+            if (button->isVisible() && button->isEnabled() && button->text() == text) {
+                return button;
+            }
+        }
+        return nullptr;
+    };
+    QPushButton* multiattack = visibleButton(QStringLiteral("Multiattack"));
+    CHECK(multiattack != nullptr);
+    multiattack->setFocus(Qt::MouseFocusReason);  // as a mouse click does
+    multiattack->click();
+    for (int k = 0; k < 5; ++k) { QApplication::processEvents(); QCoreApplication::sendPostedEvents(); }
+    CHECK_EQ(bar->value(), 0);
+    QPushButton* attack = visibleButton(QStringLiteral("Attack"));
+    CHECK(attack != nullptr);
+    attack->setFocus(Qt::MouseFocusReason);
+    attack->click();
+    for (int k = 0; k < 5; ++k) { QApplication::processEvents(); QCoreApplication::sendPostedEvents(); }
+    app.clickTarget("aria");
+    for (int k = 0; k < 5; ++k) { QApplication::processEvents(); QCoreApplication::sendPostedEvents(); }
+    CHECK_EQ(bar->value(), 0);  // not down at the Legendary Actions
+}
+
+TEST_CASE("the Ghost's Horrific Visage can't target the ghost itself")
+{
+    App app;
+    Character aria = fighter();
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Manor";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "ghost"), "ghost"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 5;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("ghost");
+    QPushButton* visage = nullptr;
+    for (QPushButton* candidate : app.window->findChildren<QPushButton*>(QStringLiteral("rollAttackDamage"))) {
+        for (QLabel* label : candidate->parentWidget()->parentWidget()->findChildren<QLabel*>()) {
+            if (candidate->isVisible() && label->text().startsWith(QStringLiteral("Horrific Visage"))) {
+                visage = candidate;
+            }
+        }
+    }
+    CHECK(visage != nullptr);
+    visage->click();
+    QApplication::processEvents();
+    app.clickTarget("ghost");
+    CHECK(app.window->findChild<QLabel*>(QStringLiteral("promptText")) == nullptr);
+    CHECK(!App::in(app.saved(), "ghost").economy.actionUsed);  // nothing spent on itself
+    auto* list = app.find<QTreeWidget>("initiativeList");
+    CHECK(list->selectedItems().isEmpty());  // and its row is not highlighted
+    bool said = false;
+    auto* log = app.find<QListWidget>("fightLog");
+    for (int i = 0; i < log->count(); ++i) {
+        said = said || log->item(i)->text().contains(QStringLiteral("can't target itself"));
+    }
+    CHECK(said);
+
+    app.clickTarget("aria");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    CHECK(app.find<QLabel>("promptText")->text().contains(QStringLiteral("Aria")));
+    CHECK_EQ(list->selectedItems().size(), qsizetype{1});
+}
+
+TEST_CASE("Horrific Visage doesn't affect Undead: the Vampire is turned away, Aria saves")
+{
+    App app;
+    Character aria = fighter();
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Manor";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "ghost"), "ghost"));
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "vampire"), "vampire"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    encounter.combatants[2].initiative = 5;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("ghost");
+    QPushButton* visage = nullptr;
+    for (QPushButton* candidate : app.window->findChildren<QPushButton*>(QStringLiteral("rollAttackDamage"))) {
+        for (QLabel* label : candidate->parentWidget()->parentWidget()->findChildren<QLabel*>()) {
+            if (candidate->isVisible() && label->text().startsWith(QStringLiteral("Horrific Visage"))) {
+                visage = candidate;
+            }
+        }
+    }
+    CHECK(visage != nullptr);
+    visage->click();
+    QApplication::processEvents();
+    app.clickTarget("vampire");
+    CHECK(app.window->findChild<QLabel*>(QStringLiteral("promptText")) == nullptr);
+    bool said = false;
+    auto* log = app.find<QListWidget>("fightLog");
+    for (int i = 0; i < log->count(); ++i) {
+        said = said || log->item(i)->text().contains(QStringLiteral("doesn't affect Undead"));
+    }
+    CHECK(said);
+    app.clickTarget("aria");
+    app.answer("promptFailed");
+    const Encounter after = app.saved();
+    CHECK(!hasCondition(App::in(after, "vampire"), "frightened"));
+    CHECK(hasCondition(App::in(after, "aria"), "frightened"));
+}
+
 TEST_CASE("ending an action that is still choosing targets selects its user again")
 {
     App app;
@@ -1745,6 +1896,99 @@ TEST_CASE("an empty Dashboard with no encounters shows no round or turn")
     CHECK(app.find<QLabel>("roundLabel")->text().isEmpty());
     CHECK(app.find<QLabel>("activeCombatant")->text().isEmpty());
     CHECK(!app.find<QPushButton>("nextTurn")->isEnabled());
+}
+
+TEST_CASE("thrown dice settle by tipping onto the face nearest the viewer, which shows the roll")
+{
+    QWidget page;
+    page.resize(900, 640);
+    page.show();
+    ui::DiceOverlay overlay(&page);
+    std::vector<ui::ThrownDie> dice;
+    for (const int sides : {4, 6, 8, 10, 12, 20, 20, 20, 100}) {
+        dice.push_back(ui::ThrownDie{sides, sides == 100 ? 47 : sides - 1});
+    }
+    for (int round = 0; round < 3; ++round) {
+        overlay.throwDice(dice, QString());
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < 1800) {
+            QApplication::processEvents();
+            QThread::msleep(4);
+        }
+        const std::vector<int> up = overlay.facesTowardViewer();
+        const std::vector<int> shown = overlay.shownFaces();
+        CHECK_EQ(up.size(), shown.size());
+        for (std::size_t i = 0; i < up.size() && i < shown.size(); ++i) {
+            // A percentile die's tens and units read 0-9 on faces numbered 1-10.
+            const bool percentile = i + 2 >= up.size();
+            CHECK_EQ(percentile ? up[i] % 10 : up[i], percentile ? (i + 2 == up.size() ? 4 : 7) : shown[i]);
+        }
+        CHECK(overlay.largestSettleTurn() < 75.0f);  // a tip, not a flip
+    }
+}
+
+TEST_CASE("the dice tray rolls by hand, and its dice and the app's are thrown across the page")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {300, 300};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Road";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "goblin-warrior"), "goblin"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 15;
+    encounter.combatants[1].initiative = 10;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    auto* overlay = app.find<ui::DiceOverlay>("diceOverlay");
+    CHECK(!overlay->active());
+
+    app.find<QPushButton>("openDice")->click();
+    QApplication::processEvents();
+    CHECK(app.find<QWidget>("dicePanel")->isVisible());
+    // With the option off, a roll is only logged.
+    app.find<QCheckBox>("showDice")->setChecked(false);
+    app.find<QPushButton>("rollTray")->click();  // an empty tray rolls a d20
+    QApplication::processEvents();
+    CHECK(!overlay->active());
+    CHECK(app.find<QListWidget>("fightLog")->item(0)->text().contains(QStringLiteral("1d20")));
+    app.find<QPushButton>("clearTray")->click();
+    app.find<QCheckBox>("showDice")->setChecked(true);
+    for (QPushButton* die : app.window->findChildren<QPushButton*>(QStringLiteral("trayDie"))) {
+        if (die->property("sides").toInt() == 6) {
+            die->click();
+            die->click();
+        }
+    }
+    CHECK(app.find<QLabel>("trayDice")->text() == QStringLiteral("2d6"));
+    app.find<QSpinBox>("trayModifier")->setValue(3);
+    app.find<QPushButton>("rollTray")->click();
+    QApplication::processEvents();
+    CHECK(overlay->active());
+    const std::vector<int> faces = overlay->shownFaces();
+    CHECK_EQ(faces.size(), std::size_t{2});
+    const int total = faces[0] + faces[1] + 3;
+    auto* log = app.find<QListWidget>("fightLog");
+    CHECK(log->item(0)->text().contains(QStringLiteral("2d6")));
+    CHECK(log->item(0)->text().endsWith(QStringLiteral("= %1").arg(total)));
+
+    // An attack throws its d20s (and its damage on a hit).
+    app.select("goblin");
+    app.button(QStringLiteral("Attack"))->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    QApplication::processEvents();
+    const std::vector<int> attack = overlay->shownFaces();
+    CHECK(!attack.empty());
+    CHECK(attack.front() >= 1);
+    CHECK(attack.front() <= 20);
+    // A straight roll throws one d20 (and its damage on a hit), not two.
+    const std::vector<int> kinds = overlay->shownSides();
+    CHECK_EQ(std::count(kinds.begin(), kinds.end(), 20), std::ptrdiff_t{1});
 }
 
 TEST_CASE("Death Glare cannot target a creature that is not Frightened")
