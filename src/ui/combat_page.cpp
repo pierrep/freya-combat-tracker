@@ -4590,6 +4590,7 @@ void CombatPage::addSelectedCondition()
     }
     PageUndo before = capture();
     const bool concentrating = !combatant->concentration.empty();
+    const bool hadIncapacitated = hasCondition(*combatant, "incapacitated");
     const QString name = QString::fromStdString(combatant->name);
     const QString what = conditionName(condition.id);
     if (condition.id == "invisible") {
@@ -4609,9 +4610,14 @@ void CombatPage::addSelectedCondition()
         logConditionsGone(*combatant, was, condition.id);
     }
     switch (addCondition(*combatant, condition)) {
-    case AddConditionResult::Added:
+    case AddConditionResult::Added: {
+        QString gained = what;
+        if (condition.id == "paralyzed" && !hadIncapacitated && hasCondition(*combatant, "incapacitated")) {
+            gained = tr("%1 and %2").arg(what, conditionName("incapacitated"));
+        }
         addLog(condition.id == "exhaustion" ? tr("%1 is at Exhaustion %2.").arg(name).arg(combatant->exhaustion)
-                                            : tr("%1 is %2.").arg(name, what));
+                                            : tr("%1 is %2.").arg(name, gained));
+    }
         if (concentrating && combatant->concentration.empty()) {
             addLog(tr("%1 loses concentration.").arg(name));
         }

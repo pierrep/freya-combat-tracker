@@ -203,7 +203,9 @@ enum class AddConditionResult { Added, Duplicate, Immune, Empty };
 
 // Adds the condition. A creature immune to it, an empty id, or a duplicate is
 // refused. Incapacitated, Paralyzed, Petrified, Stunned, and Unconscious end
-// concentration. Exhaustion is a level (setExhaustion), not a condition row.
+// concentration. Paralyzed also gives the Incapacitated condition, for the
+// same cause and duration; that Incapacitated ends when Paralyzed does.
+// Exhaustion is a level (setExhaustion), not a condition row.
 AddConditionResult addCondition(Combatant& combatant, ActiveCondition condition);
 AddConditionResult addCondition(Combatant& combatant, const std::string& conditionId);
 bool removeCondition(Combatant& combatant, const std::string& conditionId);

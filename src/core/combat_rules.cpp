@@ -38,6 +38,24 @@ void eraseCondition(Combatant& combatant, const std::string& id)
                                combatant.conditions.end());
 }
 
+// Paralyzed: "You have the Incapacitated condition." Same cause and duration,
+// and tied to Paralyzed, so releaseConditions ends it when Paralyzed does.
+// An Incapacitated condition already on the creature is left alone.
+void grantParalyzedIncapacitated(Combatant& combatant, const ActiveCondition& paralyzed)
+{
+    if (paralyzed.id != "paralyzed" || hasCondition(combatant, "incapacitated") ||
+        contains(combatant.conditionImmunities, "incapacitated")) {
+        return;
+    }
+    ActiveCondition included;
+    included.id = "incapacitated";
+    included.duration = paralyzed.duration;
+    included.source = paralyzed.source;
+    included.byId = paralyzed.byId;
+    included.tiedTo = paralyzed.id;
+    combatant.conditions.push_back(std::move(included));
+}
+
 void becomeDying(Combatant& combatant)
 {
     combatant.stable = false;
@@ -586,9 +604,13 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
             condition.ongoing = rider.ongoing;
             condition.ongoingAt = rider.ongoingAt;
         }
+        const bool hadIncapacitated = hasCondition(target, "incapacitated");
         switch (addCondition(target, std::move(condition))) {
         case AddConditionResult::Added:
             outcome.added.push_back(rider.conditions[i]);
+            if (rider.conditions[i] == "paralyzed" && !hadIncapacitated && hasCondition(target, "incapacitated")) {
+                outcome.added.push_back("incapacitated");
+            }
             break;
         case AddConditionResult::Immune:
             outcome.immune.push_back(rider.conditions[i]);
@@ -940,6 +962,7 @@ AddConditionResult addCondition(Combatant& combatant, ActiveCondition condition)
         endConcentration(combatant);
     }
     combatant.conditions.push_back(std::move(condition));
+    grantParalyzedIncapacitated(combatant, combatant.conditions.back());
     return AddConditionResult::Added;
 }
 

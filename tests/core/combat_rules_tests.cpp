@@ -253,6 +253,65 @@ TEST_CASE("conditions refuse duplicates and immunities, and exhaustion is a leve
     CHECK(!isInInitiative(combatant));
 }
 
+TEST_CASE("Paralyzed also gives the Incapacitated condition")
+{
+    Combatant aria = hero();
+    aria.concentration = "bless";
+    ActiveCondition paralyzed;
+    paralyzed.id = "paralyzed";
+    paralyzed.source = "Hold Person";
+    paralyzed.byId = "wizard";
+    paralyzed.duration = ConditionDuration{"wizard", TurnBoundary::End, 2, false};
+    CHECK_EQ(addCondition(aria, paralyzed), AddConditionResult::Added);
+    CHECK(aria.concentration.empty());
+    CHECK(hasCondition(aria, "paralyzed"));
+    CHECK(hasCondition(aria, "incapacitated"));
+    CHECK(isIncapacitated(aria));
+    const auto included = std::find_if(aria.conditions.begin(), aria.conditions.end(),
+                                       [](const ActiveCondition& row) { return row.id == "incapacitated"; });
+    CHECK(included != aria.conditions.end());
+    CHECK_EQ(included->tiedTo, std::string("paralyzed"));
+    CHECK_EQ(included->source, std::string("Hold Person"));
+    CHECK_EQ(included->byId, std::string("wizard"));
+    CHECK(included->duration == paralyzed.duration);
+
+    CHECK(removeCondition(aria, "paralyzed"));
+    Encounter encounter;
+    encounter.combatants.push_back(aria);
+    const std::vector<ReleasedCondition> released = releaseConditions(encounter);
+    CHECK_EQ(released.size(), std::size_t{1});
+    CHECK_EQ(released[0].condition.id, std::string("incapacitated"));
+    CHECK(!hasCondition(encounter.combatants[0], "paralyzed"));
+    CHECK(!hasCondition(encounter.combatants[0], "incapacitated"));
+    aria = encounter.combatants[0];
+
+    // An Incapacitated condition from another effect stays when Paralyzed ends.
+    ActiveCondition already;
+    already.id = "incapacitated";
+    already.source = "Banishment";
+    CHECK_EQ(addCondition(aria, already), AddConditionResult::Added);
+    CHECK_EQ(addCondition(aria, "paralyzed"), AddConditionResult::Added);
+    CHECK_EQ(std::count_if(aria.conditions.begin(), aria.conditions.end(),
+                           [](const ActiveCondition& row) { return row.id == "incapacitated"; }),
+             1);
+    const auto kept = std::find_if(aria.conditions.begin(), aria.conditions.end(),
+                                   [](const ActiveCondition& row) { return row.id == "incapacitated"; });
+    CHECK(kept->tiedTo.empty());
+    CHECK_EQ(kept->source, std::string("Banishment"));
+    CHECK(removeCondition(aria, "paralyzed"));
+    Encounter still;
+    still.combatants.push_back(aria);
+    CHECK(releaseConditions(still).empty());
+    CHECK(hasCondition(still.combatants[0], "incapacitated"));
+
+    Combatant immune = hero();
+    immune.conditionImmunities = {"incapacitated"};
+    CHECK_EQ(addCondition(immune, "paralyzed"), AddConditionResult::Added);
+    CHECK(hasCondition(immune, "paralyzed"));
+    CHECK(!hasCondition(immune, "incapacitated"));
+    CHECK(isIncapacitated(immune));
+}
+
 TEST_CASE("saves use the stored bonus and the exhaustion penalty, and paralysis fails Dex saves")
 {
     Combatant combatant = orc();
