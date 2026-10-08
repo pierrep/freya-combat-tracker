@@ -353,9 +353,11 @@ private:
     QLabel* m_selectedMeta = nullptr;
     QComboBox* m_rollMode = nullptr;
     QLabel* m_rollModeLabel = nullptr;
+
     // The GM's ticks for an action's "or" and extra damage, by
     // choiceKey(attacker, action, condition). Cleared once the action is used.
     std::map<std::string, bool> m_damageChoices;
+
     // The card's tab (Actions, Conditions, Details) last open for each
     // creature, and the creature the card shows, so selecting it again
     // returns to that tab.

@@ -1239,9 +1239,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     nameFont.setPointSizeF(nameFont.pointSizeF() * 1.35);
     nameFont.setWeight(QFont::DemiBold);
     m_selectedName->setFont(nameFont);
+
     // The creature's Armor Class, drawn inside a shield.
     m_selectedMeta = new QLabel;
     m_selectedMeta->setObjectName(QStringLiteral("acShield"));
+
     // Initiative sits on the Details tab, under its own heading: a typed total
     // for a character, a rolled one (with Reroll) for a monster, and the bonus.
     m_initiative = makeNumberBox(-99, 99);
@@ -1265,6 +1267,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     nameRow->addSpacing(10);
     nameRow->addWidget(m_selectedMeta);
     nameRow->addSpacing(14);
+
     // Hit points sit next to the name (where Initiative was); Initiative is
     // on the Details tab.
     m_hp = new RelativeSpinBox;
@@ -1279,6 +1282,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_maxHpLabel->hide();
     m_maxHpLabel->setObjectName(QStringLiteral("maxHpField"));
     m_maxHpLabel->setWordWrap(false);
+
     // Bloodied is a state, not a condition: shown here and in the Status column.
     m_bloodiedLabel = new QLabel(tr("Bloodied"));
     m_bloodiedLabel->setObjectName(QStringLiteral("bloodiedTag"));
@@ -1436,6 +1440,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
         m_dicePanel->setVisible(!m_dicePanel->isVisible());
         refreshTray();
     });
+
     connect(m_openDamageButton, &QPushButton::clicked, m_dicePanel, &QWidget::hide);
     connect(m_openHealButton, &QPushButton::clicked, m_dicePanel, &QWidget::hide);
     connect(clearTray, &QPushButton::clicked, this, [this] {
