@@ -279,6 +279,57 @@ TEST_CASE("a dragon's Multiattack spends one action for three Rends, then the tu
     CHECK_EQ(app.saved().turnIndex, 0);
 }
 
+TEST_CASE("Cloud of Insects imposes Disadvantage on the concentration save its damage causes")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Lair";
+    encounter.started = true;
+    encounter.turnIndex = 1;  // Aria's turn, so the dragon can take a legendary action
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "adult-black-dragon"), "dragon"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    encounter.combatants[1].concentration = "bless";
+    app.encounters.saveAll({encounter});
+    app.open();
+
+    app.select("dragon");
+    QPushButton* cloud = featureButton(app, QStringLiteral("Cloud of Insects"));
+    CHECK(cloud != nullptr);
+    CHECK(cloud->isEnabled());
+    cloud->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    CHECK(app.find<QLabel>("promptText")->text().contains(QStringLiteral("Disadvantage on concentration saves")));
+    app.answer("promptFailed");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    const Combatant after = App::in(app.saved(), "aria");
+    CHECK(hasConcentrationDisadvantage(after));
+    CHECK_EQ(after.concentration, std::string("bless"));
+    CHECK(after.hp < 400);
+    const QString prompt = app.find<QLabel>("promptText")->text();
+    CHECK(prompt.contains(QStringLiteral("with Disadvantage")));
+    CHECK(prompt.contains(QStringLiteral("Constitution")));
+
+    // The save the damage causes is rolled at Disadvantage, not one die.
+    app.answer("promptRoll");
+    bool rolledAtDisadvantage = false;
+    auto* log = app.find<QListWidget>("fightLog");
+    for (int i = 0; i < log->count(); ++i) {
+        if (log->item(i)->text().contains(QStringLiteral(", disadvantage"))) {
+            rolledAtDisadvantage = true;
+        }
+    }
+    CHECK(rolledAtDisadvantage);
+    CHECK(hasConcentrationDisadvantage(App::in(app.saved(), "aria")));
+}
+
 TEST_CASE("a dying character keeps a turn, death saves are prompted, and healing brings them back")
 {
     App app;
@@ -1005,6 +1056,97 @@ TEST_CASE("Invisible added by hand from the Invisibility spell starts concentrat
     QApplication::processEvents();
     goblin = App::in(app.saved(), "goblin");
     CHECK(!hasCondition(goblin, "invisible"));
+}
+
+TEST_CASE("concentration offers only concentration spells, and Concentrate and End share one spot")
+{
+    App app;
+    Character aria = fighter();
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Shore";
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[0].timedEffects.emplace_back(
+        std::string(kTimedConcentrationDisadvantagePrefix) + "Cloud of Insects", ConditionDuration{});
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.select("aria");
+    app.find<QTabWidget>("combatantTabs")->setCurrentIndex(1);
+    QApplication::processEvents();
+
+    auto* matches = app.find<QListWidget>("concentrationMatches");
+    CHECK_EQ(matches->height(), 48);
+    bool bless = false;
+    for (int i = 0; i < matches->count(); ++i) {
+        const std::string id = matches->item(i)->data(Qt::UserRole).toString().toStdString();
+        const std::optional<Spell> spell = findSpellById(app.spells, id);
+        CHECK(spell.has_value());
+        CHECK(spell->concentration);
+        CHECK(id != "fireball");
+        bless = bless || id == "bless";
+    }
+    CHECK(bless);
+    CHECK(matches->count() > 0);
+
+    app.find<QLineEdit>("concentrationSearch")->setText(QStringLiteral("fire"));
+    QApplication::processEvents();
+    for (int i = 0; i < matches->count(); ++i) {
+        const std::string id = matches->item(i)->data(Qt::UserRole).toString().toStdString();
+        const std::optional<Spell> spell = findSpellById(app.spells, id);
+        CHECK(spell.has_value());
+        CHECK(spell->concentration);
+        CHECK(id != "fireball");
+        CHECK(id != "fire-bolt");
+    }
+
+    QWidget* page = app.find<QLabel>("concentrationLabel")->parentWidget();
+    auto topOf = [page](QWidget* widget) { return widget->mapTo(page, QPoint(0, 0)).y(); };
+    auto leftOf = [page](QWidget* widget) { return widget->mapTo(page, QPoint(0, 0)).x(); };
+    QLabel* heading = nullptr;
+    for (QLabel* label : page->findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("Concentration")) {
+            heading = label;
+        }
+    }
+    CHECK(heading != nullptr);
+    auto* status = app.find<QLabel>("concentrationLabel");
+    CHECK(topOf(status) > topOf(heading));
+    CHECK(status->text().contains(QStringLiteral("Disadvantage")));
+
+    auto* concentrate = app.find<QPushButton>("setConcentration");
+    auto* end = app.find<QPushButton>("clearConcentration");
+    CHECK(concentrate->isVisible());
+    CHECK(!end->isVisible());
+    const int buttonX = leftOf(concentrate);
+
+    app.find<QLineEdit>("concentrationSearch")->setText(QStringLiteral("bless"));
+    QApplication::processEvents();
+    int blessRow = -1;
+    for (int i = 0; i < matches->count(); ++i) {
+        if (matches->item(i)->data(Qt::UserRole).toString() == QStringLiteral("bless")) {
+            blessRow = i;
+        }
+    }
+    CHECK(blessRow >= 0);
+    matches->setCurrentRow(blessRow);
+    concentrate->click();
+    QApplication::processEvents();
+    CHECK_EQ(App::in(app.saved(), "aria").concentration, std::string("bless"));
+    CHECK(status->text().contains(QStringLiteral("Bless")));
+    CHECK(status->text().contains(QStringLiteral("Disadvantage")));
+    CHECK(topOf(status) > topOf(heading));
+    CHECK(!concentrate->isVisible());
+    CHECK(end->isVisible());
+    CHECK_EQ(leftOf(end), buttonX);
+
+    end->click();
+    QApplication::processEvents();
+    CHECK(App::in(app.saved(), "aria").concentration.empty());
+    CHECK(concentrate->isVisible());
+    CHECK(!end->isVisible());
+    CHECK_EQ(leftOf(concentrate), buttonX);
 }
 
 TEST_CASE("a character Charmed by the Vampire can't attack it, but can attack another monster")

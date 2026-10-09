@@ -307,6 +307,15 @@ std::vector<ConditionRider> segmentRiders(const std::string& segment, const std:
             readDuration(sentence.substr(from, to - from), rider);
             riders.push_back(std::move(rider));
         }
+        // "the target has Disadvantage on saving throws to maintain
+        // Concentration until the end of its next turn" (Cloud of Insects).
+        if (sentence.find("Disadvantage on saving throws to maintain Concentration") != std::string::npos) {
+            ConditionRider rider;
+            rider.on = on;
+            rider.concentrationDisadvantage = true;
+            readDuration(sentence, rider);
+            riders.push_back(std::move(rider));
+        }
         if (riders.size() > before) {
             anchor = &riders[before];
         } else if (!riders.empty()) {

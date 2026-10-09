@@ -178,6 +178,9 @@ struct ConditionRider {
     std::vector<std::string> removes{};
     // The target becomes Stable (the Phase Spider's bite at 0 HP).
     bool stabilize = false;
+    // "Disadvantage on saving throws to maintain Concentration" (the Black
+    // Dragon's Cloud of Insects). Not a condition: a timed effect on the target.
+    bool concentrationDisadvantage = false;
 
     bool operator==(const ConditionRider&) const = default;
 };

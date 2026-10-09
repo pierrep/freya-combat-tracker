@@ -731,6 +731,8 @@ QString statusText(const Combatant& combatant, const std::vector<Condition>& cat
         const QString name = QString::fromStdString(effect.first);
         if (name.startsWith(QStringLiteral("advantage:"))) {
             parts << QObject::tr("Advantage (%1)").arg(name.mid(10));
+        } else if (name.startsWith(QString::fromLatin1(kTimedConcentrationDisadvantagePrefix))) {
+            parts << QObject::tr("Disadvantage on concentration");
         } else if (const int ac = timedAcBonus(effect.first); ac != 0) {
             parts << QObject::tr("+%1 AC (%2)").arg(ac).arg(name.section(QLatin1Char(':'), 2));
         } else {
@@ -1612,33 +1614,33 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     conditionsLayout->addSpacing(4);
     conditionsLayout->addWidget(sectionRule());
     conditionsLayout->addSpacing(2);
-    auto* concentrationHeader = new QHBoxLayout;
-    concentrationHeader->addWidget(makeHeading(tr("Concentration")));
+    conditionsLayout->addWidget(makeHeading(tr("Concentration")));
+    // What they are concentrating on, and advantage or disadvantage on keeping it.
     m_concentrationLabel = makeMuted(QString());
     m_concentrationLabel->setObjectName(QStringLiteral("concentrationLabel"));
-    concentrationHeader->addWidget(m_concentrationLabel, 1);
-    conditionsLayout->addLayout(concentrationHeader);
-    auto* concentrationRow = new QHBoxLayout;
+    conditionsLayout->addWidget(m_concentrationLabel);
     m_spellSearch = new QLineEdit;
     m_spellSearch->setObjectName(QStringLiteral("concentrationSearch"));
     m_spellSearch->setPlaceholderText(tr("Search concentration spells"));
     m_spellSearch->setClearButtonEnabled(true);
-    auto* setConcentrationButton = new QPushButton(tr("Concentrate"));
-    setConcentrationButton->setObjectName(QStringLiteral("setConcentration"));
-    concentrationRow->addWidget(m_spellSearch, 1);
-    concentrationRow->addWidget(setConcentrationButton);
-    conditionsLayout->addLayout(concentrationRow);
+    conditionsLayout->addWidget(m_spellSearch);
     m_spellMatches = new QListWidget;
     m_spellMatches->setProperty("inset", true);
     m_spellMatches->setObjectName(QStringLiteral("concentrationMatches"));
-    m_spellMatches->setMaximumHeight(96);
+    m_spellMatches->setFixedHeight(48);
     conditionsLayout->addWidget(m_spellMatches);
-    // End sits at the foot of the section, on the left, like Add above.
-    auto* clearConcentrationButton = new QPushButton(tr("End"));
-    clearConcentrationButton->setObjectName(QStringLiteral("clearConcentration"));
-    makePrimary(clearConcentrationButton);
+    // Concentrate and End share the foot of the section, on the left, like Add above.
+    // Only the one that applies is shown.
+    m_setConcentrationButton = new QPushButton(tr("Concentrate"));
+    m_setConcentrationButton->setObjectName(QStringLiteral("setConcentration"));
+    makePrimary(m_setConcentrationButton);
+    m_clearConcentrationButton = new QPushButton(tr("End"));
+    m_clearConcentrationButton->setObjectName(QStringLiteral("clearConcentration"));
+    makePrimary(m_clearConcentrationButton);
+    m_clearConcentrationButton->hide();
     auto* endRow = new QHBoxLayout;
-    endRow->addWidget(clearConcentrationButton);
+    endRow->addWidget(m_setConcentrationButton);
+    endRow->addWidget(m_clearConcentrationButton);
     endRow->addStretch(1);
     conditionsLayout->addLayout(endRow);
     conditionsLayout->addStretch(1);
@@ -1809,8 +1811,8 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_saveEndsAbility->setEnabled(false);
     m_saveEndsDc->setEnabled(false);
     connect(m_spellSearch, &QLineEdit::textChanged, this, &CombatPage::refreshConcentrationChoices);
-    connect(setConcentrationButton, &QPushButton::clicked, this, &CombatPage::setSelectedConcentration);
-    connect(clearConcentrationButton, &QPushButton::clicked, this, &CombatPage::clearSelectedConcentration);
+    connect(m_setConcentrationButton, &QPushButton::clicked, this, &CombatPage::setSelectedConcentration);
+    connect(m_clearConcentrationButton, &QPushButton::clicked, this, &CombatPage::clearSelectedConcentration);
     connect(successUp, &QPushButton::clicked, this, [this] { adjustSelectedDeathSave(true, 1); });
     connect(successDown, &QPushButton::clicked, this, [this] { adjustSelectedDeathSave(true, -1); });
     connect(failureUp, &QPushButton::clicked, this, [this] { adjustSelectedDeathSave(false, 1); });
@@ -2840,11 +2842,20 @@ void CombatPage::showCombatant()
 
 
 
-    if (combatant->concentration.empty()) {
-        m_concentrationLabel->setText(tr("Not concentrating."));
+    const bool concentrating = !combatant->concentration.empty();
+    if (!concentrating) {
+        m_concentrationLabel->setText(hasConcentrationDisadvantage(*combatant)
+                                          ? tr("Not concentrating. Disadvantage on saves to maintain Concentration.")
+                                          : tr("Not concentrating."));
     } else {
-        m_concentrationLabel->setText(concentrationName(combatant->concentration));
+        QString text = concentrationName(combatant->concentration);
+        if (hasConcentrationDisadvantage(*combatant)) {
+            text += tr(" (Disadvantage on saves to maintain it)");
+        }
+        m_concentrationLabel->setText(text);
     }
+    m_setConcentrationButton->setVisible(!concentrating);
+    m_clearConcentrationButton->setVisible(concentrating);
     m_populating = false;
 
     rebuildConditionList(*combatant);
@@ -3567,10 +3578,11 @@ void CombatPage::rebuildPrompts()
         const int bonus = combatant->saveBonuses[static_cast<std::size_t>(prompt.ability)] - d20Penalty(*combatant);
         switch (prompt.kind) {
         case Prompt::Kind::Concentration:
-            text = tr("%1 took damage while concentrating: DC %2 Constitution save (%3).")
+            text = tr("%1 took damage while concentrating: DC %2 Constitution save (%3)%4.")
                        .arg(name)
                        .arg(prompt.dc)
-                       .arg(QString::fromStdString(formatModifier(bonus)));
+                       .arg(QString::fromStdString(formatModifier(bonus)))
+                       .arg(hasConcentrationDisadvantage(*combatant) ? tr(" with Disadvantage") : QString());
             pass = tr("Kept it");
             fail = tr("Lost it");
             break;
@@ -3653,6 +3665,9 @@ void CombatPage::rebuildPrompts()
             for (const ConditionRider* rider : ridersFor(attack, kRiderOnFailure)) {
                 for (const std::string& id : rider->conditions) {
                     riderIds << conditionName(id);
+                }
+                if (rider->concentrationDisadvantage) {
+                    riderIds << tr("Disadvantage on concentration saves");
                 }
             }
             if (!riderIds.isEmpty()) {
@@ -3862,12 +3877,19 @@ void CombatPage::resolvePrompt(std::size_t index, int outcome)
     } else {
         bool success = outcome == 1;
         if (outcome == 0) {
-            const SaveRoll roll = rollSave(*combatant, prompt.ability, prompt.dc, rollD20());
+            int face = rollD20();
+            QString dice = QString::number(face);
+            if (prompt.kind == Prompt::Kind::Concentration && hasConcentrationDisadvantage(*combatant)) {
+                const int second = rollD20();
+                dice = tr("%1 and %2, disadvantage").arg(face).arg(second);
+                face = std::min(face, second);
+            }
+            const SaveRoll roll = rollSave(*combatant, prompt.ability, prompt.dc, face);
             success = roll.success;
             addLog(tr("%1 rolls %2 (%3) against DC %4: %5.")
                        .arg(name)
                        .arg(roll.total)
-                       .arg(roll.face)
+                       .arg(dice)
                        .arg(prompt.dc)
                        .arg(success ? tr("success") : tr("failure")));
         }
@@ -4399,7 +4421,19 @@ void CombatPage::onEconomyToggled()
     commit(std::move(before), EditKind::Once, combatant->id);
 }
 
-void CombatPage::afterDamage(Combatant& target, const DamageResult& result, const QString& source)
+void CombatPage::askConcentrationSave(const Combatant& target, int dc)
+{
+    Prompt prompt;
+    prompt.kind = Prompt::Kind::Concentration;
+    prompt.combatantId = target.id;
+    prompt.ability = Ability::Constitution;
+    prompt.dc = dc;
+    m_prompts.push_back(prompt);
+    rebuildPrompts();
+}
+
+void CombatPage::afterDamage(Combatant& target, const DamageResult& result, const QString& source,
+                             bool askConcentration)
 {
     const QString name = QString::fromStdString(target.name);
     QStringList notes;
@@ -4446,14 +4480,8 @@ void CombatPage::afterDamage(Combatant& target, const DamageResult& result, cons
             addLog(tr("%1 is no longer %2.").arg(name, conditionName(ended.id)));
         }
     }
-    if (result.concentrationDc.has_value()) {
-        Prompt prompt;
-        prompt.kind = Prompt::Kind::Concentration;
-        prompt.combatantId = target.id;
-        prompt.ability = Ability::Constitution;
-        prompt.dc = *result.concentrationDc;
-        m_prompts.push_back(prompt);
-        rebuildPrompts();
+    if (askConcentration && result.concentrationDc.has_value()) {
+        askConcentrationSave(target, *result.concentrationDc);
     }
     carryToSheet(target);
 }
@@ -4658,7 +4686,7 @@ void CombatPage::refreshConcentrationChoices(const QString& text)
     }
     m_spellMatches->clear();
     for (const Spell& spell : searchSpells(m_spells, text.toStdString())) {
-        if (!spell.concentration && !text.isEmpty()) {
+        if (!spell.concentration) {
             continue;
         }
         auto* item = new QListWidgetItem(QString::fromStdString(spell.name));
@@ -5692,10 +5720,13 @@ void CombatPage::resolveActionSave(const Prompt& prompt, int outcome)
         }
     }
     bool dealtDamage = false;
+    DamageResult result;
     if (totalDamage(damage) > 0) {
-        const DamageResult result = applyDamage(*target, damage);
+        result = applyDamage(*target, damage);
         dealtDamage = result.taken > 0;
-        afterDamage(*target, result, source);
+        // Riders from this failure (Cloud of Insects' concentration disadvantage)
+        // apply before the concentration save the damage causes.
+        afterDamage(*target, result, source, false);
         if (attack.drain.has_value()) {
             applyDrainTo(*attacker, *target, *attack.drain, damage, result);
         }
@@ -5706,6 +5737,9 @@ void CombatPage::resolveActionSave(const Prompt& prompt, int outcome)
             attack.failureSelfHealing.empty()) {
             addLog(tr("Apply the effect's conditions to %1 by hand.").arg(targetName));
         }
+    }
+    if (result.concentrationDc.has_value()) {
+        askConcentrationSave(*target, *result.concentrationDc);
     }
     if (dealtDamage) {
         if (prompt.wasBloodied && isMonsterCombatant(*attacker)) {
@@ -5926,6 +5960,10 @@ void CombatPage::giveRider(Combatant& attacker, Combatant& target, const Monster
     if (outcome.stabilized) {
         addLog(tr("%1 is stable.").arg(name));
         carryToSheet(target);
+    }
+    if (outcome.concentrationDisadvantage) {
+        addLog(tr("%1 has Disadvantage on saving throws to maintain Concentration until the end of its next turn.")
+                   .arg(name));
     }
     if (concentrating && target.concentration.empty()) {
         addLog(tr("%1 loses concentration.").arg(name));

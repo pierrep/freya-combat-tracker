@@ -17,8 +17,8 @@ add_library(combat_ui STATIC
 set_target_properties(combat_ui PROPERTIES AUTOMOC ON)
 target_include_directories(combat_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(combat_ui PUBLIC combat_core combat_data Qt6::Widgets)
-# A build tree reads the SRD catalog from the source tree. An installed or
-# copied app finds it beside the executable first (see app_paths.h).
+# This binary looks in data/srd first, then beside the executable, so a catalog
+# edit is what a build-tree run loads (see app_paths.h).
 target_compile_definitions(combat_ui PRIVATE
     "COMBAT_TRACKER_SRD_DIR=\"${CMAKE_SOURCE_DIR}/data/srd\""
 )

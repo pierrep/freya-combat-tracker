@@ -37,12 +37,15 @@ std::filesystem::path srdDirectory()
     if (!fromEnvironment.isEmpty()) {
         candidates.emplace_back(QString::fromLocal8Bit(fromEnvironment).toStdU16String());
     }
-    const std::filesystem::path executable(QCoreApplication::applicationDirPath().toStdU16String());
-    candidates.push_back(executable / ".." / "share" / "freya-combat-tracker" / "srd");
-    candidates.push_back(executable / "srd");
+    // Prefer the catalog this binary was built against. A copy installed beside
+    // the executable (build/share) otherwise hides later edits to data/srd, and
+    // Cloud of Insects' concentration rider never reaches the fight.
 #ifdef COMBAT_TRACKER_SRD_DIR
     candidates.emplace_back(COMBAT_TRACKER_SRD_DIR);
 #endif
+    const std::filesystem::path executable(QCoreApplication::applicationDirPath().toStdU16String());
+    candidates.push_back(executable / ".." / "share" / "freya-combat-tracker" / "srd");
+    candidates.push_back(executable / "srd");
     for (const std::filesystem::path& candidate : candidates) {
         std::error_code ec;
         if (std::filesystem::exists(candidate / "monsters.json", ec)) {

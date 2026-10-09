@@ -1296,6 +1296,53 @@ TEST_CASE("the stat-block reader finds rolls, conditions, and how they end in a 
     CHECK(!effectsMatch(attack, bite));
 }
 
+TEST_CASE("Cloud of Insects gives Disadvantage on concentration saves until the end of the target's next turn")
+{
+    const EntryReading cloud = readEntry(
+        "Cloud of Insects",
+        "Dexterity Saving Throw: DC 17, one creature the dragon can see within 120 feet. Failure: 22 (4d10) Poison "
+        "damage, and the target has Disadvantage on saving throws to maintain Concentration until the end of its next "
+        "turn. Failure or Success: The dragon can't take this action again until the start of its next turn.");
+    CHECK_EQ(cloud.save->dc, 17);
+    CHECK_EQ(cloud.damage.at(0).dice, std::string("4d10"));
+    CHECK_EQ(cloud.riders.size(), std::size_t{1});
+    CHECK(cloud.riders[0].concentrationDisadvantage);
+    CHECK(cloud.riders[0].conditions.empty());
+    CHECK_EQ(cloud.riders[0].on, std::string(kRiderOnFailure));
+    CHECK_EQ(cloud.riders[0].until, std::string(kUntilTargetEnd));
+    CHECK(describeRider(cloud.riders[0]).find("Disadvantage on saving throws to maintain Concentration") !=
+          std::string::npos);
+
+    Encounter encounter;
+    encounter.started = true;
+    Combatant dragon = orc();
+    dragon.id = "dragon";
+    dragon.name = "Adult Black Dragon";
+    Combatant aria = hero();
+    aria.id = "aria";
+    aria.concentration = "bless";
+    encounter.combatants = {dragon, aria};
+    encounter.turnIndex = 0;
+    MonsterAttack attack;
+    attack.name = "Cloud of Insects";
+    attack.riders = cloud.riders;
+    const RiderOutcome outcome =
+        applyRider(encounter, encounter.combatants[0], encounter.combatants[1], attack, cloud.riders[0]);
+    const Combatant& affected = encounter.combatants[1];
+    CHECK(outcome.concentrationDisadvantage);
+    CHECK(hasConcentrationDisadvantage(affected));
+    CHECK_EQ(affected.timedEffects.at(0).first, std::string("concentrationDisadvantage:Cloud of Insects"));
+    CHECK_EQ(affected.timedEffects.at(0).second.anchorId, std::string("aria"));
+    CHECK(affected.timedEffects.at(0).second.boundary == TurnBoundary::End);
+    CHECK_EQ(affected.timedEffects.at(0).second.turnsRemaining, 1);
+    CHECK(!affected.timedEffects.at(0).second.skipNext);
+
+    advanceTurn(encounter);  // the dragon's turn ends; Aria's is next
+    CHECK(hasConcentrationDisadvantage(encounter.combatants[1]));
+    advanceTurn(encounter);  // the end of Aria's turn
+    CHECK(!hasConcentrationDisadvantage(encounter.combatants[1]));
+}
+
 TEST_CASE("an SRD stat block stored by an older version gets the rules it lacks, and nothing else changes")
 {
     Monster fresh;
@@ -1317,16 +1364,30 @@ TEST_CASE("an SRD stat block stored by an older version gets the rules it lacks,
     aimed.save = SaveSpec{Ability::Wisdom, 11, false};
     howl.targeted = aimed;
     fresh.bonusActions = {howl};
+    MonsterFeature cloud;
+    cloud.name = "Cloud of Insects";
+    MonsterAttack aimedCloud;
+    aimedCloud.name = "Cloud of Insects";
+    aimedCloud.save = SaveSpec{Ability::Dexterity, 17, false};
+    ConditionRider insects;
+    insects.on = kRiderOnFailure;
+    insects.until = kUntilTargetEnd;
+    insects.concentrationDisadvantage = true;
+    aimedCloud.riders = {insects};
+    cloud.targeted = aimedCloud;
+    fresh.legendaryActions = {cloud};
 
     Monster old = fresh;
     old.attacks[0].riders.clear();
     old.attacks[0].attackBonus = 5;  // stored copy differs: kept
     old.bonusActions[0].targeted.reset();
+    old.legendaryActions[0].targeted->riders.clear();
     Combatant row = makeMonsterCombatant(old, "w");
     CHECK(fillMonsterSnapshot(row, fresh));
     CHECK_EQ(row.statBlock->attacks[0].riders.size(), std::size_t{1});
     CHECK_EQ(row.statBlock->attacks[0].attackBonus.value_or(0), 5);
     CHECK(row.statBlock->bonusActions[0].targeted.has_value());
+    CHECK(row.statBlock->legendaryActions[0].targeted->riders.at(0).concentrationDisadvantage);
     CHECK(!fillMonsterSnapshot(row, fresh));
 
     // A custom monster's stored copy is never touched.

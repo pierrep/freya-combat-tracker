@@ -804,4 +804,11 @@ TEST_CASE("the packaged SRD catalog gives actions their conditions")
     const MonsterAttack swallow = entry("purple-worm", "Swallow");
     CHECK_EQ(swallow.riders.at(0).removes, std::vector<std::string>{"grappled"});
     CHECK_EQ(swallow.riders.at(0).ongoingAt, std::string(kOngoingAtSource));
+
+    const MonsterAttack insects = entry("adult-black-dragon", "Cloud of Insects");
+    CHECK(insects.riders.at(0).concentrationDisadvantage);
+    CHECK_EQ(insects.riders.at(0).on, std::string(kRiderOnFailure));
+    CHECK_EQ(insects.riders.at(0).until, std::string(kUntilTargetEnd));
+    const MonsterAttack ancient = entry("ancient-black-dragon", "Cloud of Insects");
+    CHECK(ancient.riders.at(0).concentrationDisadvantage);
 }

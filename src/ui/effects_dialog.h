@@ -57,6 +57,7 @@ private:
         QComboBox* ongoingAt = nullptr;
         QCheckBox* endsGrapple = nullptr;
         QCheckBox* stabilize = nullptr;
+        QCheckBox* concentrationDisadvantage = nullptr;
     };
 
     void build(bool feature, bool trait);

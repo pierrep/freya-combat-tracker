@@ -651,8 +651,11 @@ void EffectsDialog::addRider(const ConditionRider& rider)
     row.endsGrapple->setChecked(has(rider.removes, "grappled"));
     row.stabilize = new QCheckBox(tr("Makes a dying target Stable"));
     row.stabilize->setChecked(rider.stabilize);
+    row.concentrationDisadvantage = new QCheckBox(tr("Disadvantage on saving throws to maintain Concentration"));
+    row.concentrationDisadvantage->setChecked(rider.concentrationDisadvantage);
     form->addRow(QString(), row.endsGrapple);
     form->addRow(QString(), row.stabilize);
+    form->addRow(QString(), row.concentrationDisadvantage);
 
     m_riderLayout->addWidget(box);
     m_riders.push_back(row);
@@ -717,6 +720,7 @@ ConditionRider EffectsDialog::readRider(const RiderRow& row) const
         rider.removes = {"grappled"};
     }
     rider.stabilize = row.stabilize->isChecked();
+    rider.concentrationDisadvantage = row.concentrationDisadvantage->isChecked();
     return rider;
 }
 
@@ -748,7 +752,7 @@ void EffectsDialog::readInto(MonsterAttack& attack) const
         attack.riders.clear();
         for (const RiderRow& row : m_riders) {
             ConditionRider rider = readRider(row);
-            if (!rider.conditions.empty()) {
+            if (!rider.conditions.empty() || rider.concentrationDisadvantage) {
                 attack.riders.push_back(std::move(rider));
             }
         }

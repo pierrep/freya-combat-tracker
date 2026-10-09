@@ -122,6 +122,8 @@ struct RiderOutcome {
     std::vector<std::string> already;
     std::vector<std::string> removed;  // ended by it ("no longer Grappled")
     bool stabilized = false;
+    // Disadvantage on saves to maintain Concentration, until the rider's duration.
+    bool concentrationDisadvantage = false;
 };
 
 // Gives the target the rider's conditions, caused by the attacker: timed,
@@ -259,6 +261,10 @@ bool isIncapacitated(const Combatant& combatant);
 // Constitution save DC to keep concentration: half the damage, at least 10,
 // at most 30.
 int concentrationDc(int damage);
+
+// A timed effect such as the Black Dragon's Cloud of Insects: Disadvantage on
+// saves to maintain Concentration until it ends.
+bool hasConcentrationDisadvantage(const Combatant& combatant);
 
 // Starts concentrating on a spell id or ability name. Any other concentration
 // ends first, with the conditions tied to it. Empty ends concentration.

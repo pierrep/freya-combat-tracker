@@ -18,9 +18,10 @@ std::filesystem::path encountersFilePath();
 
 // The packaged SRD folder, the first of these that has monsters.json:
 //   $FREYA_SRD_DIR
+//   the source tree's data/srd                              (this build; wins over a
+//                                                            stale copy under build/share)
 //   <executable folder>/../share/freya-combat-tracker/srd   (cmake --install)
 //   <executable folder>/srd                                  (a copied folder)
-//   the source tree's data/srd                              (a build tree)
 std::filesystem::path srdDirectory();
 
 // Packaged SRD files inside srdDirectory().

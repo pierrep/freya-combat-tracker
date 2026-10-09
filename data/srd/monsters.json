@@ -249,6 +249,14 @@
               "type": "poison",
               "when": "always"
             }
+          ],
+          "riders": [
+            {
+              "conditions": [],
+              "on": "failure",
+              "until": "targetEnd",
+              "concentrationDisadvantage": true
+            }
           ]
         },
         {
@@ -1774,6 +1782,14 @@
               "dice": "6d10",
               "type": "poison",
               "when": "always"
+            }
+          ],
+          "riders": [
+            {
+              "conditions": [],
+              "on": "failure",
+              "until": "targetEnd",
+              "concentrationDisadvantage": true
             }
           ]
         },

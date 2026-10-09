@@ -238,7 +238,9 @@ std::vector<ConditionRider> readRiders(const json& value, const std::string& con
         json_util::requireObject<Error>(row, riderContext);
         ConditionRider rider;
         rider.conditions = lowerList(json_util::readStringList<Error>(row, "conditions", riderContext));
-        if (rider.conditions.empty()) {
+        rider.concentrationDisadvantage =
+            json_util::readBoolOr<Error>(row, "concentrationDisadvantage", false, riderContext);
+        if (rider.conditions.empty() && !rider.concentrationDisadvantage) {
             throw Error(riderContext + ": at least one condition is required.");
         }
         const std::string on = json_util::readOptionalString<Error>(row, "on", riderContext);
@@ -320,6 +322,9 @@ json ridersJson(const std::vector<ConditionRider>& riders)
         }
         if (rider.stabilize) {
             row["stabilize"] = true;
+        }
+        if (rider.concentrationDisadvantage) {
+            row["concentrationDisadvantage"] = true;
         }
         list.push_back(std::move(row));
     }

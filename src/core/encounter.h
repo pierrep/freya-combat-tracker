@@ -143,9 +143,10 @@ struct Combatant {
     // "<monster row id>/<aura name>".
     std::vector<std::string> auraImmunities;
     // Timed rules, by name: a trait's ("Aversion to Fire"), Advantage on attack
-    // rolls someone gave it ("advantage:War Cry"), or more AC ("ac:2:Shimmering
-    // Shield", taken off again when it ends). They end like conditions'
-    // durations.
+    // rolls someone gave it ("advantage:War Cry"), Disadvantage on saves to
+    // maintain Concentration ("concentrationDisadvantage:Cloud of Insects"),
+    // or more AC ("ac:2:Shimmering Shield", taken off again when it ends).
+    // They end like conditions' durations.
     std::vector<std::pair<std::string, ConditionDuration>> timedEffects{};
     // The monster's stat block when it was added. Empty for characters and for
     // fights saved before stat blocks were kept.
@@ -175,6 +176,10 @@ std::vector<std::string> validateEncounter(const Encounter& encounter);
 
 // The AC a timed effect adds ("ac:2:Shimmering Shield" is 2), or 0.
 int timedAcBonus(const std::string& effectName);
+
+// "concentrationDisadvantage:Cloud of Insects": Disadvantage on saves to
+// maintain Concentration until the duration ends.
+inline constexpr const char* kTimedConcentrationDisadvantagePrefix = "concentrationDisadvantage:";
 
 bool isMonsterCombatant(const Combatant& combatant);
 bool isCharacterCombatant(const Combatant& combatant);

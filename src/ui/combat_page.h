@@ -232,7 +232,9 @@ private:
     void selectRow(const std::string& id);
     void onTargetClicked(QTreeWidgetItem* item, int column);
     void resolveArmedOn(const std::string& targetId);
-    void afterDamage(Combatant& target, const DamageResult& result, const QString& source);
+    void afterDamage(Combatant& target, const DamageResult& result, const QString& source,
+                     bool askConcentration = true);
+    void askConcentrationSave(const Combatant& target, int dc);
     void maybeAutoPass(const std::string& attackerId);
     // Conditions the action gives the target for this outcome (kRiderOn...).
     // dealt is the damage just taken, for a rider that replaces it.
@@ -444,6 +446,8 @@ private:
     QLabel* m_concentrationLabel = nullptr;
     QLineEdit* m_spellSearch = nullptr;
     QListWidget* m_spellMatches = nullptr;
+    QPushButton* m_setConcentrationButton = nullptr;
+    QPushButton* m_clearConcentrationButton = nullptr;
     QWidget* m_deathSavesHost = nullptr;
     QLabel* m_deathStatus = nullptr;
     QPushButton* m_stabilizeButton = nullptr;

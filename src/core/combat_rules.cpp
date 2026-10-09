@@ -625,6 +625,27 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
     if (rider.stabilize && isDying(target)) {
         outcome.stabilized = stabilize(target);
     }
+    if (rider.concentrationDisadvantage) {
+        const std::string until = rider.until.empty() ? std::string(kUntilTargetEnd) : rider.until;
+        ConditionDuration duration;
+        if (until == kUntilSourceStart) {
+            duration = makeDuration(encounter, attacker.id, TurnBoundary::Start, 1);
+        } else if (until == kUntilSourceEnd) {
+            duration = makeDuration(encounter, attacker.id, TurnBoundary::End, 1);
+        } else if (until == kUntilTargetStart) {
+            duration = makeDuration(encounter, target.id, TurnBoundary::Start, 1);
+        } else if (until == kUntilTargetThisTurn) {
+            duration = ConditionDuration{target.id, TurnBoundary::End, 1, false};
+        } else if (until == kUntilMinute) {
+            duration = makeDuration(encounter, attacker.id, TurnBoundary::Start, 10);
+        } else {
+            duration = makeDuration(encounter, target.id, TurnBoundary::End, 1);
+        }
+        const std::string key = std::string(kTimedConcentrationDisadvantagePrefix) + baseActionName(attack.name);
+        std::erase_if(target.timedEffects, [&key](const auto& effect) { return effect.first == key; });
+        target.timedEffects.emplace_back(key, duration);
+        outcome.concentrationDisadvantage = true;
+    }
     return outcome;
 }
 
@@ -802,7 +823,12 @@ std::string describeRider(const ConditionRider& rider)
     if (rider.refundDamage) {
         notes.push_back("instead of the damage");
     }
-    std::string text = when + ": " + joinWords(conditionWords(rider.conditions));
+    std::string effect = joinWords(conditionWords(rider.conditions));
+    if (rider.concentrationDisadvantage) {
+        const std::string disadvantage = "Disadvantage on saving throws to maintain Concentration";
+        effect = effect.empty() ? disadvantage : effect + " and " + disadvantage;
+    }
+    std::string text = when + ": " + effect;
     if (!notes.empty()) {
         text += " (" + joinWords(notes, "; ") + ")";
     }
@@ -1156,6 +1182,13 @@ bool removeCondition(Combatant& combatant, const std::string& conditionId)
         endConcentration(combatant);
     }
     return true;
+}
+
+bool hasConcentrationDisadvantage(const Combatant& combatant)
+{
+    return std::any_of(combatant.timedEffects.begin(), combatant.timedEffects.end(), [](const auto& effect) {
+        return effect.first.rfind(kTimedConcentrationDisadvantagePrefix, 0) == 0;
+    });
 }
 
 int concentrationDc(int damage)

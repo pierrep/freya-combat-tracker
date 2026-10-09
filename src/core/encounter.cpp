@@ -633,6 +633,11 @@ bool upgradeSrdSnapshot(Monster& stored, const Monster& catalog)
                         aimed.targetTypes = wanted.targetTypes;
                         changed = true;
                     }
+                    if (aimed.riders.empty() && !wanted.riders.empty()) {
+                        aimed.riders = wanted.riders;
+                        aimed.riderSave = wanted.riderSave;
+                        changed = true;
+                    }
                 }
                 if (!feature.aura.has_value() && fresh.aura.has_value()) {
                     feature.aura = fresh.aura;
