@@ -1326,7 +1326,7 @@ void MonstersPage::rebuildFormAttacks()
         effect->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         effect->setMaximumHeight(80);
         auto* problem = new QLabel;
-        problem->setStyleSheet(QStringLiteral("QLabel { color: #b00020; }"));
+        problem->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(palette::critical.name()));
         problem->setWordWrap(true);
         problem->hide();
         auto* remove = new QPushButton(tr("Remove"));

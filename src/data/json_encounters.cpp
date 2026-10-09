@@ -77,6 +77,7 @@ ActiveCondition conditionFromJson(const json& value, const std::string& context,
         row.worsensTo = json_util::readStringList<Error>(*saveEnds, "worsensTo", saveContext);
         row.worseSaveEnds = json_util::readBoolOr<Error>(*saveEnds, "worseSaveEnds", false, saveContext);
         row.worseEndsOn = json_util::readStringList<Error>(*saveEnds, "worseEndsOn", saveContext);
+        row.manual = json_util::readBoolOr<Error>(*saveEnds, "manual", false, saveContext);
         condition.saveEnds = std::move(row);
     }
     condition.byId = json_util::readOptionalString<Error>(value, "byId", context);
@@ -119,6 +120,9 @@ json conditionToJson(const ActiveCondition& condition)
         }
         if (condition.saveEnds->worseSaveEnds) {
             saveEnds["worseSaveEnds"] = true;
+        }
+        if (condition.saveEnds->manual) {
+            saveEnds["manual"] = true;
         }
         if (!condition.saveEnds->worseEndsOn.empty()) {
             saveEnds["worseEndsOn"] = condition.saveEnds->worseEndsOn;

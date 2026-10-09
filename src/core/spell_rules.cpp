@@ -51,6 +51,13 @@ const SpellCombatRule* findRule(const std::string& name)
     return nullptr;
 }
 
+// Spells whose repeat save has its own trigger rather than the end of every
+// turn (Fear: "ends its turn without line of sight to you"). The GM rolls it.
+bool hasManualRepeatSave(const char* spellId)
+{
+    return std::strcmp(spellId, "fear") == 0;
+}
+
 std::vector<std::string> splitWords(const char* text)
 {
     std::vector<std::string> words;
@@ -429,6 +436,7 @@ std::optional<MonsterAttack> buildAttack(const Mention& mention, std::optional<i
         rider.on = grant.on;
         rider.until = grant.until;
         rider.saveEnds = grant.saveEnds;
+        rider.saveOnDemand = !grant.saveEnds && hasManualRepeatSave(rule.id);
         rider.worsensTo = splitWords(grant.worsens);
         rider.endsOn = splitWords(grant.endsOn);
         rider.worseEndsOn = rider.worsensTo.empty() ? std::vector<std::string>{} : rider.endsOn;
@@ -522,7 +530,35 @@ std::vector<MonsterAttack> actionableSpells(const Monster& monster, const Monste
         action.selfEffect.has_value()) {
         return {};
     }
-    return spellsFrom(action.effect, monster, action.inMultiattack, action.name, false);
+    std::vector<MonsterAttack> spells = spellsFrom(action.effect, monster, action.inMultiattack, action.name, false);
+    if (!action.inMultiattack) {
+        return spells;
+    }
+    // Multiattack lets the dragon replace an attack with Spellcasting "to cast
+    // Shatter": only the spells it names are part of Multiattack. The rest of
+    // the list (Invisibility, Detect Magic) is a separate action.
+    std::string multiattackText;
+    for (const MonsterAttack& other : monster.attacks) {
+        if (isMultiattack(other)) {
+            multiattackText += other.effect;
+        }
+    }
+    // "Acid Arrow (level 3)" is named in the text as "Acid Arrow (level 3 version)".
+    const auto named = [&multiattackText](const MonsterAttack& spell) {
+        return containsInsensitive(multiattackText, spell.name.substr(0, spell.name.find(" (")));
+    };
+    // When Multiattack names no spell at all (an oni's "uses Spellcasting"),
+    // any of them can replace an attack.
+    if (std::none_of(spells.begin(), spells.end(), named)) {
+        return spells;
+    }
+    for (MonsterAttack& spell : spells) {
+        if (!named(spell)) {
+            spell.inMultiattack = false;
+            spell.multiattackAs.clear();
+        }
+    }
+    return spells;
 }
 
 std::vector<MonsterAttack> actionableSpells(const Monster& monster, const MonsterFeature& feature)

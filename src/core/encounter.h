@@ -42,6 +42,9 @@ struct SaveEnds {
     std::vector<std::string> worsensTo{};
     bool worseSaveEnds = false;
     std::vector<std::string> worseEndsOn{};
+    // Repeated only when the GM calls for it ("if the creature ends its turn
+    // without line of sight to you"), never automatically at the end of its turn.
+    bool manual = false;
 
     bool operator==(const SaveEnds&) const = default;
 };

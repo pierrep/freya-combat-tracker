@@ -1,6 +1,8 @@
 #include "ui/app_paths.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QString>
 
@@ -9,10 +11,33 @@
 
 namespace combat::ui {
 
-std::filesystem::path appDataFolder()
+std::filesystem::path defaultDataFolder()
 {
     const QString folder = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     return std::filesystem::path(folder.toStdU16String());
+}
+
+std::filesystem::path optionsFilePath()
+{
+    return defaultDataFolder() / "options.ini";
+}
+
+QString dataFolderOptionKey()
+{
+    return QStringLiteral("storage/dataFolder");
+}
+
+std::filesystem::path appDataFolder()
+{
+    const QSettings settings(QString::fromStdU16String(optionsFilePath().u16string()), QSettings::IniFormat);
+    const QString chosen = settings.value(dataFolderOptionKey()).toString();
+    if (!chosen.isEmpty()) {
+        const QDir dir(chosen);
+        if (dir.exists() || QDir().mkpath(chosen)) {
+            return std::filesystem::path(dir.absolutePath().toStdU16String());
+        }
+    }
+    return defaultDataFolder();
 }
 
 std::filesystem::path charactersFilePath()

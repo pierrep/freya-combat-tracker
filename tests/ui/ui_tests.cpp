@@ -11,6 +11,8 @@
 #include "ui/dice_overlay.h"
 #include "ui/main_window.h"
 #include "ui/monsters_page.h"
+#include "ui/options_page.h"
+#include "ui/theme.h"
 
 #include <QAction>
 #include <QApplication>
@@ -18,6 +20,7 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QScrollArea>
+#include <QSettings>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QThread>
@@ -35,6 +38,7 @@
 #include <QMessageBox>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QDir>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QToolButton>
@@ -145,7 +149,7 @@ struct App {
 
     void select(const std::string& combatantId)
     {
-        for (const char* list : {"initiativeList", "zeroHpList"}) {
+        for (const char* list : {"initiativeList"}) {
             if (QTreeWidgetItem* item = row(list, combatantId)) {
                 find<QTreeWidget>(list)->setCurrentItem(item);
                 QApplication::processEvents();
@@ -157,7 +161,7 @@ struct App {
 
     void clickTarget(const std::string& combatantId)
     {
-        for (const char* list : {"initiativeList", "zeroHpList"}) {
+        for (const char* list : {"initiativeList"}) {
             if (QTreeWidgetItem* item = row(list, combatantId)) {
                 // As a mouse click does: the row becomes current, then the click.
                 find<QTreeWidget>(list)->setCurrentItem(item);
@@ -263,7 +267,7 @@ ActiveCondition plain(const std::string& id)
 
 }  // namespace
 
-TEST_CASE("a dragon's Multiattack spends one action for three Rends, then the turn passes")
+TEST_CASE("a dragon's first Rend takes its Multiattack, three Rends in all, then the turn passes")
 {
     App app;
     Character aria = fighter();
@@ -280,15 +284,49 @@ TEST_CASE("a dragon's Multiattack spends one action for three Rends, then the tu
     app.open();
 
     app.select("dragon");
-    app.button(QStringLiteral("Multiattack"))->click();
-    QApplication::processEvents();
-    CHECK_EQ(App::in(app.saved(), "dragon").economy.attacksRemaining, 3);
-    // Fire Breath cannot be one of the three. A spell from Spellcasting can.
+    // No Multiattack button: its text stays, and each attack it names says
+    // how many it allows.
+    for (QPushButton* button : app.window->findChildren<QPushButton*>()) {
+        CHECK(!(button->isVisible() && button->text() == QStringLiteral("Multiattack")));
+    }
+    const auto noteCount = [&app](const QString& text) {
+        int found = 0;
+        for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionButtonNote"))) {
+            found += label->isVisible() && label->text() == text ? 1 : 0;
+        }
+        return found;
+    };
+    CHECK(noteCount(QStringLiteral("3 left in Multiattack")) >= 1);
+    bool titled = false;
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
+        titled = titled || label->text() == QStringLiteral("Multiattack");
+        CHECK(!label->text().contains(QStringLiteral("use(s)")));
+    }
+    CHECK(titled);
+    // Before the first Rend, Fire Breath can still be the action.
     QPushButton* breath = rowButton(app, QStringLiteral("Fire Breath"));
     CHECK(breath != nullptr);
-    CHECK(!breath->isEnabled());
+    CHECK(breath->isEnabled());
 
-    for (int attack = 0; attack < 3; ++attack) {
+    app.button(QStringLiteral("Attack"))->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    CHECK_EQ(App::in(app.saved(), "dragon").economy.attacksRemaining, 2);
+    app.select("dragon");
+    QApplication::processEvents();
+    CHECK(noteCount(QStringLiteral("2 left in Multiattack")) >= 1);
+    // Fire Breath cannot be one of the three.
+    breath = rowButton(app, QStringLiteral("Fire Breath"));
+    CHECK(breath != nullptr);
+    CHECK(!breath->isEnabled());
+    bool logged = false;
+    QListWidget* log = app.find<QListWidget>("fightLog");
+    for (int i = 0; i < log->count(); ++i) {
+        logged = logged || log->item(i)->text().contains(QStringLiteral("takes the Multiattack action"));
+    }
+    CHECK(logged);
+
+    for (int attack = 1; attack < 3; ++attack) {
         app.select("dragon");
         app.button(QStringLiteral("Attack"))->click();
         QApplication::processEvents();
@@ -1895,8 +1933,18 @@ TEST_CASE("after its breath weapon, a dragon with nothing left passes its turn o
         }
         CHECK(ending);
     }
+    // Picking targets updates the turn order's rows where they are, rather than
+    // building them again (no flicker): the same row objects before and after.
+    std::vector<QTreeWidgetItem*> rowsBefore;
+    auto* order = app.find<QTreeWidget>("initiativeList");
+    for (int i = 0; i < order->topLevelItemCount(); ++i) {
+        rowsBefore.push_back(order->topLevelItem(i));
+    }
     app.clickTarget("aria");
     app.clickTarget("bryn");
+    for (int i = 0; i < order->topLevelItemCount(); ++i) {
+        CHECK(order->topLevelItem(i) == rowsBefore[static_cast<std::size_t>(i)]);
+    }
     CHECK_EQ(app.saved().turnIndex, 0);  // still choosing creatures in the cone
     // The creatures caught are highlighted; the card stays on the dragon.
     const auto rowSelected = [&app](const char* id) {
@@ -1925,7 +1973,7 @@ TEST_CASE("after its breath weapon, a dragon with nothing left passes its turn o
     CHECK(app.find<QLabel>("promptText")->text().contains(QStringLiteral("Cold Breath")));
 }
 
-TEST_CASE("using the Vampire's Multiattack and then an attack keeps the Actions tab where it was")
+TEST_CASE("using the Vampire's first attack keeps the Actions tab where it was")
 {
     App app;
     Character aria = fighter();
@@ -1964,15 +2012,10 @@ TEST_CASE("using the Vampire's Multiattack and then an attack keeps the Actions 
         }
         return nullptr;
     };
-    QPushButton* multiattack = visibleButton(QStringLiteral("Multiattack"));
-    CHECK(multiattack != nullptr);
-    multiattack->setFocus(Qt::MouseFocusReason);  // as a mouse click does
-    multiattack->click();
-    for (int k = 0; k < 5; ++k) { QApplication::processEvents(); QCoreApplication::sendPostedEvents(); }
     CHECK_EQ(bar->value(), 0);
     QPushButton* attack = visibleButton(QStringLiteral("Attack"));
     CHECK(attack != nullptr);
-    attack->setFocus(Qt::MouseFocusReason);
+    attack->setFocus(Qt::MouseFocusReason);  // as a mouse click does
     attack->click();
     for (int k = 0; k < 5; ++k) { QApplication::processEvents(); QCoreApplication::sendPostedEvents(); }
     app.clickTarget("aria");
@@ -2154,6 +2197,79 @@ TEST_CASE("thrown dice settle by tipping onto the face nearest the viewer, which
         }
         CHECK(overlay.largestSettleTurn() < 75.0f);  // a tip, not a flip
     }
+}
+
+TEST_CASE("an attack throws its d20 first with a hit or miss card, then on a hit its damage")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {300, 300};
+    aria.ac = 1;  // the goblin hits (unless it rolls a 1)
+    Character bryn = fighter();
+    bryn.id = "bryn-sheet";
+    bryn.name = "Bryn";
+    bryn.hp = {300, 300};
+    bryn.ac = 60;  // and misses (only a 20 hits)
+    app.characters.saveAll({aria, bryn});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Road";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "goblin-warrior"), "goblin"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants.push_back(makeCharacterCombatant(bryn, "bryn"));
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    auto* overlay = app.find<ui::DiceOverlay>("diceOverlay");
+    const auto wait = [](int ms) {
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < ms) {
+            QApplication::processEvents();
+            QThread::msleep(4);
+        }
+    };
+    const auto attack = [&app](const char* target) {
+        app.select("goblin");
+        app.button(QStringLiteral("Attack"))->click();
+        QApplication::processEvents();
+        app.clickTarget(target);
+        QApplication::processEvents();
+    };
+    // A hit: the d20 alone, its card, then the damage.
+    for (int tries = 0; tries < 20; ++tries) {
+        attack("aria");
+        // A plain hit; a critical one throws twice the damage dice.
+        if (App::in(app.saved(), "aria").hp < 300 && overlay->shownSides() == std::vector<int>{20, 6}) {
+            break;
+        }
+        app.find<QPushButton>("undoFight")->click();
+        QApplication::processEvents();
+    }
+    CHECK(App::in(app.saved(), "aria").hp < 300);
+    CHECK((overlay->thrownSides() == std::vector<int>{20}));
+    CHECK((overlay->shownSides() == std::vector<int>{20, 6}));  // the Scimitar's 1d6 waits
+    wait(1100);
+    CHECK(overlay->shownCaption().startsWith(QStringLiteral("Hits Aria")));
+    CHECK((overlay->thrownSides() == std::vector<int>{20}));
+    wait(1500);
+    CHECK((overlay->thrownSides() == std::vector<int>{20, 6}));  // the d20 stays on the table
+    wait(900);
+    CHECK(overlay->shownCaption().startsWith(QStringLiteral("Damage")));
+
+    // A miss: the d20 and its card, no damage.
+    for (int tries = 0; tries < 20; ++tries) {
+        app.find<QPushButton>("undoFight")->click();
+        QApplication::processEvents();
+        attack("bryn");
+        if (App::in(app.saved(), "bryn").hp == 300) {
+            break;
+        }
+    }
+    CHECK((overlay->shownSides() == std::vector<int>{20}));
+    wait(1100);
+    CHECK(overlay->shownCaption().startsWith(QStringLiteral("Misses Bryn")));
 }
 
 TEST_CASE("the dice tray rolls by hand, and its dice and the app's are thrown across the page")
@@ -2627,6 +2743,50 @@ TEST_CASE("Conditions show as coloured tags: click one for its rules, x removes 
     CHECK(app.find<QLabel>("conditionHeading")->isHidden());
 }
 
+TEST_CASE("Roll save asks for a condition's repeat save on demand")
+{
+    App app;
+    Character aria = fighter();
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Shore";
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    ActiveCondition prone;
+    prone.id = "prone";
+    ActiveCondition scared;
+    scared.id = "frightened";
+    scared.saveEnds = SaveEnds{Ability::Wisdom, 15};
+    scared.saveEnds->manual = true;
+    encounter.combatants[0].conditions = {prone, scared};
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.select("aria");
+    app.find<QTabWidget>("combatantTabs")->setCurrentIndex(1);
+    QApplication::processEvents();
+
+    auto chipName = [&app](const QString& id) {
+        for (QFrame* chip : app.window->findChildren<QFrame*>(QStringLiteral("conditionChip"))) {
+            if (chip->property("conditionId").toString() == id) {
+                return chip->findChild<QPushButton*>(QStringLiteral("conditionChipName"));
+            }
+        }
+        return static_cast<QPushButton*>(nullptr);
+    };
+    QPushButton* roll = app.find<QPushButton>("rollConditionSave");
+    CHECK(roll->isHidden());  // Prone has no save
+    chipName(QStringLiteral("frightened"))->click();
+    QApplication::processEvents();
+    CHECK(!roll->isHidden());
+    CHECK(app.find<QLabel>("conditionDetail")->text().contains(QStringLiteral("DC 15 Wis save ends")));
+    roll->click();
+    QApplication::processEvents();
+    app.answer("promptPassed");
+    CHECK(!hasCondition(App::in(app.saved(), "aria"), "frightened"));
+    CHECK(hasCondition(App::in(app.saved(), "aria"), "prone"));
+}
+
 TEST_CASE("Action buttons sit in a column on the left of their text and stay on the card")
 {
     App app;
@@ -2659,7 +2819,7 @@ TEST_CASE("Action buttons sit in a column on the left of their text and stay on 
             }
         }
     }
-    CHECK(lefts.size() >= std::size_t{4});
+    CHECK(lefts.size() >= std::size_t{3});  // Frost Axe, Great Bow, War Cry
     CHECK(std::all_of(lefts.begin(), lefts.end(), [&lefts](int x) { return x == lefts.front(); }));
 }
 
@@ -2768,6 +2928,169 @@ TEST_CASE("Opening the app again returns to the encounter used last")
     app.window->showPage(ui::MainWindow::EncounterBuilderIndex);
     QApplication::processEvents();
     CHECK_EQ(app.find<QListWidget>("encounterList")->currentRow(), 1);
+}
+
+TEST_CASE("The dead sit under a line at the end of the turn order, with Dead as their only status")
+{
+    App app;
+    Character aria = fighter();
+    Character bryn = fighter();
+    bryn.id = "bryn-sheet";
+    bryn.name = "Bryn";
+    bryn.hp.current = 0;
+    app.characters.saveAll({aria, bryn});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Road";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "goblin-warrior"), "goblin"));
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "goblin-warrior"), "dead-goblin"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants.push_back(makeCharacterCombatant(bryn, "bryn"));
+    encounter.combatants[0].initiative = 15;
+    encounter.combatants[1].initiative = 14;
+    encounter.combatants[1].hp = 0;
+    encounter.combatants[1].conditions.push_back(ActiveCondition{});
+    encounter.combatants[1].conditions.back().id = "prone";
+    encounter.combatants[2].initiative = 12;
+    encounter.combatants[3].initiative = 10;
+    encounter.combatants[3].hp = 0;
+    encounter.combatants[3].dead = true;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+
+    // No Downed card.
+    for (QLabel* label : app.window->findChildren<QLabel*>()) {
+        CHECK(!(label->isVisible() && label->text() == QStringLiteral("Downed")));
+    }
+    auto* list = app.find<QTreeWidget>("initiativeList");
+    CHECK_EQ(list->topLevelItemCount(), 5);
+    if (list->topLevelItemCount() != 5) {
+        return;
+    }
+    const auto idAt = [list](int row) { return list->topLevelItem(row)->data(0, Qt::UserRole).toString(); };
+    CHECK(idAt(0) == QStringLiteral("goblin"));
+    CHECK(idAt(1) == QStringLiteral("aria"));
+    // The line: not a creature, and it can't be picked.
+    CHECK(idAt(2).isEmpty());
+    CHECK(list->topLevelItem(2)->flags() == Qt::NoItemFlags);
+    for (int row = 3; row < 5; ++row) {
+        QTreeWidgetItem* item = list->topLevelItem(row);
+        CHECK(item->text(0).isEmpty());  // no initiative
+        CHECK(item->text(4) == QStringLiteral("Dead"));
+    }
+    CHECK(idAt(3) == QStringLiteral("dead-goblin"));
+    CHECK(idAt(4) == QStringLiteral("bryn"));
+
+    // A dead creature can still be picked.
+    app.select("dead-goblin");
+    CHECK(list->currentItem() == list->topLevelItem(3));
+}
+
+TEST_CASE("The saved-data folder is chosen on the Options page, kept, and reset to the default")
+{
+    QTemporaryDir folder;
+    const QString options = folder.filePath(QStringLiteral("options.ini"));
+    const QString chosen = folder.filePath(QStringLiteral("my data"));
+    {
+        ui::OptionsPage page;
+        page.setFile(options);
+        auto* reset = page.findChild<QPushButton*>(QStringLiteral("resetDataFolder"));
+        auto* path = page.findChild<QLabel*>(QStringLiteral("dataFolderPath"));
+        CHECK(page.dataFolder().isEmpty());
+        CHECK(!reset->isEnabled());  // already the default
+        CHECK(path->text().contains(QStringLiteral("(default)")));
+        CHECK(page.setDataFolder(chosen));
+        CHECK(QDir(chosen).exists());  // made if it was missing
+        CHECK(page.dataFolder() == chosen);
+        CHECK(reset->isEnabled());
+        CHECK(path->text().contains(QStringLiteral("my data")));
+        CHECK(!page.findChild<QLabel*>(QStringLiteral("dataFolderNote"))->isHidden());  // restart to use it
+    }
+    {
+        ui::OptionsPage page;  // the next run
+        page.setFile(options);
+        CHECK(page.dataFolder() == chosen);
+        page.findChild<QPushButton*>(QStringLiteral("resetDataFolder"))->click();
+        CHECK(page.dataFolder().isEmpty());
+        CHECK(!page.findChild<QPushButton*>(QStringLiteral("resetDataFolder"))->isEnabled());
+    }
+    ui::OptionsPage page;
+    page.setFile(options);
+    CHECK(page.dataFolder().isEmpty());
+}
+
+TEST_CASE("The theme on the Options page restyles the app and is kept for next time")
+{
+    // The other tests run unstyled; put that back at the end.
+    const QString oldSheet = qApp->styleSheet();
+    const QPalette oldPalette = QApplication::palette();
+    ui::applyTheme(*qApp);
+    App app;
+    QTemporaryDir folder;
+    const QString options = folder.filePath(QStringLiteral("options.ini"));
+    app.open();
+    app.window->setOptionsFile(options);
+    auto* choice = app.find<QComboBox>("themeChoice");
+    CHECK(choice->currentData().toString() == QStringLiteral("system"));
+    // The test platform reports no dark setting, so Match system is light.
+    CHECK(!ui::darkMode());
+    const QColor lightWindow = QApplication::palette().color(QPalette::Window);
+
+    app.find<QCheckBox>("autoPass")->setChecked(false);
+    choice->setCurrentIndex(choice->findData(QStringLiteral("dark")));
+    QApplication::processEvents();
+    CHECK(ui::darkMode());
+    const QColor darkWindow = QApplication::palette().color(QPalette::Window);
+    CHECK(darkWindow != lightWindow);
+    CHECK(darkWindow.lightness() < 60);
+    CHECK(qApp->styleSheet().contains(ui::palette::surface.name()));
+
+    // Start again: both choices come back, and loading them does not write
+    // one choice over another that has not been read yet.
+    app.window.reset();
+    ui::setDarkMode(false);
+    ui::applyTheme(*qApp);
+    app.open();
+    app.window->setOptionsFile(options);
+    QApplication::processEvents();
+    choice = app.find<QComboBox>("themeChoice");
+    CHECK(choice->currentData().toString() == QStringLiteral("dark"));
+    CHECK(!app.find<QCheckBox>("autoPass")->isChecked());
+    CHECK(ui::darkMode());
+    CHECK(QApplication::palette().color(QPalette::Window) == darkWindow);
+
+    choice->setCurrentIndex(choice->findData(QStringLiteral("system")));
+    QApplication::processEvents();
+    CHECK(!ui::darkMode());
+    CHECK(QApplication::palette().color(QPalette::Window) == lightWindow);
+    app.window.reset();
+    qApp->setStyleSheet(oldSheet);
+    QApplication::setPalette(oldPalette);
+}
+
+TEST_CASE("An options file from before the theme choice keeps its dark mode")
+{
+    const QString oldSheet = qApp->styleSheet();
+    const QPalette oldPalette = QApplication::palette();
+    QTemporaryDir folder;
+    const QString options = folder.filePath(QStringLiteral("options.ini"));
+    {
+        QSettings settings(options, QSettings::IniFormat);
+        settings.setValue(QStringLiteral("appearance/darkMode"), true);
+    }
+    App app;
+    app.open();
+    app.window->setOptionsFile(options);
+    QApplication::processEvents();
+    CHECK(app.find<QComboBox>("themeChoice")->currentData().toString() == QStringLiteral("dark"));
+    CHECK(ui::darkMode());
+    app.find<QComboBox>("themeChoice")->setCurrentIndex(0);
+    QApplication::processEvents();
+    CHECK(!ui::darkMode());
+    app.window.reset();
+    qApp->setStyleSheet(oldSheet);
+    QApplication::setPalette(oldPalette);
 }
 
 TEST_CASE("A condition's tag shows only its name; its cause and duration are highlighted under its heading")
@@ -2955,14 +3278,18 @@ TEST_CASE("The Vampire's Multiattack allows two Grave Strikes and Bite, also in 
     app.open();
     app.select("vampire");
 
-    app.button(QStringLiteral("Multiattack"))->click();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    // The first Grave Strike takes the Multiattack action: three attacks.
+    app.button(QStringLiteral("Attack"))->click();
     QApplication::processEvents();
-    CHECK_EQ(App::in(app.saved(), "vampire").economy.attacksRemaining, 3);
+    app.clickTarget("aria");
+    CHECK_EQ(App::in(app.saved(), "vampire").economy.attacksRemaining, 2);
+    app.select("vampire");
+    QApplication::processEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     int usable = 0;
-    for (const char* name : {"rollAttackDamage"}) {
-        for (QPushButton* button : app.window->findChildren<QPushButton*>(QString::fromLatin1(name))) {
-            usable += button->isVisible() && button->isEnabled() && button->text() != QStringLiteral("Multiattack") ? 1 : 0;
-        }
+    for (QPushButton* button : app.window->findChildren<QPushButton*>(QStringLiteral("rollAttackDamage"))) {
+        usable += button->isVisible() && button->isEnabled() ? 1 : 0;
     }
     CHECK_EQ(usable, 2);  // Grave Strike and Bite
 }
@@ -3215,13 +3542,16 @@ TEST_CASE("an ability button matches Next turn while it can be used")
 
     QPushButton* next = app.find<QPushButton>("nextTurn");
     QPushButton* attack = app.button(QStringLiteral("Attack"));
-    QPushButton* multi = app.button(QStringLiteral("Multiattack"));
     CHECK(next->isEnabled());
     CHECK(attack->isEnabled());
     CHECK(buttonFill(attack) == buttonFill(next));
-    CHECK(multi->fontMetrics().horizontalAdvance(multi->text()) + 8 <= multi->width());
+    QPushButton* breathBefore = rowButton(app, QStringLiteral("Fire Breath"));
+    CHECK(breathBefore->fontMetrics().horizontalAdvance(breathBefore->text()) + 8 <= breathBefore->width());
 
-    multi->click();
+    attack->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    app.select("dragon");
     QApplication::processEvents();
     QPushButton* breath = rowButton(app, QStringLiteral("Fire Breath"));
     CHECK(breath != nullptr);

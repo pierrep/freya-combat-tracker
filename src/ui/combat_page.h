@@ -103,12 +103,16 @@ public:
     void setAutoPass(bool on) { m_autoPass = on; }
     // Throws the dice the app rolls across the page (Options can turn it off).
     void setShowDice(bool on) { m_showDice = on; }
+    // Redraws what was drawn in the old colours after a switch to or from dark mode.
+    void refreshTheme();
     // Remembers the encounter shown here in this file, and opens it next time.
     void setStateFile(const QString& path);
     // Keeps the undo history and the log in this file between runs: written
     // when the Dashboard is left or the app quits, read when it first opens.
     void setHistoryFile(const QString& path);
-    void saveHistory();
+    // The file is written in the background, so leaving the Dashboard doesn't
+    // pause; wait is for quitting, when it has to be on disk before the app ends.
+    void saveHistory(bool wait = false);
 
     // Writes an edit that is still waiting for typing to pause.
     void flushPendingSave();
@@ -198,6 +202,7 @@ private:
     void applySelectedHealing();
     void addSelectedCondition();
     void removeListedCondition(const QString& conditionId);
+    void askConditionSave();
     void showConditionText();
     void refreshConcentrationChoices(const QString& text);
     void setSelectedConcentration();
@@ -220,6 +225,11 @@ private:
     // The dice rolled since the last throw go across the page, captioned with
     // the log lines they produced.
     void flushDice();
+    // Ends a stage of the dice rolled so far (an attack's d20s), with its
+    // card's caption: what comes after is thrown once these have settled.
+    void splitDice(const QString& caption);
+    // The caption for the last stage (the damage), instead of the log lines.
+    void setDiceCaption(const QString& caption) { m_finalDiceCaption = caption; }
     // The dice tray: add a die, roll what is in it, empty it.
     void addTrayDie(int sides);
     void rollTray();
@@ -370,6 +380,8 @@ private:
     DiceOverlay* m_diceOverlay = nullptr;
     bool m_showDice = true;
     std::vector<ThrownDie> m_rolledDice;
+    std::vector<DiceStage> m_diceStages;  // stages ended by splitDice, waiting to be thrown
+    QString m_finalDiceCaption;
     bool m_diceFlushPending = false;
     qsizetype m_diceLogMark = 0;
 
@@ -390,7 +402,6 @@ private:
     QWidget* m_promptHost = nullptr;
     QVBoxLayout* m_promptLayout = nullptr;
     QTreeWidget* m_initiativeList = nullptr;
-    QTreeWidget* m_downList = nullptr;
     QListWidget* m_logList = nullptr;
     QWidget* m_combatantForm = nullptr;
     QLabel* m_noCombatantHint = nullptr;
@@ -398,6 +409,9 @@ private:
     QVBoxLayout* m_actionRows = nullptr;
     QVBoxLayout* m_detailsLayout = nullptr;
     QWidget* m_economyHost = nullptr;
+    // The attack-roll choice and the used-action checkboxes: kept apart so the
+    // Details tab can take them in and out when it is rebuilt.
+    QWidget* m_turnControls = nullptr;
     QCheckBox* m_actionUsed = nullptr;
     QCheckBox* m_bonusUsed = nullptr;
     QCheckBox* m_reactionUsed = nullptr;
@@ -432,6 +446,7 @@ private:
     QComboBox* m_durationKind = nullptr;
     QComboBox* m_durationAnchor = nullptr;
     QSpinBox* m_durationTurns = nullptr;
+    QPushButton* m_rollConditionSave = nullptr;
     QCheckBox* m_saveEnds = nullptr;
     QComboBox* m_saveEndsAbility = nullptr;
     QSpinBox* m_saveEndsDc = nullptr;

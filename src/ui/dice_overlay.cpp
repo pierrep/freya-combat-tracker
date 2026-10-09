@@ -26,6 +26,7 @@ constexpr double kSettleAt = 0.75;    // the dice turn to their results
 constexpr double kSettleTime = 0.2;
 constexpr double kHoldUntil = 5.2;    // then they fade
 constexpr double kFadeTime = 0.6;
+constexpr double kStagePause = 0.35;  // between a stage settling and the next throw
 // The camera looks down at the table, tilted toward the bottom of the page.
 constexpr float kTilt = 0.34f;  // radians from straight down
 constexpr float kGravity = 3000.0f;
@@ -384,11 +385,47 @@ float DiceOverlay::largestSettleTurn() const
 
 void DiceOverlay::throwDice(const std::vector<ThrownDie>& dice, const QString& caption)
 {
+    throwStages({DiceStage{dice, caption}});
+}
+
+std::vector<int> DiceOverlay::thrownSides() const
+{
+    std::vector<int> sides;
+    for (const Body& body : m_bodies) {
+        if (body.thrownAt <= m_age) {
+            sides.push_back(body.sides);
+        }
+    }
+    return sides;
+}
+
+int DiceOverlay::cardStage() const
+{
+    int shown = -1;
+    for (std::size_t k = 0; k < m_stageAt.size(); ++k) {
+        if (m_age >= m_stageAt[k] + kSettleAt + kSettleTime * 0.6) {
+            shown = static_cast<int>(k);
+        }
+    }
+    return shown;
+}
+
+QString DiceOverlay::shownCaption() const
+{
+    const int stage = cardStage();
+    return active() && stage >= 0 ? m_captions[static_cast<std::size_t>(stage)] : QString();
+}
+
+void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
+{
     m_bodies.clear();
-    m_caption = caption;
+    m_captions.clear();
+    m_stageAt.clear();
     const float width = static_cast<float>(std::max(200, this->width()));
     const float height = static_cast<float>(std::max(200, this->height()));
     const float base = std::clamp(std::min(width, height) / 15.0f, 22.0f, 40.0f);
+    int stageIndex = 0;
+    double stageAt = 0.0;
     const auto add = [&](int sides, Labels labels, int result, int shown) {
         if (static_cast<int>(m_bodies.size()) >= kMaxDice) {
             return;
@@ -398,6 +435,8 @@ void DiceOverlay::throwDice(const std::vector<ThrownDie>& dice, const QString& c
         body.labels = labels;
         body.result = result;
         body.shown = shown;
+        body.stage = stageIndex;
+        body.thrownAt = stageAt;
         body.radius = base * shapeFor(body.sides).size;
         body.faceValues = shapeFor(body.sides).faceValues;
         body.cornerValues = shapeFor(body.sides).cornerValues;
@@ -410,14 +449,25 @@ void DiceOverlay::throwDice(const std::vector<ThrownDie>& dice, const QString& c
         body.spin = QVector3D(random(-1, 1), random(-1, 1), random(-1, 1)).normalized() * random(9.0f, 17.0f);
         m_bodies.push_back(body);
     };
-    for (const ThrownDie& die : dice) {
-        if (die.sides == 100) {
-            const int value = ((die.face % 100) + 100) % 100;
-            add(10, Labels::Tens, value / 10, value / 10 * 10);
-            add(10, Labels::Ones, value % 10, value % 10);
-        } else {
-            add(die.sides, Labels::Plain, die.face, die.face);
+    for (const DiceStage& stage : stages) {
+        const std::size_t before = m_bodies.size();
+        for (const ThrownDie& die : stage.dice) {
+            if (die.sides == 100) {
+                const int value = ((die.face % 100) + 100) % 100;
+                add(10, Labels::Tens, value / 10, value / 10 * 10);
+                add(10, Labels::Ones, value % 10, value % 10);
+            } else {
+                add(die.sides, Labels::Plain, die.face, die.face);
+            }
         }
+        if (m_bodies.size() == before) {
+            continue;  // nothing thrown: no stage
+        }
+        m_captions.push_back(stage.caption);
+        m_stageAt.push_back(stageAt);
+        m_lastThrowAt = stageAt;
+        ++stageIndex;
+        stageAt += kSettleAt + kSettleTime + kStagePause;
     }
     if (m_bodies.empty()) {
         return;
@@ -526,13 +576,25 @@ void DiceOverlay::startSettling(Body& body)
 
 void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float width, float height)
 {
+    // A die not thrown yet isn't on the table; one that has settled stays put.
+    const auto local = [time](const Body& body) { return time - body.thrownAt; };
+    const auto still = [&local](const Body& body) { return local(body) >= kSettleAt + kSettleTime; };
     for (Body& body : bodies) {
         const Shape& shape = shapeFor(body.sides);
-        if (time >= kSettleAt && !body.settling) {
+        const double age = local(body);
+        if (age < 0.0) {
+            continue;
+        }
+        if (still(body)) {
+            body.orientation = body.settleTo;
+            body.velocity = QVector3D();
+            continue;
+        }
+        if (age >= kSettleAt && !body.settling) {
             startSettling(body);
         }
         if (body.settling) {
-            const double t = ease((time - kSettleAt) / kSettleTime);
+            const double t = ease((age - kSettleAt) / kSettleTime);
             body.orientation = QQuaternion::slerp(body.settleFrom, body.settleTo, static_cast<float>(t));
             const float rest = body.radius * shape.inradius;
             body.position.setZ(body.position.z() + (rest - body.position.z()) * std::min(1.0f, dt * 12.0f));
@@ -596,6 +658,9 @@ void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float w
         for (std::size_t j = i + 1; j < bodies.size(); ++j) {
             Body& a = bodies[i];
             Body& b = bodies[j];
+            if (local(a) < 0.0 || local(b) < 0.0 || (still(a) && still(b))) {
+                continue;
+            }
             QVector3D gap(b.position.x() - a.position.x(), b.position.y() - a.position.y(), 0.0f);
             const float reach = (a.radius + b.radius) * 0.92f;
             const float distance = gap.length();
@@ -603,14 +668,29 @@ void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float w
                 continue;
             }
             const QVector3D normal = distance > 0.01f ? gap / distance : QVector3D(1.0f, 0.0f, 0.0f);
-            const QVector3D push = normal * ((reach - distance) / 2.0f);
-            a.position -= push;
-            b.position += push;
+            // A settled die doesn't move: the other bounces off it.
+            const bool aStill = still(a);
+            const bool bStill = still(b);
+            const float overlap = reach - distance;
+            if (aStill) {
+                b.position += normal * overlap;
+            } else if (bStill) {
+                a.position -= normal * overlap;
+            } else {
+                a.position -= normal * (overlap / 2.0f);
+                b.position += normal * (overlap / 2.0f);
+            }
             const float closing = QVector3D::dotProduct(a.velocity - b.velocity, normal);
             if (closing > 0.0f) {
                 const QVector3D impulse = normal * (closing * 0.85f);
-                a.velocity -= impulse;
-                b.velocity += impulse;
+                if (aStill) {
+                    b.velocity += impulse * 2.0f;
+                } else if (bStill) {
+                    a.velocity -= impulse * 2.0f;
+                } else {
+                    a.velocity -= impulse;
+                    b.velocity += impulse;
+                }
             }
         }
     }
@@ -628,7 +708,7 @@ void DiceOverlay::tick()
         step(m_bodies, m_age, kStep, width, height);
         ++steps;
     }
-    if (m_age >= kHoldUntil + kFadeTime) {
+    if (m_age >= m_lastThrowAt + kHoldUntil + kFadeTime) {
         m_timer.stop();
         hide();
         return;
@@ -644,7 +724,8 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
-    const double fade = m_age > kHoldUntil ? 1.0 - (m_age - kHoldUntil) / kFadeTime : 1.0;
+    const double fadeAt = m_lastThrowAt + kHoldUntil;  // after the last throw
+    const double fade = m_age > fadeAt ? 1.0 - (m_age - fadeAt) / kFadeTime : 1.0;
     painter.setOpacity(std::clamp(fade, 0.0, 1.0));
 
     const float sinT = std::sin(kTilt);
@@ -656,6 +737,9 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     // Nearer the bottom of the page, and higher, is nearer the camera.
     std::vector<const Body*> order;
     for (const Body& body : m_bodies) {
+        if (body.thrownAt > m_age) {
+            continue;  // still to be thrown
+        }
         order.push_back(&body);
     }
     std::sort(order.begin(), order.end(), [&](const Body* a, const Body* b) {
@@ -776,16 +860,22 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
         }
     }
 
-    // Once they settle: what the roll was for, and each die's number.
-    if (m_age < kSettleAt + kSettleTime * 0.6) {
+    // Once a throw settles: what it was for, and its dice. A later throw's
+    // card replaces it (the hit, then the damage).
+    const int stage = cardStage();
+    if (stage < 0) {
         return;
     }
+    const QString caption = m_captions[static_cast<std::size_t>(stage)];
     QStringList parts;
     for (const Body& body : m_bodies) {
+        if (body.stage != stage) {
+            continue;
+        }
         parts << (body.labels == Labels::Plain ? QStringLiteral("d%1 %2").arg(body.sides).arg(body.shown)
                                                : QStringLiteral("%1").arg(body.shown));
     }
-    const QString detail = parts.join(QStringLiteral("  ·  "));
+    const QString detail = parts.join(QStringLiteral("  \u00B7  "));
     QFont captionFont = font();
     captionFont.setBold(true);
     captionFont.setPixelSize(13);
@@ -794,11 +884,11 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     const double maxWidth = std::min(520.0, width() - 32.0);
     const QFontMetricsF captionMetrics(captionFont);
     const QFontMetricsF detailMetrics(detailFont);
-    const QRectF captionBounds = captionMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0),
-                                                             Qt::TextWordWrap, m_caption);
+    const QRectF captionBounds =
+        captionMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0), Qt::TextWordWrap, caption);
     const QRectF detailBounds = detailMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0), Qt::TextWordWrap, detail);
-    const double cardWidth = std::max(captionBounds.width(), detailBounds.width()) + 32.0;
-    const double cardHeight = (m_caption.isEmpty() ? 0.0 : captionBounds.height() + 4.0) + detailBounds.height() + 22.0;
+    const double cardWidth = std::max(captionBounds.width(), detailBounds.width()) + 28.0;
+    const double cardHeight = (caption.isEmpty() ? 0.0 : captionBounds.height() + 3.0) + detailBounds.height() + 18.0;
     // Under the dice (the controls that threw them are usually above), or
     // over them when there is no room below.
     double x = cluster.center().x() - cardWidth / 2.0;
@@ -809,28 +899,27 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     x = std::clamp(x, 8.0, std::max(8.0, width() - cardWidth - 8.0));
     y = std::clamp(y, 8.0, std::max(8.0, height() - cardHeight - 8.0));
     const QRectF card(x, y, cardWidth, cardHeight);
-    const double appear = ease((m_age - (kSettleAt + kSettleTime * 0.6)) / 0.25);
+    const double appear =
+        ease((m_age - (m_stageAt[static_cast<std::size_t>(stage)] + kSettleAt + kSettleTime * 0.6)) / 0.25);
     painter.setOpacity(std::clamp(fade, 0.0, 1.0) * appear);
+    // Filled with the accent, white text: the Next turn button's look.
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(20, 18, 50, 40));
+    painter.setBrush(QColor(20, 18, 50, 50));
     painter.drawRoundedRect(card.translated(0, 3), 12, 12);
-    painter.setBrush(palette::surface);
-    painter.setPen(QPen(palette::accentSoft.darker(108), 1.0));
-    painter.drawRoundedRect(card, 12, 12);
-    painter.setPen(Qt::NoPen);
     painter.setBrush(palette::accent);
-    painter.drawRoundedRect(QRectF(card.left() + 6, card.top() + 10, 4, card.height() - 20), 2, 2);
-    double textTop = card.top() + 11.0;
-    if (!m_caption.isEmpty()) {
+    painter.setPen(QPen(palette::accent.darker(120), 1.0));
+    painter.drawRoundedRect(card, 12, 12);
+    double textTop = card.top() + 9.0;
+    if (!caption.isEmpty()) {
         painter.setFont(captionFont);
-        painter.setPen(palette::ink);
-        painter.drawText(QRectF(card.left() + 18, textTop, card.width() - 28, captionBounds.height() + 2),
-                         Qt::TextWordWrap, m_caption);
-        textTop += captionBounds.height() + 4.0;
+        painter.setPen(Qt::white);
+        painter.drawText(QRectF(card.left() + 14, textTop, card.width() - 24, captionBounds.height() + 2),
+                         Qt::TextWordWrap, caption);
+        textTop += captionBounds.height() + 3.0;
     }
     painter.setFont(detailFont);
-    painter.setPen(palette::accent);
-    painter.drawText(QRectF(card.left() + 18, textTop, card.width() - 28, detailBounds.height() + 2), Qt::TextWordWrap,
+    painter.setPen(QColor(255, 255, 255, 215));
+    painter.drawText(QRectF(card.left() + 14, textTop, card.width() - 24, detailBounds.height() + 2), Qt::TextWordWrap,
                      detail);
 }
 

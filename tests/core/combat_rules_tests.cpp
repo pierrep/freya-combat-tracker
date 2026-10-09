@@ -496,6 +496,34 @@ TEST_CASE("durations end at the anchor's turn boundary, and save-ends asks at th
     CHECK(!hasCondition(encounter.combatants[1], "frightened"));
 }
 
+TEST_CASE("a save the GM calls for is never asked at the end of the turn")
+{
+    const auto fear = spellAsAttack("Fear", 3, 15, std::nullopt);
+    CHECK(fear.has_value()); if (!(fear.has_value())) { return; }
+    CHECK(!fear->riders.empty()); if (!(!fear->riders.empty())) { return; }
+    CHECK(fear->riders[0].saveOnDemand);
+    CHECK(!fear->riders[0].saveEnds);
+    // Hideous Laughter saves every turn on its own.
+    const auto laughter = spellAsAttack("Hideous Laughter", 1, 15, std::nullopt);
+    CHECK(laughter.has_value()); if (!(laughter.has_value())) { return; }
+    CHECK(!laughter->riders[0].saveOnDemand);
+
+    Combatant goblin = orc();
+    goblin.id = "goblin";
+    Combatant aria = hero();
+    aria.id = "aria";
+    Encounter encounter;
+    encounter.id = "e";
+    encounter.name = "Fight";
+    encounter.combatants = {goblin, aria};
+    encounter.turnIndex = 1;
+    ActiveCondition scared{"frightened", std::nullopt, SaveEnds{Ability::Wisdom, 15}};
+    scared.saveEnds->manual = true;
+    addCondition(encounter.combatants[1], scared);
+    CHECK(advanceTurn(encounter).empty());  // aria's turn ends: no automatic save
+    CHECK(hasCondition(encounter.combatants[1], "frightened"));
+}
+
 TEST_CASE("long and short rests restore what the 2024 rules restore")
 {
     Character character = wizard();
@@ -2071,4 +2099,73 @@ TEST_CASE("the caster's own Invisibility ending also ends it on everyone else")
     CHECK(!hasCondition(encounter.combatants[1], "invisible"));
     CHECK_EQ(ended.size(), std::size_t{1});
     CHECK_EQ(ended[0].combatantId, std::string("ally"));
+}
+
+namespace {
+
+Monster blueDragon()
+{
+    Monster dragon;
+    dragon.id = "adult-blue-dragon";
+    dragon.name = "Adult Blue Dragon";
+    dragon.hp = 212;
+    MonsterAttack multi;
+    multi.name = "Multiattack";
+    multi.count = 3;
+    multi.effect = "The dragon makes three Rend attacks. It can replace one attack with a use of Spellcasting to cast Shatter.";
+    MonsterAttack rend;
+    rend.name = "Rend";
+    rend.attackBonus = 12;
+    rend.inMultiattack = true;
+    MonsterAttack casting;
+    casting.name = "Spellcasting";
+    casting.inMultiattack = true;
+    casting.effect = "The dragon casts one of the following spells, requiring no Material components and using "
+                     "Charisma as the spellcasting ability (spell save DC 18): At Will: Detect Magic, Invisibility, "
+                     "Mage Hand, Shatter";
+    dragon.attacks = {multi, rend, casting};
+    return dragon;
+}
+
+}  // namespace
+
+TEST_CASE("only the spell Multiattack names counts as part of it: Shatter, not Invisibility")
+{
+    const Monster dragon = blueDragon();
+    const std::vector<MonsterAttack> spells = actionableSpells(dragon, dragon.attacks[2]);
+    const MonsterAttack* shatter = nullptr;
+    const MonsterAttack* invisibility = nullptr;
+    for (const MonsterAttack& spell : spells) {
+        shatter = spell.name == "Shatter" ? &spell : shatter;
+        invisibility = spell.name == "Invisibility" ? &spell : invisibility;
+    }
+    CHECK(shatter != nullptr);
+    CHECK(invisibility != nullptr);
+    if (shatter == nullptr || invisibility == nullptr) {
+        return;
+    }
+    CHECK(shatter->inMultiattack);
+    CHECK(!invisibility->inMultiattack);
+
+    // Mid-Multiattack, Invisibility is refused; Shatter replaces one Rend.
+    Combatant combatant = makeMonsterCombatant(dragon, "dragon-row");
+    CHECK(useAction(combatant, dragon.attacks[1], true));
+    CHECK(!actionAvailability(combatant, *invisibility, true).available);
+    CHECK(actionAvailability(combatant, *shatter, true).available);
+    CHECK(useAction(combatant, *shatter, true));
+    CHECK_EQ(combatant.economy.attacksRemaining, 1);
+
+    // With the action free, Invisibility is its own action, not a Multiattack.
+    Combatant fresh = makeMonsterCombatant(dragon, "fresh");
+    CHECK(actionAvailability(fresh, *invisibility, true).available);
+    CHECK(useAction(fresh, *invisibility, true));
+    CHECK_EQ(fresh.economy.attacksRemaining, 0);
+    CHECK(fresh.economy.actionUsed);
+
+    // An oni's Multiattack names no spell: any spell can replace an attack.
+    Monster oni = blueDragon();
+    oni.attacks[0].effect = "The oni makes two Claw attacks. It can replace one attack with a use of Spellcasting.";
+    for (const MonsterAttack& spell : actionableSpells(oni, oni.attacks[2])) {
+        CHECK(spell.inMultiattack);
+    }
 }

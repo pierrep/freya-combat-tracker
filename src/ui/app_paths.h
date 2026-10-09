@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QString>
+
 #include <filesystem>
 
 namespace combat::ui {
@@ -11,6 +13,14 @@ namespace combat::ui {
 //   Windows %APPDATA%\CombatTracker
 // Requires QCoreApplication's application name to be set by main().
 std::filesystem::path appDataFolder();
+
+// The folder above when nothing has been chosen, and the options file that
+// always stays in it (it holds the choice, so it cannot move with the data).
+std::filesystem::path defaultDataFolder();
+std::filesystem::path optionsFilePath();
+// Key in that options file for a folder picked on the Options page. Empty or
+// missing: the default. Read when the app starts, so a change applies after a restart.
+QString dataFolderOptionKey();
 
 std::filesystem::path charactersFilePath();
 std::filesystem::path customMonstersFilePath();

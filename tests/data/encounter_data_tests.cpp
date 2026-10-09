@@ -312,6 +312,8 @@ TEST_CASE("version 3 keeps durations, save-ends, dying state, economy, uses, and
     aria.conditions.push_back(ActiveCondition{"unconscious", std::nullopt, std::nullopt});
     aria.conditions.push_back(ActiveCondition{"poisoned", ConditionDuration{"d", TurnBoundary::End, 2, true},
                                               SaveEnds{Ability::Constitution, 13}});
+    aria.conditions.push_back(ActiveCondition{"frightened", std::nullopt, SaveEnds{Ability::Wisdom, 15}});
+    aria.conditions.back().saveEnds->manual = true;
     encounter.combatants.push_back(aria);
     encounter.combatants[0].expended.push_back(breath.name);
     encounter.combatants[0].usesRemaining[ball.name] = 0;

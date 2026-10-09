@@ -32,6 +32,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QIcon>
+#include <future>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -81,6 +82,23 @@ void addRuleNotes(QVBoxLayout* layout, const MonsterAttack& attack)
 
 
 constexpr std::size_t kUndoLimit = 50;
+
+// The last history write, done off the UI thread: a long undo history is a
+// megabyte of JSON, and leaving the Dashboard shouldn't wait for it. A new
+// write, or a read, waits for this one first.
+std::future<void>& historyWrite()
+{
+    static std::future<void> write;
+    return write;
+}
+
+void waitForHistoryWrite()
+{
+    if (historyWrite().valid()) {
+        historyWrite().wait();
+    }
+}
+
 // The tick for a save the target makes with Advantage (SaveSpec::advantageIf).
 constexpr const char* kSaveAdvantageChoice = "@saveAdvantage";
 constexpr int kLogLimit = 40;
@@ -145,11 +163,6 @@ QFrame* sectionRule()
     auto* rule = new QFrame;
     rule->setObjectName(QStringLiteral("sectionRule"));
     rule->setFixedHeight(2);
-    const QColor tint((palette::accent.red() * 22 + palette::surface.red() * 78) / 100,
-                      (palette::accent.green() * 22 + palette::surface.green() * 78) / 100,
-                      (palette::accent.blue() * 22 + palette::surface.blue() * 78) / 100);
-    rule->setStyleSheet(
-        QStringLiteral("QFrame#sectionRule { background: %1; border: none; border-radius: 1px; }").arg(tint.name()));
     return rule;
 }
 
@@ -198,7 +211,7 @@ EntryRow makeEntryRow()
 }
 
 // A button that fills the column. Its side padding is small so the longest
-// labels ("Multiattack", "Recharging") fit the column without being clipped.
+// labels ("Recharging", "None left") fit the column without being clipped.
 void addColumnButton(const EntryRow& entry, QPushButton* button)
 {
     button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -210,7 +223,7 @@ void addColumnButton(const EntryRow& entry, QPushButton* button)
 }
 
 // A small note under the buttons: "2 left today", "costs 1 legendary".
-void addColumnNote(const EntryRow& entry, const QString& text)
+QLabel* addColumnNote(const EntryRow& entry, const QString& text)
 {
     auto* note = new QLabel(text);
     note->setObjectName(QStringLiteral("actionButtonNote"));
@@ -221,6 +234,7 @@ void addColumnNote(const EntryRow& entry, const QString& text)
     font.setPointSizeF(font.pointSizeF() * 0.88);
     note->setFont(font);
     entry.buttons->addWidget(note);
+    return note;
 }
 
 // Under a legendary action: what it costs and what is left, or why not now.
@@ -724,6 +738,12 @@ QColor blend(const QColor& a, const QColor& b, double amount)
     return QColor(mix(a.red(), b.red()), mix(a.green(), b.green()), mix(a.blue(), b.blue()));
 }
 
+// Text in a condition's colour, readable on its pale (or, in dark mode, dim) chip.
+QColor conditionInk(const QColor& hue)
+{
+    return darkMode() ? hue.lighter(165) : hue.darker(150);
+}
+
 QString statusText(const Combatant& combatant, const std::vector<Condition>& catalog)
 {
     QStringList parts;
@@ -773,9 +793,6 @@ QString economyText(const Combatant& combatant)
     if (economy.attacksRemaining > 0) {
         parts << QObject::tr("%n attack(s) left", nullptr, economy.attacksRemaining);
     }
-    if (combatant.statBlock.has_value() && combatant.statBlock->legendaryActionUses > 0) {
-        parts << QObject::tr("L %1/%2").arg(economy.legendaryRemaining).arg(combatant.statBlock->legendaryActionUses);
-    }
     return parts.join(QStringLiteral("    "));
 }
 
@@ -783,6 +800,8 @@ constexpr int kHpRole = Qt::UserRole + 1;
 constexpr int kMaxHpRole = Qt::UserRole + 2;
 // The combatant whose turn it is.
 constexpr int kActiveRole = Qt::UserRole + 3;
+// The line between the turn order and the dead under it.
+constexpr int kSeparatorRole = Qt::UserRole + 4;
 
 // The initiative cell. On the creature whose turn it is, the number sits in a
 // filled accent chip, so the turn marker takes no column of its own.
@@ -792,6 +811,15 @@ public:
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
+        if (index.data(kSeparatorRole).toBool()) {
+            // The row spans the list: a rule across it, in the middle.
+            painter->save();
+            painter->setPen(QPen(palette::line, 1.0));
+            const int y = option.rect.center().y();
+            painter->drawLine(option.rect.left() + 4, y, option.rect.right() - 4, y);
+            painter->restore();
+            return;
+        }
         if (!index.data(kActiveRole).toBool()) {
             QStyledItemDelegate::paint(painter, option, index);
             return;
@@ -898,41 +926,60 @@ public:
     }
 };
 
-QTreeWidgetItem* addCombatantRow(QTreeWidget* tree, const Combatant& combatant, bool active, bool initiativeColumns,
-                                 const std::vector<Condition>& catalog)
+// Writes a creature's row: used for a new row, and to update one in place
+// (so the turn order doesn't blink each time the fight changes).
+void fillCombatantRow(QTreeWidgetItem* item, QTreeWidget* tree, const Combatant& combatant, bool active, bool dead,
+                      const std::vector<Condition>& catalog)
 {
-    auto* item = new QTreeWidgetItem(tree);
     const QString name = QString::fromStdString(combatant.name);
     const QString hp = QString::fromStdString(formatHitPoints(combatant.hp, combatant.maxHp)) +
                        (combatant.tempHp > 0 ? QStringLiteral(" +%1").arg(combatant.tempHp) : QString());
     item->setData(0, Qt::UserRole, QString::fromStdString(combatant.id));
-    if (initiativeColumns) {
-        item->setText(0, QString::number(combatant.initiative));
-        item->setTextAlignment(0, Qt::AlignRight | Qt::AlignVCenter);
-        item->setData(0, kActiveRole, active);
-        item->setText(1, name);
-        if (active) {
-            QFont font = tree->font();
-            font.setWeight(QFont::DemiBold);
-            item->setFont(1, font);
-            item->setToolTip(1, QCoreApplication::translate("CombatPage", "%1's turn").arg(name));
-        }
-        item->setText(2, QString::number(combatant.ac));
-        item->setTextAlignment(2, Qt::AlignCenter);
-        item->setText(3, hp);
-        item->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
-        item->setData(3, kHpRole, combatant.hp);
-        item->setData(3, kMaxHpRole, combatant.maxHp.value_or(0));
-        const QString status = statusText(combatant, catalog);
-        item->setText(4, status);
-        item->setToolTip(4, status);
-    } else {
-        item->setText(0, name);
-        item->setText(1, hp);
-        item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
-        item->setText(2, statusText(combatant, catalog));
+    // The dead sit under the line with no initiative, and Dead is all their status.
+    item->setText(0, dead ? QString() : QString::number(combatant.initiative));
+    item->setTextAlignment(0, Qt::AlignRight | Qt::AlignVCenter);
+    item->setData(0, kActiveRole, active && !dead);
+    item->setText(1, name);
+    QFont font = tree->font();
+    if (active && !dead) {
+        font.setWeight(QFont::DemiBold);
     }
+    item->setFont(1, font);
+    item->setToolTip(1, active && !dead ? QCoreApplication::translate("CombatPage", "%1's turn").arg(name) : QString());
+    item->setText(2, QString::number(combatant.ac));
+    item->setTextAlignment(2, Qt::AlignCenter);
+    item->setText(3, hp);
+    item->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
+    item->setData(3, kHpRole, combatant.hp);
+    // No health bar for the dead.
+    item->setData(3, kMaxHpRole, dead ? 0 : combatant.maxHp.value_or(0));
+    const QString status = dead ? QCoreApplication::translate("CombatPage", "Dead") : statusText(combatant, catalog);
+    item->setText(4, status);
+    item->setToolTip(4, status);
+    for (int column = 0; column < tree->columnCount(); ++column) {
+        if (dead) {
+            item->setForeground(column, palette::muted);
+        } else {
+            item->setData(column, Qt::ForegroundRole, QVariant());
+        }
+    }
+}
+
+QTreeWidgetItem* addCombatantRow(QTreeWidget* tree, const Combatant& combatant, bool active, bool dead,
+                                 const std::vector<Condition>& catalog)
+{
+    auto* item = new QTreeWidgetItem(tree);
+    fillCombatantRow(item, tree, combatant, active, dead, catalog);
     return item;
+}
+
+// The rule above the dead: a row that spans the list and can't be picked.
+void addSeparatorRow(QTreeWidget* tree)
+{
+    auto* item = new QTreeWidgetItem(tree);
+    item->setFlags(Qt::NoItemFlags);
+    item->setData(0, kSeparatorRole, true);
+    item->setFirstColumnSpanned(true);
 }
 
 QString deathSaveWords(DeathSaveResult result)
@@ -960,6 +1007,7 @@ QString deathSaveWords(DeathSaveResult result)
 
 CombatPage::~CombatPage()
 {
+    waitForHistoryWrite();
     if (m_swordCursor) {
         QApplication::restoreOverrideCursor();
     }
@@ -1048,8 +1096,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_promptHost = new QFrame;
     m_promptHost->setObjectName(QStringLiteral("promptPanel"));
     m_promptHost->setProperty("card", true);
-    m_promptHost->setStyleSheet(QStringLiteral("QFrame#promptPanel { border: 1px solid %1; background: %2; }")
-                                    .arg(palette::accent.name(), palette::accentSoft.name()));
     m_promptLayout = new QVBoxLayout(m_promptHost);
     m_promptLayout->setContentsMargins(14, 10, 14, 10);
     m_promptHost->hide();
@@ -1137,19 +1183,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     // fifth less than it had at 2 to 5.
     left->addWidget(orderCard, 27);
 
-    auto* downCard = makeCard();
-    downCard->layout()->addWidget(makeHeading(tr("Downed")));
-    m_downList = makeCombatantTree({tr("Name"), tr("HP"), tr("Status")}, 0);
-    m_downList->setObjectName(QStringLiteral("zeroHpList"));
-    m_downList->setMinimumHeight(0);
-    m_downList->setHeaderHidden(true);
-    m_downList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_downList->setProperty("compact", true);
-    downCard->layout()->addWidget(m_downList);
-    downCard->layout()->setContentsMargins(16, 10, 16, 8);
-    downCard->layout()->setSpacing(4);
-    left->addWidget(downCard, 0);
-
     auto* logCard = makeCard();
     m_logCard = logCard;
     logCard->layout()->addWidget(makeHeading(tr("Log")));
@@ -1166,7 +1199,6 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     QFont logFont = m_logList->font();
     logFont.setPointSizeF(logFont.pointSizeF() * 0.88);
     m_logList->setFont(logFont);
-    m_downList->setFont(logFont);
     m_logList->setProperty("compact", true);
 
     // Lines wrap to the card's width; the wheel or the scroll bar shows older lines.
@@ -1489,6 +1521,11 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     auto* actionsLayout = new QVBoxLayout(actionsPage);
     actionsLayout->setContentsMargins(0, 12, 10, 4);
     actionsLayout->setSpacing(10);
+    m_turnControls = new QWidget;
+    m_turnControls->setObjectName(QStringLiteral("turnControls"));
+    auto* turnControlsLayout = new QVBoxLayout(m_turnControls);
+    turnControlsLayout->setContentsMargins(0, 0, 0, 0);
+    turnControlsLayout->setSpacing(10);
     auto* attackOptions = new QHBoxLayout;
     m_rollModeLabel = makeMuted(tr("Attack rolls"));
     m_rollModeLabel->setWordWrap(false);
@@ -1504,7 +1541,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     attackOptions->addWidget(m_rollModeLabel);
     attackOptions->addWidget(m_rollMode);
     attackOptions->addStretch(1);
-    actionsLayout->addLayout(attackOptions);
+    turnControlsLayout->addLayout(attackOptions);
     m_economyHost = new QWidget;
     auto* economyRow = new QHBoxLayout(m_economyHost);
     economyRow->setContentsMargins(0, 0, 0, 0);
@@ -1521,7 +1558,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     economyRow->addSpacing(8);
     economyRow->addWidget(m_economyNote);
     economyRow->addStretch(1);
-    actionsLayout->addWidget(m_economyHost);
+    turnControlsLayout->addWidget(m_economyHost);
     m_actionsSection = new QWidget;
     m_actionsSection->setObjectName(QStringLiteral("combatantAttacks"));
     m_actionRows = new QVBoxLayout(m_actionsSection);
@@ -1555,6 +1592,13 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     m_conditionDetail->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_conditionDetail->hide();
     conditionsLayout->addWidget(m_conditionDetail);
+    // The repeat save a spell leaves to the GM ("ends its turn without line of
+    // sight to you"), and a way to ask for any other save-ends condition early.
+    m_rollConditionSave = new QPushButton(tr("Roll save"));
+    m_rollConditionSave->setObjectName(QStringLiteral("rollConditionSave"));
+    m_rollConditionSave->hide();
+    conditionsLayout->addWidget(m_rollConditionSave, 0, Qt::AlignLeft);
+    connect(m_rollConditionSave, &QPushButton::clicked, this, &CombatPage::askConditionSave);
     m_conditionText = makeMuted(QString());
     m_conditionText->setObjectName(QStringLiteral("conditionText"));
     m_conditionText->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -1763,47 +1807,20 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     connect(m_encounterCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &CombatPage::showEncounter);
     connect(m_spellMatches, &QListWidget::itemDoubleClicked, this, [this] { setSelectedConcentration(); });
     connect(m_initiativeList, &QTreeWidget::itemClicked, this, &CombatPage::onTargetClicked);
-    connect(m_downList, &QTreeWidget::itemClicked, this, &CombatPage::onTargetClicked);
     // Ctrl-click or Shift-click selects several creatures (for Damage and
-    // Heal); a plain click selects one, across both lists.
+    // Heal); a plain click selects one.
     m_initiativeList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_downList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    auto adding = [] {
-        return (QApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier)) != 0;
-    };
-    connect(m_initiativeList, &QTreeWidget::currentItemChanged, this, [this, adding](QTreeWidgetItem* current) {
+    connect(m_initiativeList, &QTreeWidget::currentItemChanged, this, [this] {
         if (m_populating || m_armed.has_value()) {
             return;  // choosing targets: the card stays on the action's user
         }
-        if (current != nullptr) {
-            const QSignalBlocker blocker(m_downList);
-            m_downList->setCurrentItem(nullptr);
-            if (!adding()) {
-                m_downList->clearSelection();
-            }
-        }
         showCombatant();
     });
-    connect(m_downList, &QTreeWidget::currentItemChanged, this, [this, adding](QTreeWidgetItem* current) {
-        if (m_populating || m_armed.has_value()) {
-            return;  // choosing targets: the card stays on the action's user
+    connect(m_initiativeList, &QTreeWidget::itemSelectionChanged, this, [this] {
+        if (m_hitPanel->isVisible()) {
+            refreshHitPanel();
         }
-        if (current != nullptr) {
-            const QSignalBlocker blocker(m_initiativeList);
-            m_initiativeList->setCurrentItem(nullptr);
-            if (!adding()) {
-                m_initiativeList->clearSelection();
-            }
-        }
-        showCombatant();
     });
-    for (QTreeWidget* list : {m_initiativeList, m_downList}) {
-        connect(list, &QTreeWidget::itemSelectionChanged, this, [this] {
-            if (m_hitPanel->isVisible()) {
-                refreshHitPanel();
-            }
-        });
-    }
     connect(m_initiative, &QSpinBox::valueChanged, this, &CombatPage::onInitiativeChanged);
     connect(m_initiative, &QSpinBox::editingFinished, this, &CombatPage::onInitiativeEditingFinished);
     connect(m_hp, &QSpinBox::valueChanged, this, &CombatPage::onHpChanged);
@@ -1985,7 +2002,7 @@ void CombatPage::setHistoryFile(const QString& path)
     }
 }
 
-void CombatPage::saveHistory()
+void CombatPage::saveHistory(bool wait)
 {
     // Only once the saved history has been read, so an early save cannot
     // write over it.
@@ -2023,10 +2040,24 @@ void CombatPage::saveHistory()
         step.selectionId = undo.selectionId;
         history.steps.push_back(std::move(step));
     }
-    try {
-        saveHistoryFile(std::filesystem::path(m_historyFile.toStdU16String()), history);
-    } catch (const std::exception&) {
-        // Undo between runs is a convenience; a failed write loses only that.
+    // A write still going (two quick trips away from the Dashboard) finishes
+    // first, on the new write's thread, so the newest history lands last.
+    historyWrite() = std::async(std::launch::async,
+                                [earlier = std::move(historyWrite()),
+                                 path = std::filesystem::path(m_historyFile.toStdU16String()),
+                                 history = std::move(history)]() mutable {
+                                    if (earlier.valid()) {
+                                        earlier.wait();
+                                    }
+                                    try {
+                                        saveHistoryFile(path, history);
+                                    } catch (const std::exception&) {
+                                        // Undo between runs is a convenience; a failed write
+                                        // loses only that.
+                                    }
+                                });
+    if (wait) {
+        waitForHistoryWrite();
     }
 }
 
@@ -2036,6 +2067,7 @@ void CombatPage::restoreHistory()
         return;
     }
     m_historyRestored = true;
+    waitForHistoryWrite();
     const std::optional<FightHistory> history =
         loadHistoryFile(std::filesystem::path(m_historyFile.toStdU16String()));
     if (!history.has_value()) {
@@ -2257,9 +2289,7 @@ CombatPage::PageUndo CombatPage::capture() const
     undo.prompts = m_prompts;
     if (m_armed.has_value()) {
         undo.selectionId = m_armed->attackerId;  // choosing targets: the user is selected
-    } else if (const QTreeWidgetItem* item = m_initiativeList->currentItem() != nullptr
-                                                 ? m_initiativeList->currentItem()
-                                                 : m_downList->currentItem()) {
+    } else if (const QTreeWidgetItem* item = m_initiativeList->currentItem()) {
         undo.selectionId = item->data(0, Qt::UserRole).toString().toStdString();
     }
     return undo;
@@ -2373,12 +2403,24 @@ int CombatPage::rollDie(int sides)
     return rolled;
 }
 
+void CombatPage::splitDice(const QString& caption)
+{
+    if (!m_rolledDice.empty()) {
+        m_diceStages.push_back(DiceStage{m_rolledDice, caption});
+        m_rolledDice.clear();
+    }
+}
+
 void CombatPage::flushDice()
 {
     m_diceFlushPending = false;
     std::vector<ThrownDie> dice;
     dice.swap(m_rolledDice);
-    if (dice.empty() || m_diceOverlay == nullptr || !isVisible()) {
+    std::vector<DiceStage> stages;
+    stages.swap(m_diceStages);
+    QString finalCaption;
+    finalCaption.swap(m_finalDiceCaption);
+    if ((dice.empty() && stages.empty()) || m_diceOverlay == nullptr || !isVisible()) {
         return;
     }
     // The lines the roll added to the log (newest first there), oldest first
@@ -2391,7 +2433,12 @@ void CombatPage::flushDice()
         line.remove(round);
         lines << line;
     }
-    m_diceOverlay->throwDice(dice, lines.join(QLatin1Char('\n')));
+    // The last stage: what was rolled after the last split (an attack's
+    // damage), with its own caption or else the log lines.
+    if (!dice.empty()) {
+        stages.push_back(DiceStage{dice, finalCaption.isEmpty() ? lines.join(QLatin1Char('\n')) : finalCaption});
+    }
+    m_diceOverlay->throwStages(stages);
 }
 
 RollDie CombatPage::dieRoller()
@@ -2477,9 +2524,6 @@ Combatant* CombatPage::selectedCombatant()
         }
     }
     QTreeWidgetItem* item = m_initiativeList->currentItem();
-    if (item == nullptr) {
-        item = m_downList->currentItem();
-    }
     if (item == nullptr) {
         return nullptr;
     }
@@ -2610,8 +2654,7 @@ void CombatPage::fitTurnOrder()
     // gives up height, down to three lines. Only the log
     // is capped, so the column never asks for more than the window has.
     const int spacing = m_leftHost->layout() != nullptr ? m_leftHost->layout()->spacing() : 12;
-    const QWidget* downCard = m_downList->parentWidget();
-    const int column = m_leftHost->height() - (downCard->isVisible() ? downCard->height() + spacing : 0) - spacing;
+    const int column = m_leftHost->height() - spacing;
     const int orderChrome = std::max(0, m_orderCard->height() - m_initiativeList->height());
     // The log's usual share is under three tenths of the column; with more
     // to spare than that, it is left alone.
@@ -2629,6 +2672,17 @@ bool CombatPage::eventFilter(QObject* watched, QEvent* event)
         fitTurnOrder();
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void CombatPage::refreshTheme()
+{
+    m_openDamageButton->setIcon(swordIcon());
+    m_openDiceButton->setIcon(diceIcon());
+    if (selectedEncounter() != nullptr) {
+        rebuildCombatantList({});
+        showCombatant();
+    }
+    update();
 }
 
 void CombatPage::rebuildCombatantList(const std::string& selectId)
@@ -2649,35 +2703,73 @@ void CombatPage::rebuildCombatantList(const std::string& selectId)
     m_populating = true;
     {
         const QSignalBlocker initiativeBlocker(m_initiativeList);
-        const QSignalBlocker downBlocker(m_downList);
-        m_initiativeList->clear();
-        m_downList->clear();
-        QTreeWidgetItem* selectItem = nullptr;
-        QTreeWidget* selectList = nullptr;
+        // Shown in one go, not row by row.
+        m_initiativeList->setUpdatesEnabled(false);
+        // The same creatures in the same order: their rows are updated where
+        // they are. Only a change of who is alive, or of the order, builds the
+        // list again. The dead go under a line at the end, in fight order.
+        std::vector<std::string> wanted;
+        std::vector<int> living;
+        std::vector<int> dead;
         for (int i = 0; i < static_cast<int>(encounter->combatants.size()); ++i) {
-            const Combatant& combatant = encounter->combatants[static_cast<std::size_t>(i)];
-            const bool down = !isInInitiative(combatant);
-            QTreeWidget* list = down ? m_downList : m_initiativeList;
-            QTreeWidgetItem* item =
-                addCombatantRow(list, combatant, !down && encounter->started && i == encounter->turnIndex, !down,
-                                m_conditions);
-            if (combatant.id == id) {
-                selectItem = item;
-                selectList = list;
+            (isInInitiative(encounter->combatants[static_cast<std::size_t>(i)]) ? living : dead).push_back(i);
+        }
+        for (const int i : living) {
+            wanted.push_back(encounter->combatants[static_cast<std::size_t>(i)].id);
+        }
+        if (!dead.empty()) {
+            wanted.emplace_back();  // the line
+            for (const int i : dead) {
+                wanted.push_back(encounter->combatants[static_cast<std::size_t>(i)].id);
             }
         }
-        m_initiativeList->setCurrentItem(selectList == m_initiativeList ? selectItem : nullptr);
-        m_downList->setCurrentItem(selectList == m_downList ? selectItem : nullptr);
+        bool inPlace = m_initiativeList->topLevelItemCount() == static_cast<int>(wanted.size());
+        for (int row = 0; inPlace && row < m_initiativeList->topLevelItemCount(); ++row) {
+            inPlace = m_initiativeList->topLevelItem(row)->data(0, Qt::UserRole).toString().toStdString() ==
+                      wanted[static_cast<std::size_t>(row)];
+        }
+        if (!inPlace) {
+            m_initiativeList->clear();
+        }
+        int row = 0;
+        QTreeWidgetItem* selectItem = nullptr;
+        const auto place = [&](int i, bool isDead) {
+            const Combatant& combatant = encounter->combatants[static_cast<std::size_t>(i)];
+            const bool active = !isDead && encounter->started && i == encounter->turnIndex;
+            QTreeWidgetItem* item = nullptr;
+            if (inPlace) {
+                item = m_initiativeList->topLevelItem(row);
+                fillCombatantRow(item, m_initiativeList, combatant, active, isDead, m_conditions);
+            } else {
+                item = addCombatantRow(m_initiativeList, combatant, active, isDead, m_conditions);
+            }
+            ++row;
+            if (combatant.id == id) {
+                selectItem = item;
+            }
+        };
+        for (const int i : living) {
+            place(i, false);
+        }
+        if (!dead.empty()) {
+            if (!inPlace) {
+                addSeparatorRow(m_initiativeList);
+            }
+            ++row;
+            for (const int i : dead) {
+                place(i, true);
+            }
+        }
+        m_initiativeList->setCurrentItem(selectItem);
+        if (selectItem != nullptr) {
+            // Only it is selected (an in-place update keeps the old selection).
+            for (QTreeWidgetItem* other : m_initiativeList->selectedItems()) {
+                other->setSelected(other == selectItem);
+            }
+        }
+        m_initiativeList->setUpdatesEnabled(true);
     }
     m_populating = false;
-    // The Down card only takes room when someone is down.
-    // The Downed card is only as tall as its rows (up to three, then it scrolls).
-    const int downed = m_downList->topLevelItemCount();
-    m_downList->parentWidget()->setVisible(downed > 0);
-    if (downed > 0) {
-        const int rowHeight = m_downList->sizeHintForRow(0);
-        m_downList->setFixedHeight(std::min(downed, 3) * rowHeight + 2 * m_downList->frameWidth() + 2);
-    }
     fitTurnOrder();
 
     // Durations name other combatants; keep the anchor list current.
@@ -2709,7 +2801,7 @@ void CombatPage::showArmedTargets()
     // The creatures picked so far are highlighted; the user's own row is not
     // (it is still the card on the right, and comes back when the action ends).
     const std::vector<std::string>& targets = m_armed->targets;
-    for (QTreeWidget* list : {m_initiativeList, m_downList}) {
+    for (QTreeWidget* list : {m_initiativeList}) {
         const QSignalBlocker blocker(list);  // the list's, not its selection model's: rows keep their flags
         // No current row while choosing (the card follows the action's user;
         // a current row would be highlighted along with the targets).
@@ -2727,7 +2819,7 @@ void CombatPage::showArmedTargets()
 
 void CombatPage::selectRow(const std::string& id)
 {
-    for (QTreeWidget* list : {m_initiativeList, m_downList}) {
+    for (QTreeWidget* list : {m_initiativeList}) {
         const QSignalBlocker blocker(list);
         list->clearSelection();
         list->setCurrentItem(nullptr);
@@ -2785,6 +2877,20 @@ void CombatPage::showCombatant()
     if (m_populating) {
         return;
     }
+    // The card is rebuilt in one go, not seen half-built (no flicker).
+    struct HoldPainting {
+        QWidget* widget;
+        bool wasOn;
+        ~HoldPainting()
+        {
+            if (wasOn) {
+                widget->setUpdatesEnabled(true);
+            }
+        }
+    } hold{m_rightHost, m_rightHost->updatesEnabled()};
+    if (hold.wasOn) {
+        m_rightHost->setUpdatesEnabled(false);
+    }
     Combatant* combatant = selectedCombatant();
     const Encounter* encounter = selectedEncounter();
     const bool initiativePhase = encounter != nullptr && !encounter->started && !encounter->combatants.empty();
@@ -2807,6 +2913,7 @@ void CombatPage::showCombatant()
     m_rollMode->setVisible(monster);
     m_rollModeLabel->setVisible(monster);
     m_economyHost->setVisible(monster);
+    m_turnControls->setVisible(monster);
     m_rerollButton->setVisible(monster);
     // Another creature: back to the tab it had open (Actions the first time).
     if (combatant->id != m_cardCombatantId) {
@@ -2939,7 +3046,7 @@ void CombatPage::rebuildConditionList(const Combatant& combatant)
                                            "QFrame#conditionChip QToolButton:hover { color: %4; }")
                                 .arg(blend(hue, palette::surface, 0.16).name(),
                                      selected ? hue.name() : blend(hue, palette::surface, 0.16).name(),
-                                     hue.darker(150).name(), palette::critical.name()));
+                                     conditionInk(hue).name(), palette::critical.name()));
         auto* row = new QHBoxLayout(chip);
         row->setContentsMargins(12, 3, 6, 3);
         row->setSpacing(4);
@@ -2976,6 +3083,7 @@ void CombatPage::showConditionText()
         m_conditionHeading->hide();
         m_conditionDetail->hide();
         m_conditionRule->hide();
+        m_rollConditionSave->hide();
         return;
     }
     m_conditionText->show();
@@ -2997,6 +3105,13 @@ void CombatPage::showConditionText()
             }
         }
     }
+    bool canSave = false;
+    if (const Combatant* combatant = selectedCombatant(); combatant != nullptr) {
+        for (const ActiveCondition& active : combatant->conditions) {
+            canSave = canSave || (QString::fromStdString(active.id) == m_selectedCondition && active.saveEnds.has_value());
+        }
+    }
+    m_rollConditionSave->setVisible(canSave);
     if (notes.isEmpty()) {
         m_conditionDetail->hide();
     } else {
@@ -3005,7 +3120,7 @@ void CombatPage::showConditionText()
         m_conditionDetail->setStyleSheet(
             QStringLiteral("QLabel#conditionDetail { background: %1; color: %2; border-left: 3px solid %3; "
                            "border-radius: 4px; padding: 5px 10px; font-weight: 600; }")
-                .arg(blend(hue, palette::surface, 0.16).name(), hue.darker(150).name(), hue.name()));
+                .arg(blend(hue, palette::surface, 0.16).name(), conditionInk(hue).name(), hue.name()));
         m_conditionDetail->show();
     }
     const std::optional<Condition> condition = findConditionById(m_conditions, m_selectedCondition.toStdString());
@@ -3057,16 +3172,13 @@ void CombatPage::rebuildActions(const Combatant& combatant)
     const std::string id = combatant.id;
 
     // The same button a normal action uses. The spell's name is its title.
-    auto actionButtonLabel = [this](const MonsterAttack& attack) {
+    auto actionButtonLabel = [](const MonsterAttack& attack) {
         struct Label {
             QString text;
             QString hint;
         };
         if (attack.selfOnly) {
             return Label{tr("Use"), tr("Cast it on itself.")};
-        }
-        if (isMultiattack(attack)) {
-            return Label{tr("Multiattack"), tr("Spend the action on Multiattack, then use the attacks it names.")};
         }
         if (attack.benefit.has_value()) {
             return Label{tr("Help…"), tr("Pick a creature to help, then click it.")};
@@ -3088,9 +3200,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
         const EntryRow entry = makeEntryRow();
         QVBoxLayout* layout = entry.content;
         QString title = abilityName(attack.name);
-        if (isMultiattack(attack)) {
-            title = tr("Multiattack (%n use(s))", nullptr, attack.count);
-        } else if (attack.count > 1) {
+        if (attack.count > 1) {
             title += tr(" × %1 in Multiattack").arg(attack.count);
         }
         auto* titleLabel = boldLabel(title);
@@ -3120,18 +3230,20 @@ void CombatPage::rebuildActions(const Combatant& combatant)
         if (attack.benefit.has_value()) {
             button->setIcon(helpIcon());
         }
-        button->setToolTip(available.available ? label.hint : QString::fromStdString(available.reason));
+        QString hint = label.hint;
+        if (startsMultiattack(combatant, attack, theirTurn)) {
+            hint += QLatin1Char(' ') + tr("This takes the Multiattack action.");
+        }
+        button->setToolTip(available.available ? hint : QString::fromStdString(available.reason));
         const MonsterAttack copy = attack;
         connect(button, &QPushButton::clicked, this, [this, id, copy] { onActionClicked(id, copy); });
         addColumnButton(entry, button);
         if (usesLeft.has_value()) {
             addColumnNote(entry, tr("%1 of %2 left today").arg(*usesLeft).arg(*attack.perDay));
         }
-        const std::string bucket = attack.multiattackAs.empty() ? attack.name : attack.multiattackAs;
-        if (const auto left = combatant.economy.multiattackLeft.find(bucket);
-            combatant.economy.attacksRemaining > 0 && left != combatant.economy.multiattackLeft.end()) {
-            addColumnNote(entry, left->second > 0 ? tr("%n more in Multiattack", nullptr, left->second)
-                                                  : tr("none left in Multiattack"));
+        if (const std::optional<int> left = multiattackUsesLeft(combatant, attack); left.has_value()) {
+            addColumnNote(entry, *left > 0 ? tr("%n left in Multiattack", nullptr, *left)
+                                           : tr("none left in Multiattack"));
         }
         const std::string summary = attackSummary(attack);
         if (!summary.empty()) {
@@ -3459,6 +3571,12 @@ void CombatPage::rebuildActions(const Combatant& combatant)
     }
     for (const MonsterAttack& attack : block.attacks) {
         const std::vector<MonsterAttack> spells = actionableSpells(block, attack);
+        // Multiattack is its text only. Its attacks take the action when
+        // the first of them is used, and each says how many are left.
+        if (isMultiattack(attack)) {
+            addInfoRow(abilityName(attack.name), attack.effect, attack.selfEffect);
+            continue;
+        }
         if (spells.empty()) {
             addActionRow(attack);
             continue;
@@ -4121,6 +4239,9 @@ QString joinNames(const std::vector<std::string>& names)
 
 void CombatPage::rebuildDetails(const Combatant& combatant)
 {
+    // The turn controls outlive the rebuild: take them out before the rest goes.
+    m_detailsLayout->removeWidget(m_turnControls);
+    m_turnControls->setParent(nullptr);
     clearLayout(m_detailsLayout);
     const bool monster = isMonsterCombatant(combatant);
     const Monster* block = monster && combatant.statBlock.has_value() ? &*combatant.statBlock : nullptr;
@@ -4183,14 +4304,6 @@ void CombatPage::rebuildDetails(const Combatant& combatant)
     if (block != nullptr) {
         facts->addWidget(factBlock(tr("Speed"), QString::fromStdString(block->speed)));
         facts->addWidget(factBlock(tr("Passive Perception"), QString::number(block->passivePerception)));
-        facts->addWidget(factBlock(tr("Challenge"), tr("CR %1 (%2 XP)")
-                                                         .arg(QString::fromStdString(block->challengeRating))
-                                                         .arg(monsterXp(*block))));
-        if (block->legendaryActionUses > 0) {
-            facts->addWidget(factBlock(tr("Legendary actions"),
-                                       tr("%1 of %2").arg(combatant.economy.legendaryRemaining)
-                                           .arg(block->legendaryActionUses)));
-        }
     } else if (character != nullptr) {
         facts->addWidget(factBlock(tr("Speed"), character->speed.empty() ? tr("Not set")
                                                                           : QString::fromStdString(character->speed)));
@@ -4204,6 +4317,17 @@ void CombatPage::rebuildDetails(const Combatant& combatant)
     }
     facts->addStretch(1);
     m_detailsLayout->addLayout(facts);
+    if (block != nullptr && block->legendaryActionUses > 0) {
+        auto* legendary = new QHBoxLayout;
+        legendary->addWidget(factBlock(tr("Legendary actions"),
+                                       tr("%1 of %2").arg(combatant.economy.legendaryRemaining)
+                                           .arg(block->legendaryActionUses)));
+        legendary->addStretch(1);
+        m_detailsLayout->addLayout(legendary);
+    }
+    // How its attacks roll and what it has used this turn.
+    m_detailsLayout->addWidget(m_turnControls);
+    m_turnControls->setVisible(monster);  // re-parenting hid it
 
     // Defenses: one row per kind that applies.
     m_detailsLayout->addWidget(sectionRule());
@@ -4356,7 +4480,6 @@ void CombatPage::refreshInitiativeEntry()
             row.box->setToolTip(tr("This character's initiative total."));
             row.note = new QLabel;
             row.note->setObjectName(QStringLiteral("initiativeEntryNote"));
-            row.note->setStyleSheet(QStringLiteral("color: %1;").arg(palette::bloodied.name()));
             m_entryGrid->addWidget(row.name, line, 0);
             m_entryGrid->addWidget(row.bonus, line, 1);
             m_entryGrid->addWidget(row.box, line, 2);
@@ -4470,11 +4593,8 @@ void CombatPage::showInitiativeEntry()
 {
     {
         const QSignalBlocker initiativeBlocker(m_initiativeList);
-        const QSignalBlocker downBlocker(m_downList);
         m_initiativeList->setCurrentItem(nullptr);
         m_initiativeList->clearSelection();
-        m_downList->setCurrentItem(nullptr);
-        m_downList->clearSelection();
     }
     showCombatant();
     if (!m_entryRows.empty()) {
@@ -4650,7 +4770,7 @@ void CombatPage::afterDamage(Combatant& target, const DamageResult& result, cons
 std::vector<std::string> CombatPage::hitTargets()
 {
     std::vector<std::string> ids;
-    for (const QTreeWidget* list : {m_initiativeList, m_downList}) {
+    for (const QTreeWidget* list : {m_initiativeList}) {
         for (int i = 0; i < list->topLevelItemCount(); ++i) {
             const QTreeWidgetItem* item = list->topLevelItem(i);
             if (item->isSelected()) {
@@ -4838,6 +4958,33 @@ void CombatPage::removeListedCondition(const QString& conditionId)
         addLog(tr("%1's concentration ends.").arg(QString::fromStdString(combatant->name)));
     }
     commit(std::move(before), EditKind::Once, combatant->id);
+}
+
+// Asks for the condition's repeat save now: the GM calls for it when the spell's
+// own trigger happens. The save prompt rolls it and ends or worsens the condition.
+void CombatPage::askConditionSave()
+{
+    Combatant* combatant = selectedCombatant();
+    if (combatant == nullptr || m_selectedCondition.isEmpty()) {
+        return;
+    }
+    const std::string id = m_selectedCondition.toStdString();
+    for (const ActiveCondition& active : combatant->conditions) {
+        if (active.id != id || !active.saveEnds.has_value()) {
+            continue;
+        }
+        PageUndo before = capture();
+        Prompt prompt;
+        prompt.kind = Prompt::Kind::SaveToEnd;
+        prompt.combatantId = combatant->id;
+        prompt.conditionId = id;
+        prompt.ability = active.saveEnds->ability;
+        prompt.dc = active.saveEnds->dc;
+        m_prompts.push_back(prompt);
+        rebuildPrompts();
+        commit(std::move(before), EditKind::Once, combatant->id);
+        return;
+    }
 }
 
 void CombatPage::refreshConcentrationChoices(const QString& text)
@@ -5257,10 +5404,14 @@ void CombatPage::onActionClicked(const std::string& attackerId, const MonsterAtt
     const QString name = QString::fromStdString(attacker->name);
     if (attack.selfOnly) {
         PageUndo before = capture();
+        const bool startsMulti = startsMultiattack(*attacker, attack, theirTurn);
         if (!useAction(*attacker, attack, theirTurn)) {
             addLog(tr("%1 cannot use %2 now.").arg(name, abilityName(attack.name)));
             commit(std::move(before));
             return;
+        }
+        if (startsMulti) {
+            addLog(tr("%1 takes the Multiattack action.").arg(name));
         }
         if (!attack.concentration.empty()) {
             if (attacker->concentration == attack.concentration) {
@@ -5285,9 +5436,14 @@ void CombatPage::onActionClicked(const std::string& attackerId, const MonsterAtt
                              !attackDamageParts(attack).empty() || !attack.riders.empty();
     if (isMultiattack(attack) || !needsTarget) {
         PageUndo before = capture();
+        const bool startsMulti = isMultiattack(attack) || startsMultiattack(*attacker, attack, theirTurn);
         useAction(*attacker, attack, theirTurn);
-        addLog(isMultiattack(attack) ? tr("%1 takes the Multiattack action (%n use(s)).", nullptr, attack.count).arg(name)
-                                     : tr("%1 uses %2.").arg(name, abilityName(attack.name)));
+        if (startsMulti) {
+            addLog(tr("%1 takes the Multiattack action.").arg(name));
+        }
+        if (!isMultiattack(attack)) {
+            addLog(tr("%1 uses %2.").arg(name, abilityName(attack.name)));
+        }
         endByEvents(*attacker, actionEvents(attack.name, attack.effect, &attack, false));
         applyAbilityEffect(*attacker, attack.selfEffect);
         const std::string id = attacker->id;
@@ -5481,6 +5637,9 @@ void CombatPage::onTargetClicked(QTreeWidgetItem* item, int /*column*/)
         return;
     }
     const std::string targetId = item->data(0, Qt::UserRole).toString().toStdString();
+    if (targetId.empty()) {
+        return;  // the line above the dead
+    }
     showArmedTargets();  // the click moved the current row; it belongs to the user
     resolveArmedOn(targetId);
     // Still choosing (an area, or a target that was turned down): the picked
@@ -5576,12 +5735,16 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
         }
     }
     if (!armed.spent) {
+        const bool startsMulti = startsMultiattack(*attacker, armed.attack, isTheirTurn(*attacker));
         if (!useAction(*attacker, armed.attack, isTheirTurn(*attacker))) {
             addLog(tr("%1 cannot use %2 now.").arg(QString::fromStdString(attacker->name),
                                                  abilityName(armed.attack.name)));
             disarmAttack();
             commit(std::move(before));
             return;
+        }
+        if (startsMulti) {
+            addLog(tr("%1 takes the Multiattack action.").arg(QString::fromStdString(attacker->name)));
         }
         armed.spent = true;
     }
@@ -5694,6 +5857,17 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
         const int face = pickD20(mode, first, second);
         const AttackRoll roll = resolveAttackRoll(*attack.attackBonus, target->ac, d20Penalty(*attacker), face);
         const bool critical = roll.critical || (roll.hit && melee && meleeHitIsCritical(*target));
+        // The d20s are thrown first, with a hit or miss card; the damage
+        // follows once they settle.
+        {
+            const QString targetName = QString::fromStdString(target->name);
+            splitDice((!roll.hit   ? tr("Misses %1: %2 against AC %3")
+                       : critical ? tr("Critical hit on %1: %2 against AC %3")
+                                  : tr("Hits %1: %2 against AC %3"))
+                          .arg(targetName)
+                          .arg(roll.total)
+                          .arg(target->ac));
+        }
         // Automatic says why: "advantage: Aria is Prone".
         const auto joined = [](const std::vector<std::string>& list) {
             QStringList out;
@@ -5723,6 +5897,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
             if (attack.halfDamageOnMiss && !parts.empty()) {
                 const std::vector<TypedDamage> damage = halveDamage(
                     rollDamageParts(parts, damageOptionsFor(*attacker, target, attack), dieRoller()));
+                setDiceCaption(tr("Damage (half on a miss): %1").arg(QString::fromStdString(describeDamage(damage))));
                 const DamageResult result = applyDamage(*target, damage);
                 dealtDamage = dealtDamage || result.taken > 0;
                 addLog(tr("%1 misses %2: %3 rolled, %4 against AC %5, splashing for %6.")
@@ -5742,6 +5917,8 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
             options.critical = critical;
             options.advantage = mode == RollMode::Advantage;
             const std::vector<TypedDamage> damage = rollDamageParts(parts, options, dieRoller());
+            setDiceCaption((critical ? tr("Damage (critical): %1") : tr("Damage: %1"))
+                               .arg(QString::fromStdString(describeDamage(damage))));
             addLog(tr("%1 %2 %3: %4 rolled, %5 against AC %6, for %7.")
                        .arg(source, critical ? tr("critically hits") : tr("hits"), QString::fromStdString(target->name),
                             rolled)

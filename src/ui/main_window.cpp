@@ -22,6 +22,8 @@
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QStackedWidget>
+#include <QStyleHints>
+#include <QGuiApplication>
 #include <QTimer>
 
 namespace combat::ui {
@@ -103,6 +105,16 @@ MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, Cus
     connect(m_options, &OptionsPage::autoPassChanged, m_combat, &CombatPage::setAutoPass);
     m_combat->setShowDice(m_options->showDice());
     connect(m_options, &OptionsPage::showDiceChanged, m_combat, &CombatPage::setShowDice);
+    connect(m_options, &OptionsPage::themeChanged, this, &MainWindow::setThemeChoice);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    // Older Qt can't tell when the desktop changes; it reads it at start-up.
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
+        if (m_themeChoice == QStringLiteral("system")) {
+            setThemeChoice(m_themeChoice);
+        }
+    });
+#endif
+    setThemeChoice(m_options->theme());
 
     auto* central = new QWidget;
     auto* layout = new QHBoxLayout(central);
@@ -152,6 +164,28 @@ void MainWindow::placeNavigator()
     }
 }
 
+void MainWindow::setDarkTheme(bool on)
+{
+    if (on == darkMode()) {
+        return;
+    }
+    setDarkMode(on);
+    applyTheme(*qApp);
+    m_navigator->setIcon(chevronIcon());
+    m_combat->refreshTheme();
+    for (QWidget* widget : QApplication::allWidgets()) {
+        widget->update();
+    }
+}
+
+void MainWindow::setThemeChoice(const QString& choice)
+{
+    m_themeChoice = choice;
+    const bool dark =
+        choice == QStringLiteral("dark") || (choice == QStringLiteral("system") && systemPrefersDark());
+    setDarkTheme(dark);
+}
+
 void MainWindow::setOptionsFile(const QString& path)
 {
     m_options->setFile(path);
@@ -175,7 +209,7 @@ void MainWindow::flushPendingSaves()
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     flushPendingSaves();
-    m_combat->saveHistory();
+    m_combat->saveHistory(true);
     QMainWindow::closeEvent(event);
 }
 

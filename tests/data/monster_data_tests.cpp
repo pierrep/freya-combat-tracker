@@ -843,8 +843,10 @@ TEST_CASE("creature spell lists become the spells that deal damage or grant a co
             std::vector<std::string> names;
             for (const MonsterAttack& spell : spells) {
                 names.push_back(spell.name);
-                CHECK(spell.inMultiattack);
-                CHECK_EQ(spell.multiattackAs, std::string("Spellcasting"));
+                // Multiattack names Acid Arrow; Fear and the rest are a separate action.
+                const bool named = spell.name == "Acid Arrow (level 3)";
+                CHECK_EQ(spell.inMultiattack, named);
+                CHECK_EQ(spell.multiattackAs, named ? std::string("Spellcasting") : std::string());
             }
             CHECK(std::find(names.begin(), names.end(), "Acid Arrow (level 3)") != names.end());
             CHECK(std::find(names.begin(), names.end(), "Fear") != names.end());

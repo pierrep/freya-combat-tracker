@@ -166,6 +166,9 @@ struct ConditionRider {
     std::string until{};   // kUntil...
     std::string tiedTo{};  // another condition from the same hit it ends with ("grappled")
     bool saveEnds = false; // repeats the save at the end of each of its turns
+    // A repeat save the GM triggers by hand (the spell names its own trigger,
+    // like losing line of sight). Ignored when saveEnds is set.
+    bool saveOnDemand = false;
     std::vector<std::string> endsOn{};
     // A failed repeat save turns it into these instead ("Second Failure").
     std::vector<std::string> worsensTo{};

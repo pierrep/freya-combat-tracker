@@ -254,6 +254,7 @@ std::vector<ConditionRider> readRiders(const json& value, const std::string& con
         rider.until = json_util::readOptionalString<Error>(row, "until", riderContext);
         rider.tiedTo = asciiLower(json_util::readOptionalString<Error>(row, "tiedTo", riderContext));
         rider.saveEnds = json_util::readBoolOr<Error>(row, "saveEnds", false, riderContext);
+        rider.saveOnDemand = json_util::readBoolOr<Error>(row, "saveOnDemand", false, riderContext);
         rider.endsOn = json_util::readStringList<Error>(row, "endsOn", riderContext);
         rider.worsensTo = lowerList(json_util::readStringList<Error>(row, "worsensTo", riderContext));
         rider.worseSaveEnds = json_util::readBoolOr<Error>(row, "worseSaveEnds", false, riderContext);
@@ -299,6 +300,9 @@ json ridersJson(const std::vector<ConditionRider>& riders)
         }
         if (rider.saveEnds) {
             row["saveEnds"] = true;
+        }
+        if (rider.saveOnDemand) {
+            row["saveOnDemand"] = true;
         }
         if (!rider.endsOn.empty()) {
             row["endsOn"] = rider.endsOn;

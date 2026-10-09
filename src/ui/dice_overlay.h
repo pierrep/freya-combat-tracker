@@ -18,6 +18,12 @@ struct ThrownDie {
     int face = 1;
 };
 
+// One throw in a sequence: an attack's d20s, then (on a hit) its damage.
+struct DiceStage {
+    std::vector<ThrownDie> dice;
+    QString caption;
+};
+
 // 3D dice thrown across the page they cover: they tumble, bounce off each
 // other and the edges, and settle with the rolled number on top, then a card
 // shows what the roll was for, and everything fades. Drawn with QPainter (no
@@ -32,12 +38,20 @@ public:
     // Throws these dice (up to kMaxDice of them), replacing any still on the
     // page. caption says what they were for ("Goblin's Scimitar hits Aria").
     void throwDice(const std::vector<ThrownDie>& dice, const QString& caption);
+    // Throws these in turn: each once the one before has settled (and a
+    // short pause), onto the table beside the dice already there. Each
+    // stage's card replaces the one before.
+    void throwStages(const std::vector<DiceStage>& stages);
     // True from the throw until the dice have faded.
     bool active() const { return m_timer.isActive(); }
     // How many dice are on the page, and the number each one shows.
     std::vector<int> shownFaces() const;
     // The kind of each die on the page (4 to 20; a percentile roll is two d10s).
     std::vector<int> shownSides() const;
+    // The kind of each die thrown so far (an attack's damage waits for its
+    // d20 to settle), and the caption on the card now (empty while none shows).
+    std::vector<int> thrownSides() const;
+    QString shownCaption() const;
     // For checking a throw: the number on each die's face (a d4's corner)
     // nearest the viewer, and the largest turn, in degrees, any die made to
     // settle.
@@ -68,6 +82,8 @@ private:
         bool settling = false;
         int settleOn = 0;    // the face (a d4's corner) it settles showing
         int plannedOn = -1;  // the one the run-ahead chose and numbered
+        int stage = 0;          // which throw of the sequence it is in
+        double thrownAt = 0.0;  // when that throw starts, seconds after the first
         // Its numbers: arranged per throw so the face it settles on shows
         // the result (opposite faces still add up as on a real die).
         std::vector<int> faceValues;
@@ -81,8 +97,13 @@ private:
     static int nearestToCamera(const Body& body);
     static void numberForResult(Body& body, int settleOn);
 
+    // The stage whose card shows now, or -1.
+    int cardStage() const;
+
     std::vector<Body> m_bodies;
-    QString m_caption;
+    std::vector<QString> m_captions;  // each stage's
+    std::vector<double> m_stageAt;    // when each stage is thrown
+    double m_lastThrowAt = 0.0;
     QTimer m_timer;
     QElapsedTimer m_clock;
     double m_age = 0.0;  // seconds since the throw, in whole steps

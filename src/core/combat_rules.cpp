@@ -594,8 +594,9 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
         } else if (rider.until == kUntilMinute) {
             condition.duration = makeDuration(encounter, attacker.id, TurnBoundary::Start, 10);
         }
-        if (rider.saveEnds && save.has_value()) {
+        if ((rider.saveEnds || rider.saveOnDemand) && save.has_value()) {
             SaveEnds ends{save->ability, save->dc};
+            ends.manual = !rider.saveEnds;
             ends.worsensTo = rider.worsensTo;
             ends.worseSaveEnds = rider.worseSaveEnds;
             ends.worseEndsOn = rider.worseEndsOn;
@@ -1443,6 +1444,9 @@ std::vector<std::string> conditionNotes(const ActiveCondition& condition, const 
     if (condition.saveEnds.has_value()) {
         std::string save = "DC " + std::to_string(condition.saveEnds->dc) + " " +
                            abilityShort(condition.saveEnds->ability) + " save ends";
+        if (condition.saveEnds->manual) {
+            save += " (rolled when the spell calls for it)";
+        }
         if (!condition.saveEnds->worsensTo.empty()) {
             save += ", a failure makes it " + joinWords(conditionWords(condition.saveEnds->worsensTo));
         }
@@ -1921,6 +1925,93 @@ const std::string& multiattackBucket(const MonsterAttack& attack)
     return attack.multiattackAs.empty() ? attack.name : attack.multiattackAs;
 }
 
+namespace {
+
+// Each attack Multiattack names, as often as it names it. When the counts do
+// not reach the total (an attack per head), the map is empty and the total
+// alone decides.
+std::map<std::string, int> multiattackPlan(const Monster& block, int total)
+{
+    std::map<std::string, int> plan;
+    int named = 0;
+    bool spellcasting = false;
+    int spellcastingCount = 1;
+    for (const MonsterAttack& part : block.attacks) {
+        if (part.inMultiattack && !isMultiattack(part)) {
+            plan[part.name] = std::max(1, part.count);
+            named += std::max(1, part.count);
+            if (part.name == "Spellcasting") {
+                spellcasting = true;
+                spellcastingCount = std::max(1, part.count);
+            }
+        }
+    }
+    // Counts that do not add up (one attack per head) leave only the
+    // total. A spell still replaces just one of those attacks.
+    if (named < total) {
+        plan.clear();
+    }
+    if (spellcasting && plan.find("Spellcasting") == plan.end()) {
+        plan["Spellcasting"] = spellcastingCount;
+    }
+    return plan;
+}
+
+void startMultiattack(Combatant& combatant, const MonsterAttack& multi)
+{
+    TurnEconomy& economy = combatant.economy;
+    economy.actionUsed = true;
+    economy.attacksRemaining = std::max(1, multi.count);
+    economy.multiattackLeft.clear();
+    if (combatant.statBlock.has_value()) {
+        economy.multiattackLeft = multiattackPlan(*combatant.statBlock, economy.attacksRemaining);
+    }
+}
+
+}  // namespace
+
+const MonsterAttack* multiattackEntry(const Combatant& combatant)
+{
+    if (!combatant.statBlock.has_value()) {
+        return nullptr;
+    }
+    for (const MonsterAttack& attack : combatant.statBlock->attacks) {
+        if (isMultiattack(attack)) {
+            return &attack;
+        }
+    }
+    return nullptr;
+}
+
+bool startsMultiattack(const Combatant& combatant, const MonsterAttack& attack, bool theirTurn)
+{
+    const TurnEconomy& economy = combatant.economy;
+    return theirTurn && attack.inMultiattack && !isMultiattack(attack) && !economy.actionUsed &&
+           economy.attacksRemaining == 0 && multiattackEntry(combatant) != nullptr;
+}
+
+std::optional<int> multiattackUsesLeft(const Combatant& combatant, const MonsterAttack& attack)
+{
+    const MonsterAttack* multi = multiattackEntry(combatant);
+    if (multi == nullptr || !attack.inMultiattack || isMultiattack(attack)) {
+        return std::nullopt;
+    }
+    const TurnEconomy& economy = combatant.economy;
+    const std::string& bucket = multiattackBucket(attack);
+    if (economy.attacksRemaining > 0) {
+        const auto left = economy.multiattackLeft.find(bucket);
+        return left == economy.multiattackLeft.end() ? economy.attacksRemaining
+                                                     : std::min(left->second, economy.attacksRemaining);
+    }
+    if (economy.actionUsed) {
+        return 0;
+    }
+    const int total = std::max(1, multi->count);
+    const std::map<std::string, int> plan = multiattackPlan(*combatant.statBlock, total);
+    const auto planned = plan.find(bucket);
+    return planned == plan.end() ? total : std::min(planned->second, total);
+}
+
 Availability actionAvailability(const Combatant& combatant, const MonsterAttack& attack, bool theirTurn)
 {
     if (isIncapacitated(combatant)) {
@@ -1968,37 +2059,16 @@ bool useAction(Combatant& combatant, const MonsterAttack& attack, bool theirTurn
     }
     TurnEconomy& economy = combatant.economy;
     if (isMultiattack(attack)) {
-        economy.actionUsed = true;
-        economy.attacksRemaining = std::max(1, attack.count);
-        // Each attack it names, as often as it names it. When the counts do not
-        // reach the total (an attack per head), the total alone decides.
-        economy.multiattackLeft.clear();
-        if (combatant.statBlock.has_value()) {
-            int named = 0;
-            bool spellcasting = false;
-            int spellcastingCount = 1;
-            for (const MonsterAttack& part : combatant.statBlock->attacks) {
-                if (part.inMultiattack && !isMultiattack(part)) {
-                    economy.multiattackLeft[part.name] = std::max(1, part.count);
-                    named += std::max(1, part.count);
-                    if (part.name == "Spellcasting") {
-                        spellcasting = true;
-                        spellcastingCount = std::max(1, part.count);
-                    }
-                }
-            }
-            // Counts that do not add up (one attack per head) leave only the
-            // total. A spell still replaces just one of those attacks.
-            if (named < economy.attacksRemaining) {
-                economy.multiattackLeft.clear();
-            }
-            if (spellcasting && economy.multiattackLeft.find("Spellcasting") == economy.multiattackLeft.end()) {
-                economy.multiattackLeft["Spellcasting"] = spellcastingCount;
-            }
-        }
+        startMultiattack(combatant, attack);
         return true;
     }
-    if (!economy.grantedAttack.empty() && sameAction(economy.grantedAttack, attack.name) &&
+    // An attack Multiattack names, with the action still free, takes the
+    // Multiattack action and is its first attack.
+    const bool started = startsMultiattack(combatant, attack, theirTurn);
+    if (started) {
+        startMultiattack(combatant, *multiattackEntry(combatant));
+    }
+    if (!started && !economy.grantedAttack.empty() && sameAction(economy.grantedAttack, attack.name) &&
         (!theirTurn || economy.actionUsed)) {
         economy.grantedAttack.clear();
     } else if (economy.attacksRemaining > 0 && attack.inMultiattack) {

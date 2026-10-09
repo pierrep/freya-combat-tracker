@@ -431,8 +431,21 @@ struct Availability {
 // left, is not available. Incapacitated creatures cannot act.
 Availability actionAvailability(const Combatant& combatant, const MonsterAttack& attack, bool theirTurn);
 
-// Spends what the use costs. Returns false, and changes nothing, when it is
-// not available.
+// The monster's Multiattack entry, or null when it has none.
+const MonsterAttack* multiattackEntry(const Combatant& combatant);
+
+// Using this attack now takes the Multiattack action first: it is named in
+// Multiattack, it is the monster's turn, and its action is still free.
+bool startsMultiattack(const Combatant& combatant, const MonsterAttack& attack, bool theirTurn);
+
+// How many more times Multiattack lets this entry be used this turn: the
+// full count before the action is taken, what is left after, and 0 once the
+// action is spent. None when the entry is not part of a Multiattack.
+std::optional<int> multiattackUsesLeft(const Combatant& combatant, const MonsterAttack& attack);
+
+// Spends what the use costs. An attack named in Multiattack, used while the
+// action is free, takes the Multiattack action first. Returns false, and
+// changes nothing, when it is not available.
 bool useAction(Combatant& combatant, const MonsterAttack& attack, bool theirTurn);
 
 // Trait: a limited trait used when the GM says so (Legendary Resistance,

@@ -42,6 +42,11 @@ public:
 
     // Keeps the Options page's choices in this INI file.
     void setOptionsFile(const QString& path);
+    // Switches the whole app to the dark colours or back.
+    void setDarkTheme(bool on);
+    // The Options page's theme: "system" follows the computer's light or dark
+    // setting (and its changes), "light" and "dark" stay put.
+    void setThemeChoice(const QString& choice);
     // Where the Dashboard keeps its undo history and log between runs.
     void setHistoryFile(const QString& path);
 
@@ -60,6 +65,7 @@ private:
     EncounterBuilderPage* m_builder = nullptr;
     MonstersPage* m_monsters = nullptr;
     OptionsPage* m_options = nullptr;
+    QString m_themeChoice;
     bool m_reportedLoadError = false;
 };
 

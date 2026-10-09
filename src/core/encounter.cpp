@@ -161,7 +161,7 @@ void endTurn(Encounter& encounter, int index, std::vector<TurnEvent>& events)
             continue;
         }
         for (const ActiveCondition& condition : combatant.conditions) {
-            if (condition.saveEnds.has_value()) {
+            if (condition.saveEnds.has_value() && !condition.saveEnds->manual) {
                 TurnEvent event;
                 event.kind = TurnEvent::Kind::SaveToEnd;
                 event.combatantId = id;

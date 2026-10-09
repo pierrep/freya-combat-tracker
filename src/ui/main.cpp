@@ -87,7 +87,7 @@ int main(int argc, char* argv[])
 
     combat::ui::MainWindow window(store, catalog, customStore, encounters, spells, conditions, species, attribution,
                                   catalogError, sheetErrors.join(QStringLiteral("\n")));
-    window.setOptionsFile(QString::fromStdU16String((combat::ui::appDataFolder() / "options.ini").u16string()));
+    window.setOptionsFile(QString::fromStdU16String(combat::ui::optionsFilePath().u16string()));
     window.setHistoryFile(QString::fromStdU16String((combat::ui::appDataFolder() / "history.json").u16string()));
     window.resize(960, 640);
     window.show();
