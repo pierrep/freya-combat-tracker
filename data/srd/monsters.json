@@ -7639,7 +7639,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The djinni casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 17): At Will: Detect Evil and Good, Detect Magic 2/Day Each: Create Food and Water (can create wine instead of water), Tongues, Wind Walk\n1/Day Each: Creation, Gaseous Form, Invisibility, Major Image, Plane Shift Doppelganger",
+          "effect": "The djinni casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 17): At Will: Detect Evil and Good, Detect Magic 2/Day Each: Create Food and Water (can create wine instead of water), Tongues, Wind Walk\n1/Day Each: Creation, Gaseous Form, Invisibility, Major Image, Plane Shift",
           "count": 1
         }
       ],
@@ -8115,7 +8115,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The druid casts one of the following spells, using Wisdom as the spellcasting ability (spell save DC 13): At Will: Druidcraft, Speak with Animals 2/Day Each: Entangle, Thunderwave\n1/Day Each: Animal Messenger, Longstrider, Moonbeam Dryad",
+          "effect": "The druid casts one of the following spells, using Wisdom as the spellcasting ability (spell save DC 13): At Will: Druidcraft, Speak with Animals 2/Day Each: Entangle, Thunderwave\n1/Day Each: Animal Messenger, Longstrider, Moonbeam",
           "count": 1
         }
       ],
@@ -8489,7 +8489,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The efreeti casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 16): At Will: Detect Magic, Elementalism\n1/Day Each: Gaseous Form, Invisibility, Major Image, Plane Shift, Tongues, Wall of Fire (level 7 version) Erinyes",
+          "effect": "The efreeti casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 16): At Will: Detect Magic, Elementalism\n1/Day Each: Gaseous Form, Invisibility, Major Image, Plane Shift, Tongues, Wall of Fire (level 7 version)",
           "count": 1
         }
       ],
@@ -11730,7 +11730,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The glabrezu casts one of the following spells, requiring no Material components and using Intelligence as the spellcasting ability (spell save DC 16): At Will: Darkness, Detect Magic, Dispel Magic\n1/Day Each: Confusion, Fly, Power Word Stun Gladiator",
+          "effect": "The glabrezu casts one of the following spells, requiring no Material components and using Intelligence as the spellcasting ability (spell save DC 16): At Will: Darkness, Detect Magic, Dispel Magic\n1/Day Each: Confusion, Fly, Power Word Stun",
           "count": 1,
           "inMultiattack": true
         }
@@ -12557,7 +12557,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The hag casts one of the following spells, requiring no Material components and using Wisdom as the spellcasting ability (spell save DC 12, +4 to hit with spell attacks): At Will: Dancing Lights, Disguise Self (24-hour duration), Invisibility (self only, and the hag leaves no tracks while Invisible), Minor Illusion, Ray of Sickness (level 3 version) Grick",
+          "effect": "The hag casts one of the following spells, requiring no Material components and using Wisdom as the spellcasting ability (spell save DC 12, +4 to hit with spell attacks): At Will: Dancing Lights, Disguise Self (24-hour duration), Invisibility (self only, and the hag leaves no tracks while Invisible), Minor Illusion, Ray of Sickness (level 3 version)",
           "count": 1
         }
       ],
@@ -12937,7 +12937,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The naga casts one of the following spells, requiring no Somatic or Material components and using Wisdom as the spellcasting ability (spell save DC 16): At Will: Thaumaturgy\n1/Day Each: Clairvoyance, Cure Wounds (level 6 version), Flame Strike (level 6 version), Geas, True Seeing Guards",
+          "effect": "The naga casts one of the following spells, requiring no Somatic or Material components and using Wisdom as the spellcasting ability (spell save DC 16): At Will: Thaumaturgy\n1/Day Each: Clairvoyance, Cure Wounds (level 6 version), Flame Strike (level 6 version), Geas, True Seeing",
           "count": 1
         }
       ],
@@ -19108,7 +19108,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The rakshasa casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 18): At Will: Detect Magic, Detect Thoughts, Disguise Self, Mage Hand, Minor Illusion\n1/Day Each: Fly, Invisibility, Major Image, Plane Shift Red Dragons",
+          "effect": "The rakshasa casts one of the following spells, requiring no Material components and using Charisma as the spellcasting ability (spell save DC 18): At Will: Detect Magic, Detect Thoughts, Disguise Self, Mage Hand, Minor Illusion\n1/Day Each: Fly, Invisibility, Major Image, Plane Shift",
           "count": 1
         }
       ],
@@ -21530,7 +21530,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The naga casts one of the following spells, requiring no Somatic or Material components and using Intelligence as the spellcasting ability (spell save DC 14): At Will: Detect Magic, Mage Hand, Minor Illusion, Water Breathing 2/Day Each: Detect Thoughts, Dimension Door, Hold Person (level 3 version), Lightning Bolt (level 4 version) Sprite",
+          "effect": "The naga casts one of the following spells, requiring no Somatic or Material components and using Intelligence as the spellcasting ability (spell save DC 14): At Will: Detect Magic, Mage Hand, Minor Illusion, Water Breathing 2/Day Each: Detect Thoughts, Dimension Door, Hold Person (level 3 version), Lightning Bolt (level 4 version)",
           "count": 1
         }
       ],
@@ -22125,7 +22125,7 @@
         },
         {
           "name": "Spellcasting",
-          "effect": "The giant casts one of the following spells, requiring no Material components and using Wisdom as the spellcasting ability (spell save DC 18): At Will: Detect Magic, Light 1/Day: Control Weather Succubus",
+          "effect": "The giant casts one of the following spells, requiring no Material components and using Wisdom as the spellcasting ability (spell save DC 18): At Will: Detect Magic, Light 1/Day: Control Weather",
           "count": 1
         }
       ],

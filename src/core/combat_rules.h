@@ -143,8 +143,9 @@ struct ReleasedCondition {
 
 // Ends conditions whose cause has gone: a grapple whose grappler is
 // Incapacitated, dead, or out of the fight; a condition that lasts until its
-// source dies; and a condition tied to another that has ended ("Restrained
-// until the grapple ends").
+// source dies; a condition tied to another that has ended ("Restrained until
+// the grapple ends"); and a condition from someone else's concentration spell
+// once they stop concentrating on it (Invisibility on another creature).
 std::vector<ReleasedCondition> releaseConditions(Encounter& encounter);
 
 // "On a hit: Grappled (escape DC 14; Large or smaller)." for showing with the

@@ -8,6 +8,7 @@ add_library(combat_core STATIC
     monster.cpp
     monster_catalog.cpp
     sheet.cpp
+    spell_rules.cpp
     stat_block_reader.cpp
     text.cpp
     uuid.cpp

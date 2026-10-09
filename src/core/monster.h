@@ -71,6 +71,7 @@ inline constexpr const char* kRiderOnHit = "hit";
 inline constexpr const char* kRiderOnFailure = "failure";
 inline constexpr const char* kRiderOnFailureBy5 = "failureBy5";  // replaces the failure riders
 inline constexpr const char* kRiderOnZeroHp = "zeroHp";          // the hit dropped the target to 0
+inline constexpr const char* kRiderOnCast = "cast";              // granted as the spell is cast
 
 // How long a rider's condition lasts (ConditionRider::until). Empty is until
 // it is removed (or something in endsOn ends it).
@@ -178,9 +179,13 @@ struct ConditionRider {
     std::vector<std::string> removes{};
     // The target becomes Stable (the Phase Spider's bite at 0 HP).
     bool stabilize = false;
+
     // "Disadvantage on saving throws to maintain Concentration" (the Black
     // Dragon's Cloud of Insects). Not a condition: a timed effect on the target.
     bool concentrationDisadvantage = false;
+
+    // Spell id this condition needs. It ends when that concentration ends.
+    std::string concentration{};
 
     bool operator==(const ConditionRider&) const = default;
 };
@@ -248,6 +253,24 @@ struct MonsterAttack {
     bool advantageIfGrappled = false;
     // A helpful action: picks a creature to help instead of one to hurt.
     std::optional<Benefit> benefit{};
+    // A spell cast from a list. Multiattack counts it as this action
+    // ("Spellcasting", or the Succubus's "Charm") rather than the spell name.
+    std::string multiattackAs{};
+    // Half the damage on a miss (Acid Arrow's splash).
+    bool halfDamageOnMiss = false;
+    // The caster may be the target (Invisibility). selfOnly is "on itself":
+    // there is nothing to click.
+    bool allowSelf = false;
+    bool selfOnly = false;
+    // Rays, darts, and extra targets. An area stays aimed until End.
+    int strikes = 1;
+    // The same creature can be chosen again (Scorching Ray, Magic Missile).
+    bool repeatSameTarget = false;
+    // Spell id the caster concentrates on. Empty when the spell is not one.
+    std::string concentration{};
+    // The save a condition repeats later, when casting itself is not a save
+    // (Power Word Stun).
+    std::optional<SaveSpec> repeatSave{};
 
     bool operator==(const MonsterAttack&) const = default;
 };

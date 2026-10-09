@@ -1,5 +1,6 @@
 #include "core/attack_damage.h"
 #include "core/monster_catalog.h"
+#include "core/spell_rules.h"
 #include "data/json_monsters.h"
 #include "test_harness.h"
 
@@ -811,4 +812,219 @@ TEST_CASE("the packaged SRD catalog gives actions their conditions")
     CHECK_EQ(insects.riders.at(0).until, std::string(kUntilTargetEnd));
     const MonsterAttack ancient = entry("ancient-black-dragon", "Cloud of Insects");
     CHECK(ancient.riders.at(0).concentrationDisadvantage);
+}
+
+TEST_CASE("creature spell lists become the spells that deal damage or grant a condition")
+{
+    const auto monsters = loadSrdMonsters(fs::path{COMBAT_TRACKER_SRD_DIR} / "monsters.json");
+    const auto monsterNamed = [&monsters](const std::string& id) -> const Monster* {
+        for (const Monster& monster : monsters) {
+            if (monster.id == id) {
+                return &monster;
+            }
+        }
+        return nullptr;
+    };
+    const auto attackNamed = [](const Monster& monster, const std::string& name) -> const MonsterAttack* {
+        for (const MonsterAttack& attack : monster.attacks) {
+            if (attack.name == name) {
+                return &attack;
+            }
+        }
+        return nullptr;
+    };
+    const Monster* dragon = monsterNamed("adult-black-dragon");
+    CHECK(dragon != nullptr);
+    if (dragon != nullptr) {
+        const MonsterAttack* casting = attackNamed(*dragon, "Spellcasting");
+        CHECK(casting != nullptr);
+        if (casting != nullptr) {
+            const std::vector<MonsterAttack> spells = actionableSpells(*dragon, *casting);
+            std::vector<std::string> names;
+            for (const MonsterAttack& spell : spells) {
+                names.push_back(spell.name);
+                CHECK(spell.inMultiattack);
+                CHECK_EQ(spell.multiattackAs, std::string("Spellcasting"));
+            }
+            CHECK(std::find(names.begin(), names.end(), "Acid Arrow (level 3)") != names.end());
+            CHECK(std::find(names.begin(), names.end(), "Fear") != names.end());
+            CHECK(std::find(names.begin(), names.end(), "Vitriolic Sphere") != names.end());
+            CHECK(std::find(names.begin(), names.end(), "Detect Magic") == names.end());
+            for (const MonsterAttack& spell : spells) {
+                if (spell.name == "Acid Arrow (level 3)") {
+                    CHECK_EQ(spell.attackBonus.value_or(0), 9);
+                    CHECK_EQ(spell.damage.at(0).dice, std::string("5d4"));
+                    CHECK(spell.halfDamageOnMiss);
+                }
+                if (spell.name == "Fear") {
+                    CHECK(spell.area);
+                    CHECK(spell.save.has_value());
+                    CHECK(spell.save->ability == Ability::Wisdom);
+                    CHECK_EQ(spell.save->dc, 17);
+                    CHECK_EQ(spell.riders.at(0).conditions.at(0), std::string("frightened"));
+                }
+            }
+        }
+        bool fear = false;
+        for (const MonsterFeature& feature : dragon->legendaryActions) {
+            if (feature.name != "Frightful Presence") {
+                continue;
+            }
+            const std::vector<MonsterAttack> spells = actionableSpells(*dragon, feature);
+            CHECK_EQ(spells.size(), std::size_t{1});
+            if (!spells.empty()) {
+                CHECK_EQ(spells.front().name, std::string("Fear"));
+                CHECK_EQ(spells.front().save->dc, 17);
+                CHECK(!spells.front().inMultiattack);
+            }
+            fear = true;
+        }
+        CHECK(fear);
+    }
+
+    const Monster* vampire = monsterNamed("vampire");
+    CHECK(vampire != nullptr);
+    if (vampire != nullptr) {
+        bool charm = false;
+        bool command = false;
+        for (const MonsterFeature& feature : vampire->bonusActions) {
+            if (feature.name.rfind("Charm", 0) == 0) {
+                CHECK(actionableSpells(*vampire, feature).empty());
+                charm = true;
+            }
+        }
+        for (const MonsterFeature& feature : vampire->legendaryActions) {
+            if (feature.name == "Beguile") {
+                const std::vector<MonsterAttack> spells = actionableSpells(*vampire, feature);
+                CHECK_EQ(spells.size(), std::size_t{1});
+                if (!spells.empty()) {
+                    CHECK_EQ(spells.front().name, std::string("Command"));
+                    CHECK_EQ(spells.front().save->dc, 17);
+                }
+                command = true;
+            }
+        }
+        CHECK(charm);
+        CHECK(command);
+    }
+
+    const Monster* drider = monsterNamed("drider");
+    CHECK(drider != nullptr);
+    if (drider != nullptr) {
+        bool magic = false;
+        for (const MonsterFeature& feature : drider->bonusActions) {
+            if (feature.name.rfind("Magic of the Spider Queen", 0) != 0) {
+                continue;
+            }
+            const std::vector<MonsterAttack> spells = actionableSpells(*drider, feature);
+            std::vector<std::string> names;
+            for (const MonsterAttack& spell : spells) {
+                names.push_back(spell.name);
+                CHECK_EQ(spell.save->dc, 14);
+                CHECK(!spell.perDay.has_value());
+            }
+            CHECK(std::find(names.begin(), names.end(), "Faerie Fire") != names.end());
+            CHECK(std::find(names.begin(), names.end(), "Web") != names.end());
+            CHECK(std::find(names.begin(), names.end(), "Darkness") == names.end());
+            magic = true;
+        }
+        CHECK(magic);
+    }
+
+    const Monster* imp = monsterNamed("imp");
+    CHECK(imp != nullptr);
+    if (imp != nullptr) {
+        const MonsterAttack* invisibility = attackNamed(*imp, "Invisibility");
+        CHECK(invisibility != nullptr);
+        if (invisibility != nullptr) {
+            CHECK(actionableSpells(*imp, *invisibility).empty());
+        }
+    }
+
+    const Monster* archmage = monsterNamed("archmage");
+    CHECK(archmage != nullptr);
+    if (archmage != nullptr) {
+        const MonsterAttack* casting = attackNamed(*archmage, "Spellcasting");
+        CHECK(casting != nullptr);
+        if (casting != nullptr) {
+            const std::vector<MonsterAttack> spells = actionableSpells(*archmage, *casting);
+            bool bolt = false;
+            bool cone = false;
+            for (const MonsterAttack& spell : spells) {
+                CHECK(!spell.inMultiattack);
+                if (spell.name == "Lightning Bolt (level 7)") {
+                    CHECK_EQ(spell.damage.at(0).dice, std::string("12d6"));
+                    CHECK_EQ(spell.perDay.value_or(0), 2);
+                    CHECK_EQ(spell.save->dc, 17);
+                    bolt = true;
+                }
+                if (spell.name == "Cone of Cold (level 9)") {
+                    CHECK_EQ(spell.damage.at(0).dice, std::string("12d8"));
+                    CHECK_EQ(spell.perDay.value_or(0), 1);
+                    cone = true;
+                }
+            }
+            CHECK(bolt);
+            CHECK(cone);
+        }
+    }
+}
+
+TEST_CASE("every combat spell a creature names becomes an attack")
+{
+    const auto monsters = loadSrdMonsters(fs::path{COMBAT_TRACKER_SRD_DIR} / "monsters.json");
+    std::string missing;
+    int buttons = 0;
+    const auto checkBuilt = [&](const std::string& where, const std::vector<std::string>& mentions,
+                                const std::vector<MonsterAttack>& built, bool alreadyResolved) {
+        if (alreadyResolved) {
+            if (!built.empty()) {
+                missing += where + " also built a spell\n";
+            }
+            return;
+        }
+        for (const std::string& mention : mentions) {
+            const bool found = std::any_of(built.begin(), built.end(), [&mention](const MonsterAttack& spell) {
+                return spell.name == mention;
+            });
+            if (!found) {
+                missing += where + " did not build " + mention + "\n";
+            }
+        }
+        for (const MonsterAttack& spell : built) {
+            ++buttons;
+            if (spell.strikes < 1) {
+                missing += where + " " + spell.name + " has no strikes\n";
+            }
+            if (spell.effect.find(" casts ") == std::string::npos) {
+                missing += spell.name + " does not say it casts\n";
+            }
+            if (spell.save.has_value() && spell.save->dc <= 0) {
+                missing += where + " " + spell.name + " has no save DC\n";
+            }
+            for (const DamagePart& part : spell.damage) {
+                if (part.dice.empty()) {
+                    missing += spell.name + " has empty damage dice\n";
+                }
+            }
+        }
+    };
+    for (const Monster& monster : monsters) {
+        for (const MonsterAttack& attack : monster.attacks) {
+            const bool resolved = isMultiattack(attack) || attack.attackBonus.has_value() || attack.save.has_value() ||
+                                  attack.selfEffect.has_value();
+            checkBuilt(monster.name + " / " + attack.name, combatSpellMentions(attack.effect),
+                       actionableSpells(monster, attack), resolved);
+        }
+        for (const auto* features : {&monster.traits, &monster.bonusActions, &monster.reactions, &monster.legendaryActions}) {
+            for (const MonsterFeature& feature : *features) {
+                const bool resolved = feature.targeted.has_value() || feature.selfEffect.has_value();
+                checkBuilt(monster.name + " / " + feature.name, combatSpellMentions(feature.effect),
+                           actionableSpells(monster, feature), resolved);
+            }
+        }
+    }
+    if (!missing.empty() || buttons < 40) {
+        throw test::Failure(missing + "spell buttons: " + std::to_string(buttons));
+    }
 }

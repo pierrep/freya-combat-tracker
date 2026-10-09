@@ -563,8 +563,9 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
             }
         }
     }
-    const std::optional<SaveSpec> save =
-        attack.attackBonus.has_value() && attack.riderSave.has_value() ? attack.riderSave : attack.save;
+    const std::optional<SaveSpec> save = attack.attackBonus.has_value() && attack.riderSave.has_value() ? attack.riderSave
+                                                                                                    : attack.save.has_value() ? attack.save
+                                                                                                                              : attack.repeatSave;
     std::string source = riderSourceName(attacker, attack);
     if (rider.escapeDc.has_value()) {
         source += ", escape DC " + std::to_string(*rider.escapeDc);
@@ -579,6 +580,7 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
             condition.escapeDc = rider.escapeDc;
         }
         condition.endsOn = rider.endsOn;
+        condition.concentration = rider.concentration;
         if (rider.until == kUntilSourceStart) {
             condition.duration = makeDuration(encounter, attacker.id, TurnBoundary::Start, 1);
         } else if (rider.until == kUntilSourceEnd) {
@@ -665,6 +667,7 @@ std::vector<std::string> worsenCondition(Combatant& combatant, const std::string
         worse.source = old.source;
         worse.byId = old.byId;
         worse.endsOn = old.saveEnds->worseEndsOn;
+        worse.concentration = old.concentration;
         if (old.saveEnds->worseSaveEnds) {
             worse.saveEnds = SaveEnds{old.saveEnds->ability, old.saveEnds->dc};
         }
@@ -712,6 +715,22 @@ std::vector<ReleasedCondition> releaseConditions(Encounter& encounter)
                                             return other.id == tiedTo && other.byId == byId;
                                         });
                 }
+                // Invisibility, Hold Person, and the like: the condition lasts
+                // while the creature who caused it is concentrating on that spell.
+                if (!ends && !it->concentration.empty()) {
+                    const std::string spellId = it->concentration;
+                    const std::string casterId = it->byId.empty() ? combatant.id : it->byId;
+                    const Combatant* caster = nullptr;
+                    for (const Combatant& other : encounter.combatants) {
+                        if (other.id == casterId) {
+                            caster = &other;
+                            break;
+                        }
+                    }
+                    if (caster == nullptr || caster->concentration != spellId) {
+                        ends = true;
+                    }
+                }
                 if (ends) {
                     released.push_back(ReleasedCondition{combatant.id, *it});
                     combatant.conditions.erase(it);
@@ -758,6 +777,8 @@ std::string describeRider(const ConditionRider& rider)
         when = "Failing by 5 or more";
     } else if (rider.on == kRiderOnZeroHp) {
         when = "If the hit drops it to 0 HP";
+    } else if (rider.on == kRiderOnCast) {
+        when = "When cast";
     }
     std::vector<std::string> notes;
     if (rider.escapeDc.has_value()) {
@@ -862,8 +883,17 @@ std::vector<std::string> describeActionRules(const MonsterAttack& attack)
         lines.push_back("Only a target with 0 Hit Points.");
     }
     if (attack.failureHpThreshold.has_value() && !attack.targetAtZeroHp) {
-        lines.push_back("On a failure, a target with " + std::to_string(*attack.failureHpThreshold) +
-                        (attack.failureHpEffect == "dies" ? " HP or fewer dies." : " HP or fewer drops to 0."));
+        const std::string amount = std::to_string(*attack.failureHpThreshold);
+        if (attack.failureHpEffect == "dies") {
+            lines.push_back(std::string(attack.save.has_value() ? "On a failure, a target with " : "A target with ") +
+                            amount + " HP or fewer dies.");
+        } else if (attack.failureHpEffect == "dropsToZero") {
+            lines.push_back("On a failure, a target with " + amount + " HP or fewer drops to 0.");
+        } else if (!attack.failureHpEffect.empty()) {
+            lines.push_back("On a failure, a target with " + amount + " HP or fewer drops to 0.");
+        } else {
+            lines.push_back("Only a target with " + amount + " HP or fewer.");
+        }
     } else if (attack.failureHpThreshold.has_value()) {
         lines.push_back(attack.failureHpEffect == "dies" ? "On a failure, the target dies." : "On a failure, the target drops to 0.");
     }
@@ -898,6 +928,15 @@ std::vector<std::string> describeActionRules(const MonsterAttack& attack)
     }
     for (const ConditionRider& rider : attack.riders) {
         lines.push_back(describeRider(rider));
+    }
+    if (attack.halfDamageOnMiss) {
+        lines.push_back("Half damage on a miss.");
+    }
+    if (attack.strikes > 1) {
+        lines.push_back(std::to_string(attack.strikes) + " strikes.");
+    }
+    if (!attack.concentration.empty()) {
+        lines.push_back("Concentration.");
     }
     if (attack.drain.has_value()) {
         lines.push_back(std::string("Its Hit Point maximum drops by the ") +
@@ -1875,6 +1914,13 @@ std::string describeDamage(const std::vector<TypedDamage>& parts)
 
 // --- Action economy ---------------------------------------------------------
 
+// A spell cast in place of Spellcasting (or Charm) spends that action's
+// Multiattack entry, not one named for the spell.
+const std::string& multiattackBucket(const MonsterAttack& attack)
+{
+    return attack.multiattackAs.empty() ? attack.name : attack.multiattackAs;
+}
+
 Availability actionAvailability(const Combatant& combatant, const MonsterAttack& attack, bool theirTurn)
 {
     if (isIncapacitated(combatant)) {
@@ -1906,7 +1952,7 @@ Availability actionAvailability(const Combatant& combatant, const MonsterAttack&
         if (!attack.inMultiattack) {
             return {false, "Not part of Multiattack"};
         }
-        const auto left = economy.multiattackLeft.find(attack.name);
+        const auto left = economy.multiattackLeft.find(multiattackBucket(attack));
         if (left != economy.multiattackLeft.end() && left->second <= 0) {
             return {false, "Multiattack allows no more of this attack"};
         }
@@ -1929,14 +1975,25 @@ bool useAction(Combatant& combatant, const MonsterAttack& attack, bool theirTurn
         economy.multiattackLeft.clear();
         if (combatant.statBlock.has_value()) {
             int named = 0;
+            bool spellcasting = false;
+            int spellcastingCount = 1;
             for (const MonsterAttack& part : combatant.statBlock->attacks) {
                 if (part.inMultiattack && !isMultiattack(part)) {
                     economy.multiattackLeft[part.name] = std::max(1, part.count);
                     named += std::max(1, part.count);
+                    if (part.name == "Spellcasting") {
+                        spellcasting = true;
+                        spellcastingCount = std::max(1, part.count);
+                    }
                 }
             }
+            // Counts that do not add up (one attack per head) leave only the
+            // total. A spell still replaces just one of those attacks.
             if (named < economy.attacksRemaining) {
                 economy.multiattackLeft.clear();
+            }
+            if (spellcasting && economy.multiattackLeft.find("Spellcasting") == economy.multiattackLeft.end()) {
+                economy.multiattackLeft["Spellcasting"] = spellcastingCount;
             }
         }
         return true;
@@ -1946,7 +2003,7 @@ bool useAction(Combatant& combatant, const MonsterAttack& attack, bool theirTurn
         economy.grantedAttack.clear();
     } else if (economy.attacksRemaining > 0 && attack.inMultiattack) {
         economy.attacksRemaining -= 1;
-        if (const auto left = economy.multiattackLeft.find(attack.name); left != economy.multiattackLeft.end()) {
+        if (const auto left = economy.multiattackLeft.find(multiattackBucket(attack)); left != economy.multiattackLeft.end()) {
             left->second = std::max(0, left->second - 1);
         }
         if (economy.attacksRemaining == 0) {

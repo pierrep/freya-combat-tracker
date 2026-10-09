@@ -3086,3 +3086,77 @@ TEST_CASE("The Vampire's Charm casts Charm Person: a Wisdom save against Charmed
     CHECK(withAdvantage);
     CHECK(App::in(app.saved(), "vampire").economy.bonusActionUsed);
 }
+
+TEST_CASE("Invisibility cast on the caster stays, and the caster concentrates on it")
+{
+    App app;
+    Character aria = fighter();
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Lair";
+    encounter.combatants = {makeMonsterCombatant(srd(app.srdMonsters, "adult-blue-dragon"), "dragon"),
+                            makeCharacterCombatant(aria, "aria")};
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 5;
+    encounter.turnIndex = 0;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("dragon");
+    app.button(QStringLiteral("Invisibility"))->click();
+    QApplication::processEvents();
+    app.clickTarget("dragon");
+    const Combatant dragon = App::in(app.saved(), "dragon");
+    CHECK(hasCondition(dragon, "invisible"));
+    CHECK_EQ(dragon.concentration, std::string("invisibility"));
+    auto* log = app.find<QListWidget>("fightLog");
+    bool lost = false;
+    for (int i = 0; i < log->count(); ++i) {
+        lost = lost || log->item(i)->text().contains(QStringLiteral("no longer"));
+        lost = lost || log->item(i)->text().contains(QStringLiteral("concentration ends"));
+    }
+    CHECK(!lost);
+}
+
+TEST_CASE("Invisibility on another creature ends when the caster stops concentrating")
+{
+    App app;
+    Character aria = fighter();
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Lair";
+    encounter.combatants = {makeMonsterCombatant(srd(app.srdMonsters, "adult-blue-dragon"), "dragon"),
+                            makeCharacterCombatant(aria, "aria")};
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 5;
+    encounter.turnIndex = 0;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("dragon");
+    app.button(QStringLiteral("Invisibility"))->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+
+    Combatant ally = App::in(app.saved(), "aria");
+    Combatant dragon = App::in(app.saved(), "dragon");
+    CHECK(hasCondition(ally, "invisible"));
+    CHECK(!hasCondition(dragon, "invisible"));
+    CHECK_EQ(dragon.concentration, std::string("invisibility"));
+
+    app.select("dragon");
+    app.find<QPushButton>("clearConcentration")->click();
+    QApplication::processEvents();
+    ally = App::in(app.saved(), "aria");
+    dragon = App::in(app.saved(), "dragon");
+    CHECK(!hasCondition(ally, "invisible"));
+    CHECK(dragon.concentration.empty());
+    auto* log = app.find<QListWidget>("fightLog");
+    bool ended = false;
+    for (int i = 0; i < log->count(); ++i) {
+        ended = ended || log->item(i)->text().contains(QStringLiteral("Aria is no longer Invisible"));
+    }
+    CHECK(ended);
+}

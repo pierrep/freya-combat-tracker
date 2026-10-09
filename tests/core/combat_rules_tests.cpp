@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "core/combat_rules.h"
+#include "core/spell_rules.h"
 #include "core/encounter_difficulty.h"
 #include "core/stat_block_reader.h"
 #include "test_harness.h"
@@ -1803,4 +1804,271 @@ TEST_CASE("Charm Person: Humanoids only, and the vampire's Bite does not end the
     CHECK(hasCondition(hero, "charmed"));
     CHECK_EQ(endConditionsOnDamage(hero, "v", "Grave Strike").size(), std::size_t{1});
     CHECK(!hasCondition(hero, "charmed"));
+}
+
+TEST_CASE("SRD spells that deal damage or grant a condition become attacks")
+{
+    CHECK(spellCombatRuleCount() > 100);
+    CHECK(!spellAsAttack("Detect Magic", 1, 15, std::nullopt).has_value());
+
+    const auto fireball = spellAsAttack("Fireball", 3, 15, std::nullopt);
+    CHECK(fireball.has_value());
+    if (fireball.has_value()) {
+        CHECK(fireball->save.has_value());
+        CHECK(fireball->save->ability == Ability::Dexterity);
+        CHECK_EQ(fireball->save->dc, 15);
+        CHECK(fireball->save->halfOnSuccess);
+        CHECK(fireball->area);
+        CHECK_EQ(fireball->damage.at(0).dice, std::string("8d6"));
+        CHECK_EQ(fireball->damage.at(0).type, std::string("fire"));
+        CHECK(fireball->effect.find(" casts ") != std::string::npos);
+    }
+    const auto upcast = spellAsAttack("Fireball", 5, 15, std::nullopt);
+    CHECK(upcast.has_value());
+    if (upcast.has_value()) {
+        CHECK_EQ(upcast->name, std::string("Fireball (level 5)"));
+        CHECK_EQ(upcast->damage.at(0).dice, std::string("10d6"));
+    }
+
+    const auto hold = spellAsAttack("Hold Person", 2, 16, std::nullopt);
+    CHECK(hold.has_value());
+    if (hold.has_value()) {
+        CHECK(hold->save->ability == Ability::Wisdom);
+        CHECK_EQ(hold->concentration, std::string("hold-person"));
+        CHECK_EQ(hold->targetTypes.at(0), std::string("humanoid"));
+        CHECK_EQ(hold->strikes, 1);
+        CHECK_EQ(hold->riders.at(0).conditions.at(0), std::string("paralyzed"));
+        CHECK(hold->riders.at(0).saveEnds);
+        CHECK_EQ(hold->riders.at(0).concentration, std::string("hold-person"));
+        CHECK_EQ(hold->riders.at(0).on, std::string(kRiderOnFailure));
+    }
+    const auto holdMore = spellAsAttack("Hold Person", 3, 16, std::nullopt);
+    CHECK(holdMore.has_value());
+    if (holdMore.has_value()) {
+        CHECK_EQ(holdMore->strikes, 2);
+    }
+
+    const auto acid = spellAsAttack("Acid Arrow", 3, 17, 9);
+    CHECK(acid.has_value());
+    if (acid.has_value()) {
+        CHECK_EQ(acid->attackBonus.value_or(0), 9);
+        CHECK_EQ(acid->damage.at(0).dice, std::string("5d4"));
+        CHECK(acid->halfDamageOnMiss);
+        CHECK(acid->effect.find("3d4") != std::string::npos);
+    }
+
+    const auto missiles = spellAsAttack("Magic Missile", 1, 0, std::nullopt);
+    CHECK(missiles.has_value());
+    if (missiles.has_value()) {
+        CHECK_EQ(missiles->strikes, 3);
+        CHECK(missiles->repeatSameTarget);
+        CHECK_EQ(missiles->damage.at(0).dice, std::string("1d4+1"));
+        CHECK(!missiles->save.has_value());
+        CHECK(!missiles->attackBonus.has_value());
+    }
+    const auto moreMissiles = spellAsAttack("Magic Missile", 2, 0, std::nullopt);
+    CHECK(moreMissiles.has_value());
+    if (moreMissiles.has_value()) {
+        CHECK_EQ(moreMissiles->strikes, 4);
+    }
+
+    const auto command = spellAsAttack("Command", 1, 14, std::nullopt);
+    CHECK(command.has_value());
+    if (command.has_value()) {
+        CHECK_EQ(command->riders.at(0).ask, std::string("the command is Grovel"));
+        CHECK_EQ(command->riders.at(0).conditions.at(0), std::string("prone"));
+    }
+
+    const auto hidden = spellAsAttack("Invisibility", 2, 0, std::nullopt);
+    CHECK(hidden.has_value());
+    if (hidden.has_value()) {
+        CHECK(hidden->allowSelf);
+        CHECK_EQ(hidden->concentration, std::string("invisibility"));
+        CHECK_EQ(hidden->riders.at(0).on, std::string(kRiderOnCast));
+        CHECK_EQ(hidden->riders.at(0).conditions.at(0), std::string("invisible"));
+        CHECK(std::find(hidden->riders.at(0).endsOn.begin(), hidden->riders.at(0).endsOn.end(), kEndsOnAttackRoll) !=
+              hidden->riders.at(0).endsOn.end());
+    }
+
+    const auto kill = spellAsAttack("Power Word Kill", 9, 0, std::nullopt);
+    CHECK(kill.has_value());
+    if (kill.has_value()) {
+        CHECK_EQ(kill->damage.at(0).dice, std::string("12d12"));
+        const SpellStrike low = resolveSpellStrike(*kill, 100);
+        CHECK(low.kill);
+        CHECK(!low.applyDamage);
+        const SpellStrike high = resolveSpellStrike(*kill, 101);
+        CHECK(!high.kill);
+        CHECK(high.applyDamage);
+    }
+    const auto stun = spellAsAttack("Power Word Stun", 8, 17, std::nullopt);
+    CHECK(stun.has_value());
+    if (stun.has_value()) {
+        CHECK(stun->repeatSave.has_value());
+        CHECK(stun->repeatSave->ability == Ability::Constitution);
+        CHECK_EQ(stun->repeatSave->dc, 17);
+        CHECK(stun->riders.at(0).saveEnds);
+        CHECK(resolveSpellStrike(*stun, 150).applyConditions);
+        CHECK(!resolveSpellStrike(*stun, 151).applyConditions);
+    }
+}
+
+TEST_CASE("a spell cast during Multiattack spends the Spellcasting entry")
+{
+    Monster monster;
+    monster.id = "dragon";
+    monster.name = "Dragon";
+    monster.hp = 100;
+    MonsterAttack multi;
+    multi.name = "Multiattack";
+    multi.count = 3;
+    MonsterAttack rend;
+    rend.name = "Rend";
+    rend.count = 3;
+    rend.inMultiattack = true;
+    rend.attackBonus = 5;
+    MonsterAttack casting;
+    casting.name = "Spellcasting";
+    casting.count = 1;
+    casting.inMultiattack = true;
+    monster.attacks = {multi, rend, casting};
+    Combatant combatant = makeMonsterCombatant(monster, "dragon");
+    CHECK(useAction(combatant, multi, true));
+    CHECK_EQ(combatant.economy.multiattackLeft.at("Spellcasting"), 1);
+    CHECK_EQ(combatant.economy.multiattackLeft.at("Rend"), 3);
+    auto fireball = spellAsAttack("Fireball", 3, 15, std::nullopt);
+    CHECK(fireball.has_value());
+    if (!fireball.has_value()) {
+        return;
+    }
+    fireball->inMultiattack = true;
+    fireball->multiattackAs = "Spellcasting";
+    CHECK(useAction(combatant, *fireball, true));
+    CHECK_EQ(combatant.economy.attacksRemaining, 2);
+    CHECK_EQ(combatant.economy.multiattackLeft.at("Spellcasting"), 0);
+    CHECK_EQ(combatant.economy.multiattackLeft.at("Rend"), 3);
+    CHECK(!actionAvailability(combatant, *fireball, true).available);
+    CHECK(actionAvailability(combatant, rend, true).available);
+}
+
+TEST_CASE("a concentration spell ends on whoever received it when the caster stops")
+{
+    Encounter encounter;
+    Combatant caster;
+    caster.id = "mage";
+    caster.name = "Mage";
+    caster.hp = 20;
+    caster.concentration = "invisibility";
+    ActiveCondition own;
+    own.id = "invisible";
+    own.concentration = "invisibility";
+    caster.conditions.push_back(own);
+
+    Combatant ally;
+    ally.id = "ally";
+    ally.name = "Ally";
+    ally.hp = 20;
+    ActiveCondition shared;
+    shared.id = "invisible";
+    shared.concentration = "invisibility";
+    shared.byId = "mage";
+    shared.source = "Mage's Invisibility";
+    ally.conditions.push_back(shared);
+
+    Combatant other;
+    other.id = "other";
+    other.name = "Other";
+    other.hp = 20;
+    other.concentration = "invisibility";
+    ActiveCondition separate;
+    separate.id = "invisible";
+    separate.concentration = "invisibility";
+    separate.byId = "other";
+    other.conditions.push_back(separate);
+
+    encounter.combatants = {caster, ally, other};
+    CHECK(releaseConditions(encounter).empty());
+    CHECK(hasCondition(encounter.combatants[0], "invisible"));
+    CHECK(hasCondition(encounter.combatants[1], "invisible"));
+
+    // The spell ends early on a target who attacks. The caster is not that
+    // target, so attacking leaves the ally Invisible and concentration up.
+    endConditionsOn(encounter.combatants[0], {"attackRoll", "dealsDamage"});
+    CHECK(releaseConditions(encounter).empty());
+    CHECK(hasCondition(encounter.combatants[1], "invisible"));
+    CHECK_EQ(encounter.combatants[0].concentration, std::string("invisibility"));
+
+    endConcentration(encounter.combatants[0]);
+    const std::vector<ReleasedCondition> ended = releaseConditions(encounter);
+    CHECK_EQ(encounter.combatants[0].concentration, std::string());
+    CHECK(!hasCondition(encounter.combatants[0], "invisible"));
+    CHECK(!hasCondition(encounter.combatants[1], "invisible"));
+    CHECK(hasCondition(encounter.combatants[2], "invisible"));
+    CHECK_EQ(ended.size(), std::size_t{1});
+    CHECK_EQ(ended[0].combatantId, std::string("ally"));
+
+    // Casting it again does not bring the old beneficiary back.
+    setConcentration(encounter.combatants[0], "invisibility");
+    CHECK(releaseConditions(encounter).empty());
+    CHECK(!hasCondition(encounter.combatants[1], "invisible"));
+    CHECK_EQ(encounter.combatants[0].concentration, std::string("invisibility"));
+}
+
+TEST_CASE("Hold Person on someone else ends, including Incapacitated, when concentration ends")
+{
+    Encounter encounter;
+    Combatant caster;
+    caster.id = "mage";
+    caster.name = "Mage";
+    caster.hp = 20;
+    caster.concentration = "hold-person";
+    Combatant ally;
+    ally.id = "ally";
+    ally.name = "Ally";
+    ally.hp = 20;
+    ActiveCondition held;
+    held.id = "paralyzed";
+    held.concentration = "hold-person";
+    held.byId = "mage";
+    CHECK(addCondition(ally, held) == AddConditionResult::Added);
+    CHECK(hasCondition(ally, "incapacitated"));
+    encounter.combatants = {caster, ally};
+
+    endConcentration(encounter.combatants[0]);
+    const std::vector<ReleasedCondition> ended = releaseConditions(encounter);
+    CHECK(!hasCondition(encounter.combatants[1], "paralyzed"));
+    CHECK(!hasCondition(encounter.combatants[1], "incapacitated"));
+    CHECK_EQ(ended.size(), std::size_t{2});
+}
+
+TEST_CASE("the caster's own Invisibility ending also ends it on everyone else")
+{
+    Encounter encounter;
+    Combatant caster;
+    caster.id = "mage";
+    caster.name = "Mage";
+    caster.hp = 20;
+    caster.concentration = "invisibility";
+    ActiveCondition own;
+    own.id = "invisible";
+    own.concentration = "invisibility";
+    own.byId = "mage";
+    own.endsOn = {"attackRoll", "dealsDamage", "anySpell"};
+    caster.conditions.push_back(own);
+
+    Combatant ally;
+    ally.id = "ally";
+    ally.name = "Ally";
+    ally.hp = 20;
+    ActiveCondition shared = own;
+    ally.conditions.push_back(shared);
+    encounter.combatants = {caster, ally};
+
+    endConditionsOn(encounter.combatants[0], {"attackRoll"});
+    CHECK(encounter.combatants[0].concentration.empty());
+    CHECK(!hasCondition(encounter.combatants[0], "invisible"));
+    const std::vector<ReleasedCondition> ended = releaseConditions(encounter);
+    CHECK(!hasCondition(encounter.combatants[1], "invisible"));
+    CHECK_EQ(ended.size(), std::size_t{1});
+    CHECK_EQ(ended[0].combatantId, std::string("ally"));
 }

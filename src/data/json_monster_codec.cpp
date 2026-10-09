@@ -262,6 +262,7 @@ std::vector<ConditionRider> readRiders(const json& value, const std::string& con
         rider.ongoingAt = json_util::readOptionalString<Error>(row, "ongoingAt", riderContext);
         rider.removes = lowerList(json_util::readStringList<Error>(row, "removes", riderContext));
         rider.stabilize = json_util::readBoolOr<Error>(row, "stabilize", false, riderContext);
+        rider.concentration = json_util::readOptionalString<Error>(row, "concentration", riderContext);
         riders.push_back(std::move(rider));
     }
     return riders;
@@ -326,6 +327,9 @@ json ridersJson(const std::vector<ConditionRider>& riders)
         if (rider.concentrationDisadvantage) {
             row["concentrationDisadvantage"] = true;
         }
+        if (!rider.concentration.empty()) {
+            row["concentration"] = rider.concentration;
+        }
         list.push_back(std::move(row));
     }
     return list;
@@ -378,6 +382,14 @@ void readAttackFields(const json& value, MonsterAttack& attack, const std::strin
         row.until = json_util::readOptionalString<Error>(*benefit, "until", benefitContext);
         attack.benefit = row;
     }
+    attack.multiattackAs = json_util::readOptionalString<Error>(value, "multiattackAs", attackContext);
+    attack.halfDamageOnMiss = json_util::readBoolOr<Error>(value, "halfDamageOnMiss", false, attackContext);
+    attack.allowSelf = json_util::readBoolOr<Error>(value, "allowSelf", false, attackContext);
+    attack.selfOnly = json_util::readBoolOr<Error>(value, "selfOnly", false, attackContext);
+    attack.strikes = json_util::readIntOr<Error>(value, "strikes", 1, attackContext);
+    attack.repeatSameTarget = json_util::readBoolOr<Error>(value, "repeatSameTarget", false, attackContext);
+    attack.concentration = json_util::readOptionalString<Error>(value, "concentration", attackContext);
+    attack.repeatSave = readSave(value, "repeatSave", attackContext);
 }
 
 void writeAttackFields(json& row, const MonsterAttack& attack)
@@ -460,6 +472,30 @@ void writeAttackFields(json& row, const MonsterAttack& attack)
             value["until"] = benefit.until;
         }
         row["benefit"] = std::move(value);
+    }
+    if (!attack.multiattackAs.empty()) {
+        row["multiattackAs"] = attack.multiattackAs;
+    }
+    if (attack.halfDamageOnMiss) {
+        row["halfDamageOnMiss"] = true;
+    }
+    if (attack.allowSelf) {
+        row["allowSelf"] = true;
+    }
+    if (attack.selfOnly) {
+        row["selfOnly"] = true;
+    }
+    if (attack.strikes != 1) {
+        row["strikes"] = attack.strikes;
+    }
+    if (attack.repeatSameTarget) {
+        row["repeatSameTarget"] = true;
+    }
+    if (!attack.concentration.empty()) {
+        row["concentration"] = attack.concentration;
+    }
+    if (attack.repeatSave.has_value()) {
+        row["repeatSave"] = saveJson(*attack.repeatSave);
     }
 }
 
