@@ -152,7 +152,7 @@ EffectsDialog::EffectsDialog(const MonsterFeature& feature, bool trait, QWidget*
 void EffectsDialog::build(bool feature, bool trait)
 {
     setObjectName(QStringLiteral("effectsDialog"));
-    setWindowTitle(tr("Effects: %1").arg(QString::fromStdString(m_attack.name)));
+    setWindowTitle(tr("Effects: %1").arg(QString::fromStdString(abilityDisplayName(m_attack.name))));
     resize(720, 760);
     auto* outer = new QVBoxLayout(this);
     auto* scroll = new QScrollArea;
@@ -350,7 +350,7 @@ void EffectsDialog::build(bool feature, bool trait)
         m_selfCondition = conditionCombo(tr("Choose a condition"), self.has_value() ? self->condition : "invisible");
         form->addRow(tr("Condition"), m_selfCondition);
         m_selfSource = new QLineEdit(self.has_value() ? QString::fromStdString(self->source) : QString());
-        m_selfSource->setPlaceholderText(QString::fromStdString(m_attack.name));
+        m_selfSource->setPlaceholderText(QString::fromStdString(abilityDisplayName(m_attack.name)));
         form->addRow(tr("Shown as"), m_selfSource);
         m_selfConcentration = new QLineEdit(self.has_value() ? QString::fromStdString(self->concentration) : QString());
         m_selfConcentration->setPlaceholderText(tr("No concentration"));
@@ -782,7 +782,8 @@ void EffectsDialog::readInto(MonsterAttack& attack) const
     if (m_self->isChecked() && !m_selfCondition->currentData().toString().isEmpty()) {
         SelfEffect self;
         self.condition = m_selfCondition->currentData().toString().toStdString();
-        self.source = m_selfSource->text().trimmed().isEmpty() ? attack.name : m_selfSource->text().trimmed().toStdString();
+        self.source = m_selfSource->text().trimmed().isEmpty() ? abilityDisplayName(attack.name)
+                                                              : m_selfSource->text().trimmed().toStdString();
         self.concentration = m_selfConcentration->text().trimmed().toStdString();
         for (const QCheckBox* box : m_selfEnds) {
             if (box->isChecked()) {

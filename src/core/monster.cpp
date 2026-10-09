@@ -218,6 +218,19 @@ std::optional<std::vector<DamagePart>> parseDamageParts(const std::string& text,
     return parts;
 }
 
+std::string abilityDisplayName(const std::string& name)
+{
+    const std::string marker = " (Recharge ";
+    const auto start = name.rfind(marker);
+    if (start == std::string::npos || name.empty() || name.back() != ')') {
+        return name;
+    }
+    if (name.find(')', start) != name.size() - 1) {
+        return name;
+    }
+    return name.substr(0, start);
+}
+
 std::string attackSummary(const MonsterAttack& attack)
 {
     std::vector<std::string> pieces;

@@ -225,3 +225,13 @@ TEST_CASE("damage parts round-trip through the one-line editor text")
     breath.recharge = 5;
     CHECK_EQ(attackSummary(breath), std::string("DC 21 Dex save (half on success), 17d6 fire, area, Recharge 5-6"));
 }
+
+TEST_CASE("recharge is not part of an ability's name")
+{
+    CHECK_EQ(abilityDisplayName("Poison Breath (Recharge 5\xE2\x80\x93" "6)"), std::string("Poison Breath"));
+    CHECK_EQ(abilityDisplayName("Poison Breath (Recharge 5-6)"), std::string("Poison Breath"));
+    CHECK_EQ(abilityDisplayName("Acid Spray (Recharge 6)"), std::string("Acid Spray"));
+    CHECK_EQ(abilityDisplayName("Phantasms (Recharge after a Short or Long Rest)"), std::string("Phantasms"));
+    CHECK_EQ(abilityDisplayName("Legendary Resistance (3/Day)"), std::string("Legendary Resistance (3/Day)"));
+    CHECK_EQ(abilityDisplayName("Bite"), std::string("Bite"));
+}

@@ -18,6 +18,7 @@
 #include <QComboBox>
 #include <QCursor>
 #include <QFontMetrics>
+#include <QFont>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -116,6 +117,23 @@ QLabel* bodyLabel(const QString& text)
     auto* label = new QLabel(text);
     label->setWordWrap(true);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    return label;
+}
+
+QString abilityName(const std::string& name)
+{
+    return QString::fromStdString(abilityDisplayName(name));
+}
+
+QLabel* summaryLabel(const QString& text)
+{
+    auto* label = bodyLabel(text);
+    label->setObjectName(QStringLiteral("actionSummary"));
+    label->setProperty("role", QStringLiteral("muted"));
+    label->setProperty("summary", true);
+    QFont font = label->font();
+    font.setItalic(true);
+    label->setFont(font);
     return label;
 }
 
@@ -3035,7 +3053,167 @@ void CombatPage::rebuildActions(const Combatant& combatant)
     const bool theirTurn = isTheirTurn(combatant);
     const std::string id = combatant.id;
 
-    auto addFeatures = [this, &combatant, &block, id, theirTurn](const QString& heading,
+    // The same button a normal action uses. The spell's name is its title.
+    auto actionButtonLabel = [this](const MonsterAttack& attack) {
+        struct Label {
+            QString text;
+            QString hint;
+        };
+        if (attack.selfOnly) {
+            return Label{tr("Use"), tr("Cast it on itself.")};
+        }
+        if (isMultiattack(attack)) {
+            return Label{tr("Multiattack"), tr("Spend the action on Multiattack, then use the attacks it names.")};
+        }
+        if (attack.benefit.has_value()) {
+            return Label{tr("Help…"), tr("Pick a creature to help, then click it.")};
+        }
+        if (attack.attackBonus.has_value()) {
+            return Label{tr("Attack"), tr("Click the target to roll the attack.")};
+        }
+        if (attack.save.has_value() && attack.area) {
+            return Label{tr("Targets…"), tr("Click each creature in the area; End (or Escape) when done.")};
+        }
+        if (attack.save.has_value() || !attackDamageParts(attack).empty() || !attack.riders.empty()) {
+            return Label{tr("Target…"), tr("Click the target.")};
+        }
+        return Label{tr("Use"), tr("Use it.")};
+    };
+
+    // One ability: a button, its title, the roll summary, and its text.
+    auto addActionRow = [this, &combatant, id, theirTurn, &actionButtonLabel](const MonsterAttack& attack) {
+        const EntryRow entry = makeEntryRow();
+        QVBoxLayout* layout = entry.content;
+        QString title = abilityName(attack.name);
+        if (isMultiattack(attack)) {
+            title = tr("Multiattack (%n use(s))", nullptr, attack.count);
+        } else if (attack.count > 1) {
+            title += tr(" × %1 in Multiattack").arg(attack.count);
+        }
+        auto* titleLabel = boldLabel(title);
+        titleLabel->setObjectName(QStringLiteral("actionTitle"));
+        layout->addWidget(titleLabel);
+        std::optional<int> usesLeft;
+        if (attack.perDay.has_value()) {
+            const auto left = combatant.usesRemaining.find(attack.name);
+            usesLeft = left == combatant.usesRemaining.end() ? *attack.perDay : left->second;
+        }
+        const bool recharging =
+            attack.recharge.has_value() &&
+            std::find(combatant.expended.begin(), combatant.expended.end(), attack.name) != combatant.expended.end();
+        const Availability available = actionAvailability(combatant, attack, theirTurn);
+        const auto label = actionButtonLabel(attack);
+        QString buttonText = label.text;
+        if (recharging) {
+            buttonText = tr("Recharging");
+        } else if (usesLeft.has_value() && *usesLeft <= 0) {
+            buttonText = tr("None left");
+        }
+        const bool armedHere = m_armed.has_value() && m_armed->attackerId == id && !m_armed->featureKind.has_value() &&
+                               m_armed->attack.name == attack.name;
+        auto* button = new QPushButton(armedHere ? tr("End") : buttonText);
+        button->setObjectName(QStringLiteral("rollAttackDamage"));
+        button->setEnabled(armedHere || available.available);
+        if (attack.benefit.has_value()) {
+            button->setIcon(helpIcon());
+        }
+        button->setToolTip(available.available ? label.hint : QString::fromStdString(available.reason));
+        const MonsterAttack copy = attack;
+        connect(button, &QPushButton::clicked, this, [this, id, copy] { onActionClicked(id, copy); });
+        addColumnButton(entry, button);
+        if (usesLeft.has_value()) {
+            addColumnNote(entry, tr("%1 of %2 left today").arg(*usesLeft).arg(*attack.perDay));
+        }
+        const std::string bucket = attack.multiattackAs.empty() ? attack.name : attack.multiattackAs;
+        if (const auto left = combatant.economy.multiattackLeft.find(bucket);
+            combatant.economy.attacksRemaining > 0 && left != combatant.economy.multiattackLeft.end()) {
+            addColumnNote(entry, left->second > 0 ? tr("%n more in Multiattack", nullptr, left->second)
+                                                  : tr("none left in Multiattack"));
+        }
+        const std::string summary = attackSummary(attack);
+        if (!summary.empty()) {
+            layout->addWidget(summaryLabel(QString::fromStdString(summary)));
+        }
+        layout->addWidget(bodyLabel(QString::fromStdString(attack.effect)));
+        addRuleNotes(layout, attack);
+        addDamageChoices(layout, combatant, attack);
+        if (attack.selfEffect.has_value()) {
+            auto* note = bodyLabel(QString::fromStdString(
+                describeSelfEffect(*attack.selfEffect, conditionName(attack.selfEffect->condition).toStdString())));
+            note->setProperty("role", QStringLiteral("muted"));
+            layout->addWidget(note);
+        }
+        m_actionRows->addWidget(entry.row);
+    };
+
+    // Spellcasting itself: the list, with no button. Each spell is its own row below.
+    auto addInfoRow = [this](const QString& title, const std::string& effect, const std::optional<SelfEffect>& self) {
+        const EntryRow entry = makeEntryRow();
+        auto* titleLabel = boldLabel(title);
+        titleLabel->setObjectName(QStringLiteral("actionTitle"));
+        entry.content->addWidget(titleLabel);
+        entry.content->addWidget(bodyLabel(QString::fromStdString(effect)));
+        if (self.has_value()) {
+            auto* note = bodyLabel(QString::fromStdString(
+                describeSelfEffect(*self, conditionName(self->condition).toStdString())));
+            note->setProperty("role", QStringLiteral("muted"));
+            entry.content->addWidget(note);
+        }
+        entry.buttons->parentWidget()->hide();
+        m_actionRows->addWidget(entry.row);
+    };
+
+    auto addFeatureSpellRow = [this, &combatant, id, theirTurn, &actionButtonLabel](
+                                  const MonsterFeature& feature, FeatureKind kind, const MonsterAttack& spell) {
+        const EntryRow entry = makeEntryRow();
+        QVBoxLayout* layout = entry.content;
+        auto* titleLabel = boldLabel(abilityName(spell.name));
+        titleLabel->setObjectName(QStringLiteral("actionTitle"));
+        titleLabel->setProperty("featureName", QString::fromStdString(spell.name));
+        layout->addWidget(titleLabel);
+        std::optional<int> usesLeft;
+        if (feature.perDay.has_value()) {
+            const auto left = combatant.usesRemaining.find(feature.name);
+            usesLeft = left == combatant.usesRemaining.end() ? *feature.perDay : left->second;
+        }
+        const bool recharging =
+            feature.recharge.has_value() &&
+            std::find(combatant.expended.begin(), combatant.expended.end(), feature.name) != combatant.expended.end();
+        const Availability available = featureAvailability(combatant, kind, feature, theirTurn);
+        const auto label = actionButtonLabel(spell);
+        QString buttonText = label.text;
+        if (recharging) {
+            buttonText = tr("Recharging");
+        } else if (usesLeft.has_value() && *usesLeft <= 0) {
+            buttonText = tr("None left");
+        }
+        MonsterFeature shown = feature;
+        shown.targeted = spell;
+        const bool armedHere = m_armed.has_value() && m_armed->attackerId == id && m_armed->featureKind.has_value() &&
+                               m_armed->feature.name == feature.name && m_armed->attack.name == spell.name;
+        auto* button = new QPushButton(armedHere ? tr("End") : buttonText);
+        button->setObjectName(QStringLiteral("featureTarget"));
+        button->setEnabled(armedHere || available.available);
+        button->setToolTip(available.available ? label.hint : QString::fromStdString(available.reason));
+        connect(button, &QPushButton::clicked, this, [this, id, kind, shown] { onFeatureClicked(id, kind, shown); });
+        addColumnButton(entry, button);
+        if (usesLeft.has_value()) {
+            addColumnNote(entry, tr("%1 of %2 left today").arg(*usesLeft).arg(*feature.perDay));
+        }
+        if (kind == FeatureKind::Legendary) {
+            addColumnNote(entry, legendaryNote(combatant, theirTurn));
+        }
+        const std::string summary = attackSummary(spell);
+        if (!summary.empty()) {
+            layout->addWidget(summaryLabel(QString::fromStdString(summary)));
+        }
+        layout->addWidget(bodyLabel(QString::fromStdString(spell.effect)));
+        addRuleNotes(layout, spell);
+        addDamageChoices(layout, combatant, spell);
+        m_actionRows->addWidget(entry.row);
+    };
+
+    auto addFeatures = [this, &combatant, &block, id, theirTurn, &addFeatureSpellRow](const QString& heading,
                                                         const std::vector<MonsterFeature>& features,
                                                         std::optional<FeatureKind> kind) {
         if (features.empty()) {
@@ -3046,7 +3224,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
             const EntryRow entry = makeEntryRow();
             QWidget* row = entry.row;
             QVBoxLayout* layout = entry.content;
-            const QString title = QString::fromStdString(feature.name);
+            const QString title = abilityName(feature.name);
             std::optional<int> usesLeft;
             if (feature.perDay.has_value()) {
                 const auto left = combatant.usesRemaining.find(feature.name);
@@ -3056,6 +3234,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 feature.recharge.has_value() &&
                 std::find(combatant.expended.begin(), combatant.expended.end(), feature.name) != combatant.expended.end();
             auto* titleLabel = boldLabel(title);
+            titleLabel->setObjectName(QStringLiteral("actionTitle"));
             titleLabel->setProperty("featureName", QString::fromStdString(feature.name));
             layout->addWidget(titleLabel);
             // A trait gets a Use button when it is limited (Legendary Resistance, 3/Day).
@@ -3067,6 +3246,10 @@ void CombatPage::rebuildActions(const Combatant& combatant)
             const std::vector<std::vector<std::string>> choices =
                 feature.targeted.has_value() ? std::vector<std::vector<std::string>>{}
                                              : standardActionChoices(feature.effect);
+            const std::vector<MonsterAttack> spells =
+                rowKind.has_value() && choices.empty() && feature.name != "Legendary Action Uses"
+                    ? actionableSpells(block, feature)
+                    : std::vector<MonsterAttack>{};
             if (rowKind.has_value() && !choices.empty()) {
                 const Availability available = featureAvailability(combatant, *rowKind, feature, theirTurn);
                 for (const std::vector<std::string>& choice : choices) {
@@ -3086,7 +3269,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                     button->setEnabled(available.available);
                     button->setToolTip(available.available
                                            ? tr("Take the %1 action with %2.")
-                                                 .arg(words.join(tr(" and ")), QString::fromStdString(feature.name))
+                                                 .arg(words.join(tr(" and ")), abilityName(feature.name))
                                            : QString::fromStdString(available.reason));
                     const MonsterFeature copy = feature;
                     const FeatureKind which = *rowKind;
@@ -3098,76 +3281,52 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 if (*rowKind == FeatureKind::Legendary) {
                     addColumnNote(entry, legendaryNote(combatant, theirTurn));
                 }
-            } else if (rowKind.has_value() && feature.name != "Legendary Action Uses") {
-                const std::vector<MonsterAttack> spells = actionableSpells(block, feature);
+            } else if (rowKind.has_value() && spells.empty() && feature.name != "Legendary Action Uses") {
                 const Availability available = featureAvailability(combatant, *rowKind, feature, theirTurn);
                 const FeatureKind which = *rowKind;
-                auto addFeatureButton = [this, &entry, id, which, &feature, &available](
-                                            const MonsterFeature& shown, const QString& text, const QString& hint, bool helpful) {
-                    const bool armedHere =
-                        m_armed.has_value() && m_armed->attackerId == id && m_armed->featureKind.has_value() &&
-                        m_armed->feature.name == feature.name &&
-                        (!shown.targeted.has_value() || m_armed->attack.name == shown.targeted->name);
-                    auto* button = new QPushButton(armedHere ? tr("End") : text);
-                    button->setObjectName(shown.targeted.has_value() ? QStringLiteral("featureTarget")
-                                                                    : QStringLiteral("featureUse"));
-                    button->setEnabled(armedHere || available.available);
+                QString text = tr("Use");
+                QString hint = tr("Use it.");
+                const bool helpful = feature.targeted.has_value() && feature.targeted->benefit.has_value();
+                if (feature.targeted.has_value()) {
                     if (helpful) {
-                        button->setIcon(helpIcon());
+                        text = tr("Help…");
+                        hint = tr("Pick a creature to help, then click it.");
+                    } else if (feature.targeted->attackBonus.has_value()) {
+                        text = tr("Attack");
+                        hint = tr("Click the target to roll the attack.");
+                    } else if (feature.targeted->area) {
+                        text = tr("Targets…");
+                        hint = tr("Click each creature in the area; End (or Escape) when done.");
+                    } else {
+                        text = tr("Target…");
+                        hint = tr("Click the target.");
                     }
-                    button->setToolTip(available.available ? hint : QString::fromStdString(available.reason));
-                    connect(button, &QPushButton::clicked, this,
-                            [this, id, which, shown] { onFeatureClicked(id, which, shown); });
-                    addColumnButton(entry, button);
-                };
-                if (!spells.empty()) {
-                    for (const MonsterAttack& spell : spells) {
-                        MonsterFeature shown = feature;
-                        shown.targeted = spell;
-                        QString text = QString::fromStdString(spell.name);
-                        QString hint = spell.selfOnly ? tr("Cast it on itself.")
-                                       : spell.attackBonus.has_value()
-                                           ? tr("Click the target to roll the attack.")
-                                       : spell.area ? tr("Click each creature in the area; End (or Escape) when done.")
-                                                    : tr("Click the target.");
-                        if (recharging) {
-                            text = tr("Recharging");
-                        } else if (usesLeft.has_value() && *usesLeft <= 0) {
-                            text = tr("None left");
-                        }
-                        addFeatureButton(shown, text, hint, false);
-                    }
-                } else {
-                    QString text = tr("Use");
-                    QString hint = tr("Use it.");
-                    const bool helpful = feature.targeted.has_value() && feature.targeted->benefit.has_value();
-                    if (feature.targeted.has_value()) {
-                        if (helpful) {
-                            text = tr("Help…");
-                            hint = tr("Pick a creature to help, then click it.");
-                        } else if (feature.targeted->attackBonus.has_value()) {
-                            text = tr("Attack");
-                            hint = tr("Click the target to roll the attack.");
-                        } else if (feature.targeted->area) {
-                            text = tr("Targets…");
-                            hint = tr("Click each creature in the area; End (or Escape) when done.");
-                        } else {
-                            text = tr("Target…");
-                            hint = tr("Click the target.");
-                        }
-                    }
-                    if (recharging) {
-                        text = tr("Recharging");
-                    } else if (usesLeft.has_value() && *usesLeft <= 0) {
-                        text = tr("None left");
-                    }
-                    addFeatureButton(feature, text, hint, helpful);
                 }
+                if (recharging) {
+                    text = tr("Recharging");
+                } else if (usesLeft.has_value() && *usesLeft <= 0) {
+                    text = tr("None left");
+                }
+                const bool armedHere =
+                    m_armed.has_value() && m_armed->attackerId == id && m_armed->featureKind.has_value() &&
+                    m_armed->feature.name == feature.name &&
+                    (!feature.targeted.has_value() || m_armed->attack.name == feature.targeted->name);
+                auto* button = new QPushButton(armedHere ? tr("End") : text);
+                button->setObjectName(feature.targeted.has_value() ? QStringLiteral("featureTarget")
+                                                                  : QStringLiteral("featureUse"));
+                button->setEnabled(armedHere || available.available);
+                if (helpful) {
+                    button->setIcon(helpIcon());
+                }
+                button->setToolTip(available.available ? hint : QString::fromStdString(available.reason));
+                connect(button, &QPushButton::clicked, this,
+                        [this, id, which, feature] { onFeatureClicked(id, which, feature); });
+                addColumnButton(entry, button);
                 if (*rowKind == FeatureKind::Legendary) {
                     addColumnNote(entry, legendaryNote(combatant, theirTurn));
                 }
             }
-            if (usesLeft.has_value()) {
+            if (usesLeft.has_value() && spells.empty()) {
                 addColumnNote(entry, tr("%1 of %2 left today").arg(*usesLeft).arg(*feature.perDay));
             }
             if (feature.aura.has_value()) {
@@ -3204,10 +3363,6 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 addRuleNotes(layout, *feature.targeted);
                 addDamageChoices(layout, combatant, *feature.targeted);
             }
-            for (const MonsterAttack& spell : actionableSpells(block, feature)) {
-                addRuleNotes(layout, spell);
-                addDamageChoices(layout, combatant, spell);
-            }
             if (feature.aura.has_value()) {
                 const bool off = std::find(combatant.aurasOff.begin(), combatant.aurasOff.end(), feature.name) !=
                                  combatant.aurasOff.end();
@@ -3228,7 +3383,15 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 note->setProperty("role", QStringLiteral("muted"));
                 layout->addWidget(note);
             }
+            if (entry.buttons->count() == 0) {
+                entry.buttons->parentWidget()->hide();
+            }
             m_actionRows->addWidget(row);
+            if (rowKind.has_value()) {
+                for (const MonsterAttack& spell : spells) {
+                    addFeatureSpellRow(feature, *rowKind, spell);
+                }
+            }
         }
     };
 
@@ -3237,7 +3400,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
     if (Encounter* encounter = selectedEncounter()) {
         for (const RollQuestion& question : attackRollQuestions(*encounter, combatant)) {
             auto* box = new QCheckBox(tr("%1: %2 (%3%4)")
-                                          .arg(QString::fromStdString(question.trait), QString::fromStdString(question.text),
+                                          .arg(abilityName(question.trait), QString::fromStdString(question.text),
                                                question.advantage ? tr("Advantage") : tr("Disadvantage"),
                                                question.sticky ? QString() : tr(", next attack")));
             box->setObjectName(QStringLiteral("rollQuestion"));
@@ -3254,106 +3417,15 @@ void CombatPage::rebuildActions(const Combatant& combatant)
         m_actionRows->addWidget(bodyLabel(tr("No actions are stored for this monster.")));
     }
     for (const MonsterAttack& attack : block.attacks) {
-        const EntryRow entry = makeEntryRow();
-        QWidget* row = entry.row;
-        QVBoxLayout* layout = entry.content;
-        QString title = QString::fromStdString(attack.name);
-        if (isMultiattack(attack)) {
-            title = tr("Multiattack (%n use(s))", nullptr, attack.count);
-        } else if (attack.count > 1) {
-            title += tr(" × %1 in Multiattack").arg(attack.count);
-        }
-        layout->addWidget(boldLabel(title));
         const std::vector<MonsterAttack> spells = actionableSpells(block, attack);
-        const std::vector<MonsterAttack> choices = spells.empty() ? std::vector<MonsterAttack>{attack} : spells;
-        for (const MonsterAttack& choice : choices) {
-            std::optional<int> usesLeft;
-            if (choice.perDay.has_value()) {
-                const auto left = combatant.usesRemaining.find(choice.name);
-                usesLeft = left == combatant.usesRemaining.end() ? *choice.perDay : left->second;
-            }
-            const bool recharging =
-                choice.recharge.has_value() &&
-                std::find(combatant.expended.begin(), combatant.expended.end(), choice.name) != combatant.expended.end();
-            const Availability available = actionAvailability(combatant, choice, theirTurn);
-            QString buttonText;
-            QString hint;
-            if (!spells.empty()) {
-                buttonText = QString::fromStdString(choice.name);
-                hint = choice.selfOnly                   ? tr("Cast it on itself.")
-                       : choice.attackBonus.has_value() ? tr("Click the target to roll the attack.")
-                       : choice.area                    ? tr("Click each creature in the area; End (or Escape) when done.")
-                                                        : tr("Click the target.");
-            } else if (isMultiattack(choice)) {
-                buttonText = tr("Multiattack");
-                hint = tr("Spend the action on Multiattack, then use the attacks it names.");
-            } else if (choice.benefit.has_value()) {
-                buttonText = tr("Help…");
-                hint = tr("Pick a creature to help, then click it.");
-            } else if (choice.attackBonus.has_value()) {
-                buttonText = tr("Attack");
-                hint = tr("Click the target to roll the attack.");
-            } else if (choice.save.has_value() && choice.area) {
-                buttonText = tr("Targets…");
-                hint = tr("Click each creature in the area; End (or Escape) when done.");
-            } else if (choice.save.has_value() || !attackDamageParts(choice).empty() || !choice.riders.empty()) {
-                buttonText = tr("Target…");
-                hint = tr("Click the target.");
-            } else {
-                buttonText = tr("Use");
-                hint = tr("Use it.");
-            }
-            if (recharging) {
-                buttonText = tr("Recharging");
-            } else if (usesLeft.has_value() && *usesLeft <= 0) {
-                buttonText = tr("None left");
-            }
-            const bool armedHere = m_armed.has_value() && m_armed->attackerId == id && !m_armed->featureKind.has_value() &&
-                                   m_armed->attack.name == choice.name;
-            auto* button = new QPushButton(armedHere ? tr("End") : buttonText);
-            button->setObjectName(QStringLiteral("rollAttackDamage"));
-            button->setEnabled(armedHere || available.available);
-            if (choice.benefit.has_value()) {
-                button->setIcon(helpIcon());
-            }
-            button->setToolTip(available.available ? hint : QString::fromStdString(available.reason));
-            const MonsterAttack copy = choice;
-            connect(button, &QPushButton::clicked, this, [this, id, copy] { onActionClicked(id, copy); });
-            addColumnButton(entry, button);
-            if (usesLeft.has_value()) {
-                addColumnNote(entry, tr("%1 of %2 left today").arg(*usesLeft).arg(*choice.perDay));
-            }
-            // During a Multiattack: how many more of this one it allows.
-            const std::string bucket = choice.multiattackAs.empty() ? choice.name : choice.multiattackAs;
-            if (const auto left = combatant.economy.multiattackLeft.find(bucket);
-                combatant.economy.attacksRemaining > 0 && left != combatant.economy.multiattackLeft.end()) {
-                addColumnNote(entry, left->second > 0 ? tr("%n more in Multiattack", nullptr, left->second)
-                                                      : tr("none left in Multiattack"));
-            }
-        }
-        const std::string summary = attackSummary(spells.empty() ? attack : spells.front());
-        if (spells.size() <= 1 && !summary.empty()) {
-            auto* rolls = bodyLabel(QString::fromStdString(summary));
-            rolls->setProperty("role", QStringLiteral("muted"));
-            layout->addWidget(rolls);
-        }
-        layout->addWidget(bodyLabel(QString::fromStdString(attack.effect)));
         if (spells.empty()) {
-            addRuleNotes(layout, attack);
-            addDamageChoices(layout, combatant, attack);
-        } else {
-            for (const MonsterAttack& spell : spells) {
-                addRuleNotes(layout, spell);
-                addDamageChoices(layout, combatant, spell);
-            }
+            addActionRow(attack);
+            continue;
         }
-        if (attack.selfEffect.has_value()) {
-            auto* note = bodyLabel(QString::fromStdString(
-                describeSelfEffect(*attack.selfEffect, conditionName(attack.selfEffect->condition).toStdString())));
-            note->setProperty("role", QStringLiteral("muted"));
-            layout->addWidget(note);
+        addInfoRow(abilityName(attack.name), attack.effect, attack.selfEffect);
+        for (const MonsterAttack& spell : spells) {
+            addActionRow(spell);
         }
-        m_actionRows->addWidget(row);
     }
     addFeatures(tr("Bonus Actions"), block.bonusActions, FeatureKind::BonusAction);
     addFeatures(tr("Reactions"), block.reactions, FeatureKind::Reaction);
@@ -3648,7 +3720,7 @@ void CombatPage::rebuildPrompts()
             const std::optional<AuraCheck> check = auraCheckFor(prompt);
             const QString source = bold(nameOf(prompt.sourceId));
             text = tr("%1 (%2): does %3 start its turn %4?")
-                       .arg(QString::fromStdString(prompt.auraName), source, name,
+                       .arg(abilityName(prompt.auraName), source, name,
                             check.has_value() && !check->aura.range.empty()
                                 ? QString::fromStdString(check->aura.range)
                                 : tr("in range"));
@@ -3667,7 +3739,7 @@ void CombatPage::rebuildPrompts()
         case Prompt::Kind::Hide:
             text = tr("%1 hides (%2): DC %3 Dexterity (Stealth) check (%4). It must be Heavily Obscured or behind "
                       "Three-Quarters or Total Cover, and out of enemies' sight.")
-                       .arg(name, QString::fromStdString(prompt.auraName))
+                       .arg(name, abilityName(prompt.auraName))
                        .arg(prompt.dc)
                        .arg(QString::fromStdString(formatModifier(hideCheckBonus(*combatant))));
             pass = tr("Hidden");
@@ -3697,7 +3769,7 @@ void CombatPage::rebuildPrompts()
         case Prompt::Kind::ActionSave: {
             const MonsterAttack& attack = *prompt.attack;
             text = tr("%1's %2: %3 makes a DC %4 %5 save (%6)%7.")
-                       .arg(bold(nameOf(prompt.sourceId)), QString::fromStdString(attack.name), name)
+                       .arg(bold(nameOf(prompt.sourceId)), abilityName(attack.name), name)
                        .arg(prompt.dc)
                        .arg(QString::fromLatin1(abilityLabel(prompt.ability)))
                        .arg(QString::fromStdString(formatModifier(bonus)))
@@ -3743,7 +3815,7 @@ void CombatPage::rebuildPrompts()
             }
             QString ask = QString::fromStdString(first.ask);
             text = tr("%1's %2: did %3? If so, %4 is %5.")
-                       .arg(bold(nameOf(prompt.sourceId)), QString::fromStdString(attack.name), ask, name,
+                       .arg(bold(nameOf(prompt.sourceId)), abilityName(attack.name), ask, name,
                             conditionList(ids));
             if (prompt.refund > 0) {
                 text += tr(" The %1 damage is given back.").arg(prompt.refund);
@@ -3846,7 +3918,7 @@ void CombatPage::resolvePrompt(std::size_t index, int outcome)
                 const DamageResult result = applyDamage(*combatant, damage);
                 afterDamage(*combatant, result,
                             tr("%1's %2 (extra)").arg(QString::fromStdString(attacker->name),
-                                                       QString::fromStdString(attack.name)));
+                                                       abilityName(attack.name)));
             }
             carryToSheet(*combatant);
         }
@@ -5058,10 +5130,10 @@ void CombatPage::toggleAura(const std::string& monsterId, const std::string& aur
     const QString name = QString::fromStdString(monster->name);
     if (found == monster->aurasOff.end()) {
         monster->aurasOff.push_back(auraName);
-        addLog(tr("%1's %2 is off.").arg(name, QString::fromStdString(auraName)));
+        addLog(tr("%1's %2 is off.").arg(name, abilityName(auraName)));
     } else {
         monster->aurasOff.erase(found);
-        addLog(tr("%1's %2 is on again.").arg(name, QString::fromStdString(auraName)));
+        addLog(tr("%1's %2 is on again.").arg(name, abilityName(auraName)));
     }
     commit(std::move(before), EditKind::Once, monsterId);
 }
@@ -5095,13 +5167,13 @@ void CombatPage::handleTurnEvents(const std::vector<TurnEvent>& events)
             addLog(tr("%1 rolls %2: %3 recharges.")
                        .arg(name)
                        .arg(event.roll)
-                       .arg(QString::fromStdString(event.actionName)));
+                       .arg(abilityName(event.actionName)));
             break;
         case TurnEvent::Kind::NotRecharged:
             addLog(tr("%1 rolls %2: %3 does not recharge.")
                        .arg(name)
                        .arg(event.roll)
-                       .arg(QString::fromStdString(event.actionName)));
+                       .arg(abilityName(event.actionName)));
             break;
         case TurnEvent::Kind::OngoingDamage:
             if (Combatant* target = combatantById(event.combatantId); target != nullptr && !target->dead) {
@@ -5137,7 +5209,7 @@ void CombatPage::onActionClicked(const std::string& attackerId, const MonsterAtt
     const Availability available = actionAvailability(*attacker, attack, theirTurn);
     if (!available.available) {
         addLog(tr("%1 cannot use %2: %3.")
-                   .arg(QString::fromStdString(attacker->name), QString::fromStdString(attack.name),
+                   .arg(QString::fromStdString(attacker->name), abilityName(attack.name),
                         QString::fromStdString(available.reason)));
         return;
     }
@@ -5145,7 +5217,7 @@ void CombatPage::onActionClicked(const std::string& attackerId, const MonsterAtt
     if (attack.selfOnly) {
         PageUndo before = capture();
         if (!useAction(*attacker, attack, theirTurn)) {
-            addLog(tr("%1 cannot use %2 now.").arg(name, QString::fromStdString(attack.name)));
+            addLog(tr("%1 cannot use %2 now.").arg(name, abilityName(attack.name)));
             commit(std::move(before));
             return;
         }
@@ -5158,7 +5230,7 @@ void CombatPage::onActionClicked(const std::string& attackerId, const MonsterAtt
             }
             setConcentration(*attacker, attack.concentration);
         }
-        addLog(tr("%1 casts %2 on itself.").arg(name, QString::fromStdString(attack.name)));
+        addLog(tr("%1 casts %2 on itself.").arg(name, abilityName(attack.name)));
         // Invisibility ends when the creature casts a spell. That is a spell
         // it was already under, not the Invisible condition this cast gives.
         endByEvents(*attacker, actionEvents(attack.name, attack.effect, &attack, false));
@@ -5174,7 +5246,7 @@ void CombatPage::onActionClicked(const std::string& attackerId, const MonsterAtt
         PageUndo before = capture();
         useAction(*attacker, attack, theirTurn);
         addLog(isMultiattack(attack) ? tr("%1 takes the Multiattack action (%n use(s)).", nullptr, attack.count).arg(name)
-                                     : tr("%1 uses %2.").arg(name, QString::fromStdString(attack.name)));
+                                     : tr("%1 uses %2.").arg(name, abilityName(attack.name)));
         endByEvents(*attacker, actionEvents(attack.name, attack.effect, &attack, false));
         applyAbilityEffect(*attacker, attack.selfEffect);
         const std::string id = attacker->id;
@@ -5219,7 +5291,7 @@ void CombatPage::onFeatureClicked(const std::string& combatantId, FeatureKind ki
             }
             setConcentration(*combatant, spell.concentration);
         }
-        addLog(tr("%1 casts %2 on itself.").arg(QString::fromStdString(combatant->name), QString::fromStdString(spell.name)));
+        addLog(tr("%1 casts %2 on itself.").arg(QString::fromStdString(combatant->name), abilityName(spell.name)));
         // Invisibility ends when the creature casts a spell. That is a spell
         // it was already under, not the Invisible condition this cast gives.
         endByEvents(*combatant, actionEvents(spell.name, spell.effect, &spell, false));
@@ -5233,7 +5305,7 @@ void CombatPage::onFeatureClicked(const std::string& combatantId, FeatureKind ki
         const Availability available = featureAvailability(*combatant, kind, feature, isTheirTurn(*combatant));
         if (!available.available) {
             addLog(tr("%1 cannot use %2: %3.")
-                       .arg(QString::fromStdString(combatant->name), QString::fromStdString(feature.name),
+                       .arg(QString::fromStdString(combatant->name), abilityName(feature.name),
                             QString::fromStdString(available.reason)));
             return;
         }
@@ -5254,7 +5326,7 @@ void CombatPage::onFeatureClicked(const std::string& combatantId, FeatureKind ki
         return;
     }
     const QString name = QString::fromStdString(combatant->name);
-    QString line = tr("%1 uses %2.").arg(name, QString::fromStdString(feature.name));
+    QString line = tr("%1 uses %2.").arg(name, abilityName(feature.name));
     if (feature.perDay.has_value()) {
         const auto left = combatant->usesRemaining.find(feature.name);
         line += tr(" %n use(s) left today.", nullptr, left == combatant->usesRemaining.end() ? 0 : left->second);
@@ -5263,7 +5335,7 @@ void CombatPage::onFeatureClicked(const std::string& combatantId, FeatureKind ki
         line += tr(" %n legendary use(s) left.", nullptr, combatant->economy.legendaryRemaining);
     }
     if (!combatant->economy.grantedAttack.empty()) {
-        line += tr(" Its %1 attack can be used now.").arg(QString::fromStdString(combatant->economy.grantedAttack));
+        line += tr(" Its %1 attack can be used now.").arg(abilityName(combatant->economy.grantedAttack));
     }
     addLog(line);
     endByEvents(*combatant, actionEvents(feature.name, feature.effect, nullptr, false));
@@ -5291,7 +5363,7 @@ void CombatPage::onStandardActionClicked(const std::string& combatantId, Feature
     for (const std::string& action : actions) {
         words << QString::fromStdString(action);
     }
-    addLog(tr("%1 uses %2: %3.").arg(name, QString::fromStdString(feature.name), words.join(tr(" and "))));
+    addLog(tr("%1 uses %2: %3.").arg(name, abilityName(feature.name), words.join(tr(" and "))));
     for (const std::string& action : actions) {
         if (action == "Hide") {
             // Hide is a check: asked at the top, rolled or entered there.
@@ -5402,7 +5474,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
         !armed.attack.allowSelf) {
         addLog(tr("%1 can't target itself with %2. Pick another target, or End.")
                    .arg(QString::fromStdString(attacker->name),
-                        QString::fromStdString(armed.featureKind.has_value() ? armed.feature.name : armed.attack.name)));
+                        abilityName(armed.featureKind.has_value() ? armed.feature.name : armed.attack.name)));
         return;
     }
     // Charmed: no attacking the charmer, and nothing harmful aimed at it.
@@ -5445,7 +5517,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     if (!armed.spent && armed.featureKind.has_value()) {
         if (!useFeature(*attacker, *armed.featureKind, armed.feature, isTheirTurn(*attacker))) {
             addLog(tr("%1 cannot use %2 now.").arg(QString::fromStdString(attacker->name),
-                                                 QString::fromStdString(armed.feature.name)));
+                                                 abilityName(armed.feature.name)));
             disarmAttack();
             commit(std::move(before));
             return;
@@ -5455,7 +5527,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
             const auto left = attacker->usesRemaining.find(armed.feature.name);
             addLog(tr("%1: %n use(s) left today.", nullptr,
                       left == attacker->usesRemaining.end() ? 0 : left->second)
-                       .arg(QString::fromStdString(armed.feature.name)));
+                       .arg(abilityName(armed.feature.name)));
         }
         if (*armed.featureKind == FeatureKind::Legendary) {
             addLog(tr("%1 has %n legendary use(s) left.", nullptr, attacker->economy.legendaryRemaining)
@@ -5465,7 +5537,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     if (!armed.spent) {
         if (!useAction(*attacker, armed.attack, isTheirTurn(*attacker))) {
             addLog(tr("%1 cannot use %2 now.").arg(QString::fromStdString(attacker->name),
-                                                 QString::fromStdString(armed.attack.name)));
+                                                 abilityName(armed.attack.name)));
             disarmAttack();
             commit(std::move(before));
             return;
@@ -5486,7 +5558,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     const bool targetWasBloodied =
         target->maxHp.has_value() && *target->maxHp > 0 && target->hp > 0 && target->hp * 2 <= *target->maxHp;
     const QString source = tr("%1's %2").arg(QString::fromStdString(attacker->name),
-                                             QString::fromStdString(armed.attack.name));
+                                             abilityName(armed.attack.name));
     const MonsterAttack& attack = armed.attack;
     const std::vector<DamagePart> parts = attackDamageParts(attack);
     bool keepArmed = false;
@@ -5703,7 +5775,7 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     if (dealtDamage && targetWasBloodied && isMonsterCombatant(*attacker)) {
         for (const std::string& ready : noteDamagedBloodied(*attacker)) {
             addLog(tr("%1 damaged a creature that was already Bloodied: %2 can be used now.")
-                       .arg(QString::fromStdString(attacker->name), QString::fromStdString(ready)));
+                       .arg(QString::fromStdString(attacker->name), abilityName(ready)));
         }
     }
     // After the roll, so an attack still had Advantage from being unseen.
@@ -5778,7 +5850,7 @@ void CombatPage::resolveActionSave(const Prompt& prompt, int outcome)
 
     const QString targetName = QString::fromStdString(target->name);
     const QString source = tr("%1's %2").arg(QString::fromStdString(attacker->name),
-                                             QString::fromStdString(attack.name));
+                                             abilityName(attack.name));
     bool success = outcome == 1;
     bool byFive = outcome == 4;
     if (outcome == 0) {
@@ -5893,7 +5965,7 @@ void CombatPage::resolveActionSave(const Prompt& prompt, int outcome)
         if (prompt.wasBloodied && isMonsterCombatant(*attacker)) {
             for (const std::string& ready : noteDamagedBloodied(*attacker)) {
                 addLog(tr("%1 damaged a creature that was already Bloodied: %2 can be used now.")
-                           .arg(QString::fromStdString(attacker->name), QString::fromStdString(ready)));
+                           .arg(QString::fromStdString(attacker->name), abilityName(ready)));
             }
         }
         endByEvents(*attacker, {kEndsOnDealsDamage});
@@ -6163,7 +6235,7 @@ void CombatPage::endByEvents(Combatant& creature, const std::vector<std::string>
         }
         for (const std::string& off : suppressAuras(creature, event.substr(prefix.size()))) {
             addLog(tr("%1's %2 is off (switch it on again from its Actions tab).")
-                       .arg(QString::fromStdString(creature.name), QString::fromStdString(off)));
+                       .arg(QString::fromStdString(creature.name), abilityName(off)));
         }
     }
     const bool concentrating = !creature.concentration.empty();

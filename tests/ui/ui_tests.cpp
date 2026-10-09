@@ -24,6 +24,7 @@
 #include <QElapsedTimer>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QDialog>
@@ -207,6 +208,36 @@ Character fighter()
     return character;
 }
 
+// The button on the ability row whose title is exactly this.
+QPushButton* rowButton(App& app, const QString& title)
+{
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
+        if (!label->isVisible() || label->text() != title) {
+            continue;
+        }
+        QWidget* row = label->parentWidget();
+        if (row == nullptr) {
+            continue;
+        }
+        for (QPushButton* button : row->findChildren<QPushButton*>()) {
+            if (button->isVisible()) {
+                return button;
+            }
+        }
+    }
+    return nullptr;
+}
+
+QWidget* titledRow(App& app, const QString& title)
+{
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
+        if (label->isVisible() && label->text() == title) {
+            return label->parentWidget();
+        }
+    }
+    return nullptr;
+}
+
 // The aimed button ("Targets…" on a bonus action, reaction, or legendary
 // action) on the row whose title starts with this name.
 QPushButton* featureButton(App& app, const QString& name)
@@ -251,14 +282,10 @@ TEST_CASE("a dragon's Multiattack spends one action for three Rends, then the tu
     app.button(QStringLiteral("Multiattack"))->click();
     QApplication::processEvents();
     CHECK_EQ(App::in(app.saved(), "dragon").economy.attacksRemaining, 3);
-    // Fire Breath cannot be one of the three.
-    bool breathEnabled = true;
-    for (QPushButton* candidate : app.window->findChildren<QPushButton*>(QStringLiteral("rollAttackDamage"))) {
-        if (candidate->isVisible() && candidate->text() == QStringLiteral("Targets…")) {
-            breathEnabled = candidate->isEnabled();
-        }
-    }
-    CHECK(!breathEnabled);
+    // Fire Breath cannot be one of the three. A spell from Spellcasting can.
+    QPushButton* breath = rowButton(app, QStringLiteral("Fire Breath"));
+    CHECK(breath != nullptr);
+    CHECK(!breath->isEnabled());
 
     for (int attack = 0; attack < 3; ++attack) {
         app.select("dragon");
@@ -748,6 +775,64 @@ TEST_CASE("a breath weapon rolls once, each target saves, and it must recharge")
     CHECK(App::in(fight, "bryn").hp < 400);
     CHECK_EQ(App::in(fight, "dragon").expended.size(), std::size_t{1});
     CHECK(App::in(fight, "dragon").economy.actionUsed);
+}
+
+TEST_CASE("recharge is left out of the ability name, and its summary is italic")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Lair";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "adult-red-dragon"), "dragon"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.select("dragon");
+    QApplication::processEvents();
+
+    bool breathTitle = false;
+    bool legendaryKeepsDay = false;
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
+        if (label->text().contains(QStringLiteral("Fire Breath"))) {
+            breathTitle = label->text() == QStringLiteral("Fire Breath");
+        }
+        if (label->property("featureName").toString().startsWith(QStringLiteral("Legendary Resistance"))) {
+            legendaryKeepsDay = label->text().contains(QStringLiteral("3/Day"));
+        }
+    }
+    CHECK(breathTitle);
+    CHECK(legendaryKeepsDay);
+
+    bool italicSummary = false;
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionSummary"))) {
+        if (!label->text().contains(QStringLiteral("Recharge 5-6"))) {
+            continue;
+        }
+        label->ensurePolished();
+        italicSummary = label->font().italic();
+    }
+    CHECK(italicSummary);
+
+    app.button(QStringLiteral("Targets…"))->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    const QString prompt = app.find<QLabel>("promptText")->text();
+    CHECK(prompt.contains(QStringLiteral("Fire Breath")));
+    CHECK(!prompt.contains(QStringLiteral("Recharge")));
+    app.answer("promptRoll");
+    auto* log = app.find<QListWidget>("fightLog");
+    bool named = false;
+    bool rechargeInLog = false;
+    for (int i = 0; i < log->count(); ++i) {
+        const QString line = log->item(i)->text();
+        named = named || line.contains(QStringLiteral("Fire Breath"));
+        rechargeInLog = rechargeInLog || line.contains(QStringLiteral("(Recharge"));
+    }
+    CHECK(named);
+    CHECK(!rechargeInLog);
 }
 
 TEST_CASE("undo takes the undone step's lines out of the log")
@@ -3087,6 +3172,59 @@ TEST_CASE("The Vampire's Charm casts Charm Person: a Wisdom save against Charmed
     CHECK(App::in(app.saved(), "vampire").economy.bonusActionUsed);
 }
 
+TEST_CASE("Spellcasting lists its spells as their own abilities")
+{
+    App app;
+    Character aria = fighter();
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Lair";
+    encounter.combatants = {makeMonsterCombatant(srd(app.srdMonsters, "adult-blue-dragon"), "dragon"),
+                            makeCharacterCombatant(aria, "aria")};
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.select("dragon");
+    QApplication::processEvents();
+
+    QWidget* casting = titledRow(app, QStringLiteral("Spellcasting"));
+    QWidget* invisibility = titledRow(app, QStringLiteral("Invisibility"));
+    CHECK(casting != nullptr);
+    CHECK(invisibility != nullptr);
+    CHECK(rowButton(app, QStringLiteral("Spellcasting")) == nullptr);
+    QPushButton* cast = rowButton(app, QStringLiteral("Invisibility"));
+    CHECK(cast != nullptr);
+    CHECK(cast->text() == QStringLiteral("Target…"));
+    bool described = false;
+    for (QLabel* label : invisibility->findChildren<QLabel*>()) {
+        described = described || label->text().contains(QStringLiteral("casts Invisibility"));
+    }
+    CHECK(described);
+    bool listed = false;
+    for (QLabel* label : casting->findChildren<QLabel*>()) {
+        listed = listed || label->text().contains(QStringLiteral("Invisibility"));
+    }
+    CHECK(listed);
+
+    QLayout* rows = casting->parentWidget()->layout();
+    int castingAt = -1;
+    int invisibilityAt = -1;
+    for (int i = 0; i < rows->count(); ++i) {
+        QWidget* widget = rows->itemAt(i)->widget();
+        if (widget == nullptr) {
+            continue;
+        }
+        if (widget == casting) {
+            castingAt = i;
+        }
+        if (widget == invisibility) {
+            invisibilityAt = i;
+        }
+    }
+    CHECK(castingAt >= 0);
+    CHECK(invisibilityAt > castingAt);
+}
+
 TEST_CASE("Invisibility cast on the caster stays, and the caster concentrates on it")
 {
     App app;
@@ -3104,7 +3242,9 @@ TEST_CASE("Invisibility cast on the caster stays, and the caster concentrates on
     app.open();
     app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
     app.select("dragon");
-    app.button(QStringLiteral("Invisibility"))->click();
+    QPushButton* invisibility = rowButton(app, QStringLiteral("Invisibility"));
+    CHECK(invisibility != nullptr);
+    invisibility->click();
     QApplication::processEvents();
     app.clickTarget("dragon");
     const Combatant dragon = App::in(app.saved(), "dragon");
@@ -3136,7 +3276,9 @@ TEST_CASE("Invisibility on another creature ends when the caster stops concentra
     app.open();
     app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
     app.select("dragon");
-    app.button(QStringLiteral("Invisibility"))->click();
+    QPushButton* invisibility = rowButton(app, QStringLiteral("Invisibility"));
+    CHECK(invisibility != nullptr);
+    invisibility->click();
     QApplication::processEvents();
     app.clickTarget("aria");
 

@@ -382,6 +382,10 @@ std::string describeDamageCondition(const std::string& condition);
 // read.
 std::optional<std::vector<DamagePart>> parseDamageParts(const std::string& text, std::string* error = nullptr);
 
+// "Poison Breath (Recharge 5–6)" is "Poison Breath". Recharge is a limit, named
+// in the summary, not part of the ability's name. "(3/Day)" and other notes stay.
+std::string abilityDisplayName(const std::string& name);
+
 // One line for the stat block: "+14 to hit, 1d10+8 slashing + 2d4 fire" or
 // "DC 21 Dex save (half on success), 17d6 fire, area, Recharge 5-6".
 std::string attackSummary(const MonsterAttack& attack);

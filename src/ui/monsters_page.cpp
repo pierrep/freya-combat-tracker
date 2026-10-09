@@ -906,11 +906,12 @@ void MonstersPage::showAttackList(QWidget* section, QVBoxLayout* rows, const std
         auto* blockLayout = new QVBoxLayout(block);
         blockLayout->setContentsMargins(0, 0, 0, 0);
         blockLayout->setSpacing(2);
-        QString title = QString::fromStdString(attack.name);
+        QString title = QString::fromStdString(abilityDisplayName(attack.name));
         if (attack.count != 1) {
             title = tr("%1 × %2").arg(title).arg(attack.count);
         }
         auto* name = new QLabel(title);
+        name->setObjectName(QStringLiteral("actionTitle"));
         name->setWordWrap(true);
         name->setTextInteractionFlags(Qt::TextSelectableByMouse);
         QFont nameFont = name->font();
@@ -924,7 +925,12 @@ void MonstersPage::showAttackList(QWidget* section, QVBoxLayout* rows, const std
         if (!summary.empty()) {
             auto* rolls = new QLabel(QString::fromStdString(summary));
             rolls->setWordWrap(true);
+            rolls->setObjectName(QStringLiteral("actionSummary"));
             rolls->setProperty("role", QStringLiteral("muted"));
+            rolls->setProperty("summary", true);
+            QFont summaryFont = rolls->font();
+            summaryFont.setItalic(true);
+            rolls->setFont(summaryFont);
             blockLayout->addWidget(rolls);
         }
         blockLayout->addWidget(effect);
@@ -949,7 +955,8 @@ void MonstersPage::showFeatureList(QWidget* section, QVBoxLayout* rows, const st
         auto* blockLayout = new QVBoxLayout(block);
         blockLayout->setContentsMargins(0, 0, 0, 0);
         blockLayout->setSpacing(2);
-        auto* name = new QLabel(QString::fromStdString(feature.name));
+        auto* name = new QLabel(QString::fromStdString(abilityDisplayName(feature.name)));
+        name->setObjectName(QStringLiteral("actionTitle"));
         name->setWordWrap(true);
         name->setTextInteractionFlags(Qt::TextSelectableByMouse);
         QFont nameFont = name->font();

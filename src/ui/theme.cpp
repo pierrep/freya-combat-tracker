@@ -98,6 +98,7 @@ QFrame[card="true"] { background: %2; border: 1px solid %5; border-radius: 10px;
 QLabel[role="title"] { font-size: 20pt; font-weight: 600; color: %3; }
 QLabel[role="heading"] { font-weight: 600; color: %3; padding-top: 2px; }
 QLabel[role="muted"] { color: %4; }
+QLabel[summary="true"] { font-style: italic; }
 QLabel[role="banner-error"] { color: %8; background: #FBEDEC; border-radius: 8px; padding: 8px 12px; }
 QFrame[role="alert"] { background: #FBEDEC; border-radius: 8px; }
 QFrame[role="alert"] QPushButton[variant="quiet"] { color: %8; }
