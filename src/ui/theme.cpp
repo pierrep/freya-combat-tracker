@@ -121,6 +121,11 @@ QPushButton:disabled { color: #A4ABB5; border-color: %5; background: %2; }
 QPushButton[variant="primary"] { background: %6; border-color: %6; color: white; font-weight: 600; }
 QPushButton[variant="primary"]:hover { background: #3E3B8E; }
 QPushButton[variant="primary"]:disabled { background: #B8B7DA; border-color: #B8B7DA; color: white; }
+/* An ability that can be used, in the same style as Next turn. Disabled stays the plain button. */
+QPushButton[variant="ready"] { background: %6; border-color: %6; color: white; font-weight: 600; }
+QPushButton[variant="ready"]:hover { background: #3E3B8E; }
+QPushButton[variant="ready"]:disabled { color: #A4ABB5; border-color: %5; background: %2; font-weight: 400; }
+QWidget#actionButtons QPushButton { padding-left: 4px; padding-right: 4px; }
 QPushButton[variant="danger"] { color: %8; }
 QPushButton[variant="danger"]:hover { border-color: %8; }
 QPushButton[variant="quiet"] { border: none; background: transparent; color: %6; padding: 4px 6px; }

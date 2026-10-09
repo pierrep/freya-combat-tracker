@@ -202,7 +202,10 @@ EntryRow makeEntryRow()
 void addColumnButton(const EntryRow& entry, QPushButton* button)
 {
     button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    button->setStyleSheet(QStringLiteral("QPushButton { padding-left: 4px; padding-right: 4px; }"));
+    // Active abilities match Next turn. A quiet button (an aura switch) keeps its own style.
+    if (button->property("variant").toString().isEmpty()) {
+        button->setProperty("variant", QStringLiteral("ready"));
+    }
     entry.buttons->addWidget(button);
 }
 
@@ -3213,9 +3216,9 @@ void CombatPage::rebuildActions(const Combatant& combatant)
         m_actionRows->addWidget(entry.row);
     };
 
-    auto addFeatures = [this, &combatant, &block, id, theirTurn, &addFeatureSpellRow](const QString& heading,
-                                                        const std::vector<MonsterFeature>& features,
-                                                        std::optional<FeatureKind> kind) {
+    auto addFeatures = [this, &combatant, &block, id, theirTurn, &addFeatureSpellRow, &actionButtonLabel](
+                           const QString& heading, const std::vector<MonsterFeature>& features,
+                           std::optional<FeatureKind> kind) {
         if (features.empty()) {
             return;
         }
@@ -3250,6 +3253,9 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 rowKind.has_value() && choices.empty() && feature.name != "Legendary Action Uses"
                     ? actionableSpells(block, feature)
                     : std::vector<MonsterAttack>{};
+            // A legendary action that casts a spell keeps one title. The spell's
+            // roll line sits under that action's own text.
+            const bool mergeSpells = kind.has_value() && *kind == FeatureKind::Legendary && !spells.empty();
             if (rowKind.has_value() && !choices.empty()) {
                 const Availability available = featureAvailability(combatant, *rowKind, feature, theirTurn);
                 for (const std::vector<std::string>& choice : choices) {
@@ -3281,6 +3287,31 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 if (*rowKind == FeatureKind::Legendary) {
                     addColumnNote(entry, legendaryNote(combatant, theirTurn));
                 }
+            } else if (mergeSpells) {
+                const Availability available = featureAvailability(combatant, *rowKind, feature, theirTurn);
+                for (const MonsterAttack& spell : spells) {
+                    const auto label = actionButtonLabel(spell);
+                    QString buttonText = label.text;
+                    if (recharging) {
+                        buttonText = tr("Recharging");
+                    } else if (usesLeft.has_value() && *usesLeft <= 0) {
+                        buttonText = tr("None left");
+                    }
+                    MonsterFeature shown = feature;
+                    shown.targeted = spell;
+                    const bool armedHere =
+                        m_armed.has_value() && m_armed->attackerId == id && m_armed->featureKind.has_value() &&
+                        m_armed->feature.name == feature.name && m_armed->attack.name == spell.name;
+                    auto* button = new QPushButton(armedHere ? tr("End") : buttonText);
+                    button->setObjectName(QStringLiteral("featureTarget"));
+                    button->setEnabled(armedHere || available.available);
+                    button->setToolTip(available.available ? label.hint : QString::fromStdString(available.reason));
+                    const FeatureKind which = *rowKind;
+                    connect(button, &QPushButton::clicked, this,
+                            [this, id, which, shown] { onFeatureClicked(id, which, shown); });
+                    addColumnButton(entry, button);
+                }
+                addColumnNote(entry, legendaryNote(combatant, theirTurn));
             } else if (rowKind.has_value() && spells.empty() && feature.name != "Legendary Action Uses") {
                 const Availability available = featureAvailability(combatant, *rowKind, feature, theirTurn);
                 const FeatureKind which = *rowKind;
@@ -3326,7 +3357,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                     addColumnNote(entry, legendaryNote(combatant, theirTurn));
                 }
             }
-            if (usesLeft.has_value() && spells.empty()) {
+            if (usesLeft.has_value() && (spells.empty() || mergeSpells)) {
                 addColumnNote(entry, tr("%1 of %2 left today").arg(*usesLeft).arg(*feature.perDay));
             }
             if (feature.aura.has_value()) {
@@ -3342,6 +3373,16 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 addColumnButton(entry, toggle);
             }
             layout->addWidget(bodyLabel(QString::fromStdString(feature.effect)));
+            if (mergeSpells) {
+                for (const MonsterAttack& spell : spells) {
+                    const std::string summary = attackSummary(spell);
+                    if (!summary.empty()) {
+                        layout->addWidget(summaryLabel(QString::fromStdString(summary)));
+                    }
+                    addRuleNotes(layout, spell);
+                    addDamageChoices(layout, combatant, spell);
+                }
+            }
             // What each action it can take does.
             std::vector<std::string> described;
             for (const std::vector<std::string>& choice : choices) {
@@ -3387,7 +3428,7 @@ void CombatPage::rebuildActions(const Combatant& combatant)
                 entry.buttons->parentWidget()->hide();
             }
             m_actionRows->addWidget(row);
-            if (rowKind.has_value()) {
+            if (rowKind.has_value() && !mergeSpells) {
                 for (const MonsterAttack& spell : spells) {
                     addFeatureSpellRow(feature, *rowKind, spell);
                 }

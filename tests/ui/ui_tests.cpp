@@ -23,6 +23,7 @@
 #include <QThread>
 #include <QElapsedTimer>
 #include <QHeaderView>
+#include <QImage>
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
@@ -3172,6 +3173,66 @@ TEST_CASE("The Vampire's Charm casts Charm Person: a Wisdom save against Charmed
     CHECK(App::in(app.saved(), "vampire").economy.bonusActionUsed);
 }
 
+QColor buttonFill(QPushButton* button)
+{
+    button->ensurePolished();
+    const QImage image = button->grab().toImage();
+    // The background is most of the button; the label is only a few pixels.
+    QHash<QRgb, int> counts;
+    for (int y = 2; y < image.height() - 2; ++y) {
+        for (int x = 2; x < image.width() - 2; ++x) {
+            counts[image.pixel(x, y)] += 1;
+        }
+    }
+    QRgb fill = 0;
+    int seen = 0;
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
+        if (it.value() > seen) {
+            seen = it.value();
+            fill = it.key();
+        }
+    }
+    return QColor::fromRgb(fill);
+}
+
+TEST_CASE("an ability button matches Next turn while it can be used")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Lair";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "adult-red-dragon"), "dragon"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 5;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.select("dragon");
+    QApplication::processEvents();
+
+    QPushButton* next = app.find<QPushButton>("nextTurn");
+    QPushButton* attack = app.button(QStringLiteral("Attack"));
+    QPushButton* multi = app.button(QStringLiteral("Multiattack"));
+    CHECK(next->isEnabled());
+    CHECK(attack->isEnabled());
+    CHECK(buttonFill(attack) == buttonFill(next));
+    CHECK(multi->fontMetrics().horizontalAdvance(multi->text()) + 8 <= multi->width());
+
+    multi->click();
+    QApplication::processEvents();
+    QPushButton* breath = rowButton(app, QStringLiteral("Fire Breath"));
+    CHECK(breath != nullptr);
+    CHECK(!breath->isEnabled());
+    const QColor idle = buttonFill(breath);
+    if (idle.red() <= 240 || idle.green() <= 240 || idle.blue() <= 240) {
+        throw test::Failure("disabled button fill is " + std::to_string(idle.red()) + "," +
+                            std::to_string(idle.green()) + "," + std::to_string(idle.blue()));
+    }
+}
+
 TEST_CASE("Spellcasting lists its spells as their own abilities")
 {
     App app;
@@ -3301,4 +3362,73 @@ TEST_CASE("Invisibility on another creature ends when the caster stops concentra
         ended = ended || log->item(i)->text().contains(QStringLiteral("Aria is no longer Invisible"));
     }
     CHECK(ended);
+}
+
+TEST_CASE("a legendary action that casts a spell keeps one description")
+{
+    auto contains = [](QWidget* row, const QString& needle) {
+        if (row == nullptr) {
+            return false;
+        }
+        for (QLabel* label : row->findChildren<QLabel*>()) {
+            if (label->text().contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto titleCount = [](App& app, const QString& title) {
+        int count = 0;
+        for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
+            if (label->isVisible() && label->text() == title) {
+                ++count;
+            }
+        }
+        return count;
+    };
+
+    App blue;
+    Character aria = fighter();
+    blue.characters.saveAll({aria});
+    Encounter brass;
+    brass.id = "fight";
+    brass.name = "Lair";
+    brass.combatants = {makeMonsterCombatant(srd(blue.srdMonsters, "adult-blue-dragon"), "dragon"),
+                        makeCharacterCombatant(aria, "aria")};
+    blue.encounters.saveAll({brass});
+    blue.open();
+    blue.select("dragon");
+    QApplication::processEvents();
+
+    QWidget* boom = titledRow(blue, QStringLiteral("Sonic Boom"));
+    CHECK(boom != nullptr);
+    CHECK(contains(boom, QStringLiteral("uses Spellcasting to cast Shatter")));
+    CHECK(contains(boom, QStringLiteral("until the start of its next turn")));
+    CHECK(contains(boom, QStringLiteral("DC 18 Con save (half on success), 3d8 thunder, area")));
+    CHECK(!contains(boom, QStringLiteral("The creature casts Shatter")));
+    QPushButton* boomButton = rowButton(blue, QStringLiteral("Sonic Boom"));
+    CHECK(boomButton != nullptr);
+    CHECK(boomButton->text() == QStringLiteral("Targets…"));
+    CHECK_EQ(titleCount(blue, QStringLiteral("Shatter")), 1);
+
+    App green;
+    green.characters.saveAll({aria});
+    Encounter lair;
+    lair.id = "fight";
+    lair.name = "Lair";
+    lair.combatants = {makeMonsterCombatant(srd(green.srdMonsters, "adult-green-dragon"), "dragon"),
+                       makeCharacterCombatant(aria, "aria")};
+    green.encounters.saveAll({lair});
+    green.open();
+    green.select("dragon");
+    QApplication::processEvents();
+
+    QWidget* mind = titledRow(green, QStringLiteral("Mind Invasion"));
+    CHECK(mind != nullptr);
+    CHECK(contains(mind, QStringLiteral("uses Spellcasting to cast Mind Spike (level 3 version)")));
+    CHECK(contains(mind, QStringLiteral("DC 17 Wis save (half on success), 4d8 psychic")));
+    CHECK(contains(mind, QStringLiteral("Concentration")));
+    CHECK(!contains(mind, QStringLiteral("The creature casts Mind Spike")));
+    CHECK(rowButton(green, QStringLiteral("Mind Invasion")) != nullptr);
+    CHECK_EQ(titleCount(green, QStringLiteral("Mind Spike (level 3)")), 1);
 }
