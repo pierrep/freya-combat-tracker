@@ -337,6 +337,7 @@ QLabel* makeHeading(const QString& text)
     auto* label = new QLabel(text);
     label->setProperty("role", QStringLiteral("heading"));
     label->setWordWrap(true);
+    label->setIndent(0);
     return label;
 }
 

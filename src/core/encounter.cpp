@@ -146,6 +146,29 @@ void tickDurations(Encounter& encounter, const std::string& anchorId, TurnBounda
             combatant.ac -= timedAcBonus(effect.first);
             return true;
         });
+        // Damage due at this boundary ("at the end of its next turn").
+        std::erase_if(combatant.delayedDamage, [&anchorId, boundary, &combatant, &events](DelayedDamage& delayed) {
+            ConditionDuration& duration = delayed.when;
+            if (duration.anchorId != anchorId || duration.boundary != boundary) {
+                return false;
+            }
+            if (duration.skipNext) {
+                duration.skipNext = false;
+                return false;
+            }
+            duration.turnsRemaining -= 1;
+            if (duration.turnsRemaining > 0) {
+                return false;
+            }
+            TurnEvent event;
+            event.kind = TurnEvent::Kind::OngoingDamage;
+            event.combatantId = combatant.id;
+            event.damage = delayed.damage;
+            event.sourceId = delayed.byId;
+            event.source = delayed.source;
+            events.push_back(event);
+            return true;
+        });
     }
 }
 
@@ -161,7 +184,7 @@ void endTurn(Encounter& encounter, int index, std::vector<TurnEvent>& events)
             continue;
         }
         for (const ActiveCondition& condition : combatant.conditions) {
-            if (condition.saveEnds.has_value() && !condition.saveEnds->manual) {
+            if (condition.saveEnds.has_value() && !condition.saveEnds->manual && !condition.saveEnds->atStart) {
                 TurnEvent event;
                 event.kind = TurnEvent::Kind::SaveToEnd;
                 event.combatantId = id;
@@ -237,6 +260,19 @@ void startTurn(Encounter& encounter, int index, const RollDie& rollDie, std::vec
             event.damage = condition.ongoing;
             event.sourceId = condition.byId;
             event.source = condition.source;
+            events.push_back(event);
+        }
+    }
+    // Saves that come at the start of the turn, after the ongoing damage
+    // (Searing Smite: 1d6 Fire, then a Constitution save to end it).
+    for (const ActiveCondition& condition : combatant.conditions) {
+        if (condition.saveEnds.has_value() && !condition.saveEnds->manual && condition.saveEnds->atStart) {
+            TurnEvent event;
+            event.kind = TurnEvent::Kind::SaveToEnd;
+            event.combatantId = id;
+            event.conditionId = condition.id;
+            event.ability = condition.saveEnds->ability;
+            event.dc = condition.saveEnds->dc;
             events.push_back(event);
         }
     }
@@ -720,6 +756,8 @@ void resetMonsters(Encounter& encounter)
                 combatant.ac -= timedAcBonus(effect.first);
             }
             combatant.timedEffects.clear();
+            combatant.delayedDamage.clear();
+            combatant.sustained.reset();
         }
         std::erase_if(combatant.conditions, [&monsterIds](const ActiveCondition& row) {
             return std::find(monsterIds.begin(), monsterIds.end(), row.byId) != monsterIds.end();
@@ -745,6 +783,8 @@ void resetMonsters(Encounter& encounter)
             combatant.ac -= timedAcBonus(effect.first);
         }
         combatant.timedEffects.clear();
+        combatant.delayedDamage.clear();
+        combatant.sustained.reset();
         if (combatant.statBlock.has_value()) {
             applyTraitEffects(combatant, *combatant.statBlock);
         }

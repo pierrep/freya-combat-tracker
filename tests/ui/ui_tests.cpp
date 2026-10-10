@@ -39,6 +39,8 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QDir>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QToolButton>
@@ -171,6 +173,13 @@ struct App {
             }
         }
         throw test::Failure("no row for " + combatantId);
+    }
+
+    // The End button of the ability being aimed: an area rolls when it is clicked.
+    void endTargets()
+    {
+        button(QStringLiteral("End"))->click();
+        QApplication::processEvents();
     }
 
     Encounter saved()
@@ -487,6 +496,23 @@ TEST_CASE("the death save prompt is the only Roll, and resolving it ends the dyi
     CHECK_EQ(App::in(fight, "aria").deathSaves.failures, 0);
     CHECK_EQ(fight.turnIndex, 1);
     CHECK_EQ(fight.round, 1);
+
+    // A 1 rolled at the table: two failures, and the turn ends.
+    app.find<QPushButton>("promptCriticalFailure")->click();
+    QApplication::processEvents();
+    fight = app.saved();
+    CHECK_EQ(App::in(fight, "aria").deathSaves.failures, 2);
+    CHECK_EQ(fight.turnIndex, 0);
+    app.find<QPushButton>("undoFight")->click();
+    QApplication::processEvents();
+
+    // A 20: back up with 1 HP, and she acts.
+    app.find<QPushButton>("promptCriticalSuccess")->click();
+    QApplication::processEvents();
+    fight = app.saved();
+    CHECK_EQ(App::in(fight, "aria").hp, 1);
+    CHECK(!hasCondition(App::in(fight, "aria"), "unconscious"));
+    CHECK_EQ(fight.turnIndex, 1);
 }
 
 TEST_CASE("a character stable at 0 HP shows only that, without death save buttons or Stabilize")
@@ -806,8 +832,71 @@ TEST_CASE("a breath weapon rolls once, each target saves, and it must recharge")
     QApplication::processEvents();
     app.clickTarget("aria");
     app.clickTarget("bryn");
+    // Nothing rolls while the targets are being picked.
+    CHECK(app.window->findChild<QPushButton*>(QStringLiteral("promptRoll")) == nullptr);
+    CHECK(App::in(app.saved(), "dragon").expended.empty());
+    CHECK_EQ(app.find<QTreeWidget>("initiativeList")->selectedItems().size(), qsizetype{2});
+    app.clickTarget("bryn");  // clicked again: taken back out
+    CHECK_EQ(app.find<QTreeWidget>("initiativeList")->selectedItems().size(), qsizetype{1});
+    app.clickTarget("bryn");
+    // The same with the mouse, on a row that is already picked.
+    {
+        auto* list = app.find<QTreeWidget>("initiativeList");
+        const QPoint at = list->visualItemRect(app.row("initiativeList", "bryn")).center();
+        for (const QEvent::Type type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
+            QMouseEvent event(type, QPointF(at), list->viewport()->mapToGlobal(QPointF(at)), Qt::LeftButton,
+                              type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(list->viewport(), &event);
+        }
+        QApplication::processEvents();
+        CHECK_EQ(list->selectedItems().size(), qsizetype{1});
+        // Pressing a row picks nothing by itself: Aria stays picked, with no
+        // moment where only the pressed row shows (the list flickered).
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(at), list->viewport()->mapToGlobal(QPointF(at)),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(list->viewport(), &press);
+        CHECK_EQ(list->selectedItems().size(), qsizetype{1});
+        CHECK(app.row("initiativeList", "aria")->isSelected());
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(at), list->viewport()->mapToGlobal(QPointF(at)),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(list->viewport(), &release);
+        QApplication::processEvents();
+        CHECK_EQ(list->selectedItems().size(), qsizetype{2});
+    }
+    // No dice either: the breath's damage is rolled once End is clicked.
+    CHECK(app.find<ui::DiceOverlay>("diceOverlay")->thrownSides().empty());
+    app.endTargets();
+    CHECK(!app.find<ui::DiceOverlay>("diceOverlay")->thrownSides().empty());
+    {
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < 1300) {
+            QApplication::processEvents();
+            QThread::msleep(4);
+        }
+        // The breath's card: its damage and how it was rolled.
+        auto* overlay = app.find<ui::DiceOverlay>("diceOverlay");
+        CHECK(overlay->shownCaption().startsWith(QStringLiteral("Damage: ")));
+        CHECK(overlay->shownCaption().endsWith(QStringLiteral("fire")));
+        CHECK(overlay->shownDetail() == QStringLiteral("17d6 fire"));
+    }
     CHECK_EQ(App::in(app.saved(), "aria").hp, 400);  // each save is asked first
     app.answer("promptRoll");
+    {
+        // A save's card says how it went, and the sum behind it.
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < 1300) {
+            QApplication::processEvents();
+            QThread::msleep(4);
+        }
+        auto* overlay = app.find<ui::DiceOverlay>("diceOverlay");
+        const QString caption = overlay->shownCaption();
+        CHECK(caption == QStringLiteral("Success") || caption == QStringLiteral("Fail"));
+        CHECK(overlay->shownDetail().contains(QStringLiteral(" vs DC ")));
+        overlay->dismiss();
+        QApplication::processEvents();
+    }
     app.answer("promptRoll");
     const Encounter fight = app.saved();
     CHECK(App::in(fight, "aria").hp < 400);
@@ -858,6 +947,7 @@ TEST_CASE("recharge is left out of the ability name, and its summary is italic")
     app.button(QStringLiteral("Targets…"))->click();
     QApplication::processEvents();
     app.clickTarget("aria");
+    app.endTargets();
     const QString prompt = app.find<QLabel>("promptText")->text();
     CHECK(prompt.contains(QStringLiteral("Fire Breath")));
     CHECK(!prompt.contains(QStringLiteral("Recharge")));
@@ -997,6 +1087,8 @@ TEST_CASE("an invisible dragon's breath weapon ends Invisible")
     app.button(QStringLiteral("Targets…"))->click();
     QApplication::processEvents();
     app.clickTarget("aria");
+    CHECK(hasCondition(App::in(app.saved(), "dragon"), "invisible"));  // not until End
+    app.endTargets();
     CHECK(!hasCondition(App::in(app.saved(), "dragon"), "invisible"));
 }
 
@@ -1128,7 +1220,7 @@ TEST_CASE("a monster's save asks Roll, Saved or Failed; a save the target fails 
     app.clickTarget("aria");
     app.clickTarget("bryn");
     app.clickTarget("cole");
-    QApplication::processEvents();
+    app.endTargets();
     Encounter fight = app.saved();
     const int full = 400 - App::in(fight, "cole").hp;  // failed at once: the whole roll
     CHECK(full > 0);
@@ -1560,6 +1652,7 @@ TEST_CASE("the Basilisk's gaze is aimed like an action, restrains, and petrifies
     gaze->click();
     QApplication::processEvents();
     app.clickTarget("goblin");
+    app.endTargets();
     app.answer("promptFailed");  // the table rolled it
     Encounter after = app.saved();
     CHECK_EQ(App::in(after, "basilisk").expended.size(), std::size_t{1});
@@ -1961,13 +2054,8 @@ TEST_CASE("after its breath weapon, a dragon with nothing left passes its turn o
     CHECK(!rowSelected("dragon"));
     CHECK(app.find<QLabel>("selectedName")->text() == QStringLiteral("Young White Dragon"));
 
-    // Escape: done choosing. Nothing else to do, so the turn passes.
-    for (QShortcut* shortcut : app.window->findChildren<QShortcut*>()) {
-        if (shortcut->key() == QKeySequence(Qt::Key_Escape)) {
-            emit shortcut->activated();
-        }
-    }
-    QApplication::processEvents();
+    // End: rolls for them, and with nothing else to do the turn passes.
+    app.endTargets();
     CHECK_EQ(app.saved().turnIndex, 1);
     // The saves are still asked, one creature at a time.
     CHECK(app.find<QLabel>("promptText")->text().contains(QStringLiteral("Cold Breath")));
@@ -2064,9 +2152,10 @@ TEST_CASE("the Ghost's Horrific Visage can't target the ghost itself")
     CHECK(said);
 
     app.clickTarget("aria");
+    CHECK_EQ(list->selectedItems().size(), qsizetype{1});
+    app.endTargets();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     CHECK(app.find<QLabel>("promptText")->text().contains(QStringLiteral("Aria")));
-    CHECK_EQ(list->selectedItems().size(), qsizetype{1});
 }
 
 TEST_CASE("Horrific Visage doesn't affect Undead: the Vampire is turned away, Aria saves")
@@ -2108,6 +2197,7 @@ TEST_CASE("Horrific Visage doesn't affect Undead: the Vampire is turned away, Ar
     }
     CHECK(said);
     app.clickTarget("aria");
+    app.endTargets();
     app.answer("promptFailed");
     const Encounter after = app.saved();
     CHECK(!hasCondition(App::in(after, "vampire"), "frightened"));
@@ -2199,6 +2289,71 @@ TEST_CASE("thrown dice settle by tipping onto the face nearest the viewer, which
     }
 }
 
+TEST_CASE("thrown dice dim the page and wait; a click or Escape takes them away and goes no further")
+{
+    QWidget page;
+    page.resize(900, 640);
+    auto* button = new QPushButton(QStringLiteral("Under the dice"), &page);
+    button->setGeometry(20, 20, 160, 32);
+    int clicks = 0;
+    QObject::connect(button, &QPushButton::clicked, [&clicks] { ++clicks; });
+    page.show();
+    ui::DiceOverlay overlay(&page);
+    const auto wait = [](int ms) {
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < ms) {
+            QApplication::processEvents();
+            QThread::msleep(4);
+        }
+    };
+    const auto click = [button] {
+        const QPointF at(10, 10);
+        QMouseEvent press(QEvent::MouseButtonPress, at, button->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(button, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, button->mapToGlobal(at), Qt::LeftButton, Qt::NoButton,
+                            Qt::NoModifier);
+        QApplication::sendEvent(button, &release);
+        QApplication::processEvents();
+    };
+    const std::vector<ui::ThrownDie> dice{{20, 17}, {6, 4}};
+
+    // Long after it settles it is still there, card and all.
+    overlay.throwDice(dice, QStringLiteral("Hits Aria"));
+    wait(2600);
+    CHECK(overlay.active());
+    CHECK(overlay.isVisible());
+    CHECK(overlay.shownCaption() == QStringLiteral("Hits Aria"));
+    // The page under it is dimmed.
+    const QImage shot = overlay.grab().toImage();
+    CHECK(shot.pixelColor(shot.width() - 5, 5).alpha() > 0);
+    click();
+    CHECK(!overlay.active());
+    CHECK(!overlay.isVisible());
+    CHECK_EQ(clicks, 0);  // the click was spent on the dice
+    click();
+    CHECK_EQ(clicks, 1);  // and the next one is the page's again
+
+    // Mid-throw, while the dice still tumble.
+    overlay.throwDice(dice, QString());
+    wait(150);
+    click();
+    CHECK(!overlay.isVisible());
+    CHECK_EQ(clicks, 1);
+
+    // Escape, Space, and Enter do it too.
+    for (const int key : {int(Qt::Key_Escape), int(Qt::Key_Space), int(Qt::Key_Return)}) {
+        overlay.throwDice(dice, QString());
+        QApplication::processEvents();
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        QApplication::sendEvent(button, &press);
+        QApplication::processEvents();
+        CHECK(!overlay.isVisible());
+    }
+    CHECK_EQ(clicks, 1);  // Space and Enter did not press the button
+}
+
 TEST_CASE("an attack throws its d20 first with a hit or miss card, then on a hit its damage")
 {
     App app;
@@ -2252,11 +2407,21 @@ TEST_CASE("an attack throws its d20 first with a hit or miss card, then on a hit
     CHECK((overlay->shownSides() == std::vector<int>{20, 6}));  // the Scimitar's 1d6 waits
     wait(1100);
     CHECK(overlay->shownCaption().startsWith(QStringLiteral("Hits Aria")));
+    // The d20 is on the table, so no list of dice: the sum behind the total.
+    CHECK(overlay->shownDetail().contains(QStringLiteral(" + 4 = ")));
+    CHECK(overlay->shownDetail().contains(QStringLiteral(" vs AC ")));
     CHECK((overlay->thrownSides() == std::vector<int>{20}));
-    wait(1500);
+    wait(800);
+    // A hit's card is read for a second longer before the damage is thrown.
+    CHECK((overlay->thrownSides() == std::vector<int>{20}));
+    wait(1000);
     CHECK((overlay->thrownSides() == std::vector<int>{20, 6}));  // the d20 stays on the table
-    wait(900);
+    // The hit card does not come back while the damage dice are in the air.
+    CHECK(!overlay->shownCaption().startsWith(QStringLiteral("Hits")));
+    wait(1100);
     CHECK(overlay->shownCaption().startsWith(QStringLiteral("Damage")));
+    // The calculation behind the total, not the dice: the Scimitar's "1d6+2 slashing".
+    CHECK(overlay->shownDetail() == QStringLiteral("1d6+2 slashing"));
 
     // A miss: the d20 and its card, no damage.
     for (int tries = 0; tries < 20; ++tries) {
@@ -2270,6 +2435,7 @@ TEST_CASE("an attack throws its d20 first with a hit or miss card, then on a hit
     CHECK((overlay->shownSides() == std::vector<int>{20}));
     wait(1100);
     CHECK(overlay->shownCaption().startsWith(QStringLiteral("Misses Bryn")));
+    CHECK(overlay->shownDetail().contains(QStringLiteral(" vs AC ")));
 }
 
 TEST_CASE("the dice tray rolls by hand, and its dice and the app's are thrown across the page")
@@ -2319,6 +2485,19 @@ TEST_CASE("the dice tray rolls by hand, and its dice and the app's are thrown ac
     auto* log = app.find<QListWidget>("fightLog");
     CHECK(log->item(0)->text().contains(QStringLiteral("2d6")));
     CHECK(log->item(0)->text().endsWith(QStringLiteral("= %1").arg(total)));
+    // Its card: the total and the roll behind it, not the faces (the dice show them).
+    {
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < 1300) {
+            QApplication::processEvents();
+            QThread::msleep(4);
+        }
+    }
+    CHECK(overlay->shownCaption() == QStringLiteral("Dice: %1").arg(total));
+    CHECK(overlay->shownDetail() == QStringLiteral("2d6+3"));
+    overlay->dismiss();
+    QApplication::processEvents();
 
     // An attack throws its d20s (and its damage on a hit).
     app.select("goblin");
@@ -2787,6 +2966,41 @@ TEST_CASE("Roll save asks for a condition's repeat save on demand")
     CHECK(hasCondition(App::in(app.saved(), "aria"), "prone"));
 }
 
+TEST_CASE("Defenses are capitalised, flush left, and say Exhausted only under Cannot be")
+{
+    App app;
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Shore";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "air-elemental"), "air"));
+    encounter.combatants[0].initiative = 20;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.select("air");
+    app.find<QTabWidget>("combatantTabs")->setCurrentIndex(2);
+    QApplication::processEvents();
+    auto* host = app.find<QWidget>("combatantDefenses");
+    QStringList texts;
+    for (QLabel* label : host->findChildren<QLabel*>()) {
+        texts << label->text();
+    }
+    CHECK(texts.contains(QStringLiteral("Poison, Thunder")));
+    bool cannotBe = false;
+    for (const QString& text : texts) {
+        if (text.startsWith(QStringLiteral("Exhausted, "))) {
+            cannotBe = true;
+        }
+        CHECK(!text.startsWith(QStringLiteral("Exhaustion")));
+    }
+    CHECK(cannotBe);
+    // The first column starts at the left edge of the block (no layout margin).
+    for (QLabel* label : host->findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("Immune")) {
+            CHECK_EQ(label->x(), 0);
+        }
+    }
+}
+
 TEST_CASE("Action buttons sit in a column on the left of their text and stay on the card")
 {
     App app;
@@ -3171,6 +3385,20 @@ TEST_CASE("Initiative is rolled from the initiative list, and Reset in Encounter
     app.find<QPushButton>("rollAllMonsters")->click();
     QApplication::processEvents();
     CHECK(app.find<QLabel>("initiativeEntryMonsterCount")->text() == QStringLiteral("1 of 1 rolled"));
+    {
+        // Initiative throws its dice but shows no card.
+        auto* overlay = app.find<ui::DiceOverlay>("diceOverlay");
+        CHECK(overlay->active());
+        QElapsedTimer clock;
+        clock.start();
+        while (clock.elapsed() < 1300) {
+            QApplication::processEvents();
+            QThread::msleep(4);
+        }
+        CHECK(overlay->shownCaption().isEmpty());
+        overlay->dismiss();
+        QApplication::processEvents();
+    }
 
     // Start, then Reset in Encounter Builder: everyone's initiative is cleared
     // and the Dashboard opens on the initiative list.
@@ -3761,4 +3989,166 @@ TEST_CASE("a legendary action that casts a spell keeps one description")
     CHECK(!contains(mind, QStringLiteral("The creature casts Mind Spike")));
     CHECK(rowButton(green, QStringLiteral("Mind Invasion")) != nullptr);
     CHECK_EQ(titleCount(green, QStringLiteral("Mind Spike (level 3)")), 1);
+}
+
+TEST_CASE("a sustained spell's later uses are buttons while it concentrates, and delayed damage lands")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Temple";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "priest"), "priest"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    encounter.started = true;
+    encounter.combatants[0].concentration = "spirit-guardians";
+    SustainedSpell guardians;
+    guardians.spellId = "spirit-guardians";
+    guardians.slot = 3;
+    guardians.saveDc = 13;
+    encounter.combatants[0].sustained = guardians;
+    DelayedDamage acid;
+    DamagePart part;
+    part.dice = "2d4";
+    part.type = "acid";
+    acid.damage = {part};
+    acid.source = "Dragon's Acid Arrow";
+    acid.when.anchorId = "aria";
+    encounter.combatants[1].delayedDamage = {acid};
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("priest");
+
+    CHECK(app.find<QLabel>("sustainedHeading")->text() == QStringLiteral("Concentrating on Spirit Guardians"));
+    QPushButton* aura = nullptr;
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
+        if (label->isVisible() && label->text() == QStringLiteral("Spirit Guardians (in the aura)")) {
+            for (QPushButton* candidate : label->parentWidget()->parentWidget()->findChildren<QPushButton*>()) {
+                if (candidate->isVisible() && candidate->objectName() == QStringLiteral("featureTarget")) {
+                    aura = candidate;
+                }
+            }
+        }
+    }
+    CHECK(aura != nullptr);
+    if (aura == nullptr) {
+        return;
+    }
+    aura->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    app.endTargets();
+    app.answer("promptFailed");
+    Encounter fight = app.saved();
+    CHECK(App::in(fight, "aria").hp < 400);
+    // No action spent: the area did it.
+    CHECK(!App::in(fight, "priest").economy.actionUsed);
+    CHECK(!App::in(fight, "priest").economy.bonusActionUsed);
+    const int afterAura = App::in(fight, "aria").hp;
+
+    // The acid lands at the end of Aria's turn.
+    app.find<QPushButton>("nextTurn")->click();  // priest -> aria
+    QApplication::processEvents();
+    CHECK_EQ(App::in(app.saved(), "aria").hp, afterAura);
+    app.find<QPushButton>("nextTurn")->click();  // aria's turn ends
+    QApplication::processEvents();
+    fight = app.saved();
+    CHECK(App::in(fight, "aria").hp < afterAura);
+    CHECK(App::in(fight, "aria").delayedDamage.empty());
+}
+
+TEST_CASE("casting a spell it can use again adds its later uses under the actions")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Temple";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "priest"), "priest"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("priest");
+    CHECK(app.window->findChild<QLabel*>(QStringLiteral("sustainedHeading")) == nullptr);
+    QPushButton* cast = nullptr;
+    for (QPushButton* candidate : app.window->findChildren<QPushButton*>(QStringLiteral("rollAttackDamage"))) {
+        for (QLabel* label : candidate->parentWidget()->parentWidget()->findChildren<QLabel*>()) {
+            if (candidate->isVisible() && label->text().startsWith(QStringLiteral("Spirit Guardians"))) {
+                cast = candidate;
+            }
+        }
+    }
+    CHECK(cast != nullptr);
+    if (cast == nullptr) {
+        return;
+    }
+    cast->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    app.endTargets();
+    app.answer("promptFailed");
+    const Encounter fight = app.saved();
+    CHECK_EQ(App::in(fight, "priest").concentration, std::string("spirit-guardians"));
+    CHECK(App::in(fight, "priest").sustained.has_value());
+    app.select("aria");
+    app.select("priest");
+    CHECK(app.window->findChild<QLabel*>(QStringLiteral("sustainedHeading")) != nullptr);
+}
+
+TEST_CASE("a failed repeat save that hurts again deals its damage, and a success ends it")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Nightmare";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "goblin-warrior"), "goblin"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 10;
+    encounter.combatants[1].initiative = 20;
+    encounter.started = true;
+    encounter.turnIndex = 0;
+    DamagePart part;
+    part.dice = "4d10";
+    part.type = "psychic";
+    SaveEnds repeat{Ability::Wisdom, 15};
+    repeat.failDamage = {part};
+    ActiveCondition fear;
+    fear.id = kPhantasmalFear;
+    fear.source = "Phantasmal Killer";
+    fear.saveEnds = repeat;
+    encounter.combatants[1].conditions.push_back(fear);
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.find<QPushButton>("nextTurn")->click();  // goblin -> aria
+    QApplication::processEvents();
+    app.find<QPushButton>("nextTurn")->click();  // aria's turn ends: the save is asked
+    QApplication::processEvents();
+    app.answer("promptFailed");
+    Encounter fight = app.saved();
+    CHECK(App::in(fight, "aria").hp < 400);
+    CHECK(hasCondition(App::in(fight, "aria"), kPhantasmalFear));
+    const int after = App::in(fight, "aria").hp;
+    app.find<QPushButton>("nextTurn")->click();
+    QApplication::processEvents();
+    app.find<QPushButton>("nextTurn")->click();
+    QApplication::processEvents();
+    app.answer("promptPassed");
+    fight = app.saved();
+    CHECK_EQ(App::in(fight, "aria").hp, after);
+    CHECK(!hasCondition(App::in(fight, "aria"), kPhantasmalFear));
 }

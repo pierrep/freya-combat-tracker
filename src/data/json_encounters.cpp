@@ -78,6 +78,19 @@ ActiveCondition conditionFromJson(const json& value, const std::string& context,
         row.worseSaveEnds = json_util::readBoolOr<Error>(*saveEnds, "worseSaveEnds", false, saveContext);
         row.worseEndsOn = json_util::readStringList<Error>(*saveEnds, "worseEndsOn", saveContext);
         row.manual = json_util::readBoolOr<Error>(*saveEnds, "manual", false, saveContext);
+        row.atStart = json_util::readBoolOr<Error>(*saveEnds, "atStart", false, saveContext);
+        if (const auto fail = saveEnds->find("failDamage"); fail != saveEnds->end() && fail->is_array()) {
+            for (const json& part : *fail) {
+                json_util::requireObject<Error>(part, saveContext);
+                DamagePart damage;
+                damage.dice = json_util::readString<Error>(part, "dice", saveContext);
+                damage.type = json_util::readOptionalString<Error>(part, "type", saveContext);
+                if (!parseDice(damage.dice).has_value()) {
+                    throw Error(saveContext + ": \"" + damage.dice + "\" is not a dice expression.");
+                }
+                row.failDamage.push_back(std::move(damage));
+            }
+        }
         condition.saveEnds = std::move(row);
     }
     condition.byId = json_util::readOptionalString<Error>(value, "byId", context);
@@ -123,6 +136,16 @@ json conditionToJson(const ActiveCondition& condition)
         }
         if (condition.saveEnds->manual) {
             saveEnds["manual"] = true;
+        }
+        if (condition.saveEnds->atStart) {
+            saveEnds["atStart"] = true;
+        }
+        if (!condition.saveEnds->failDamage.empty()) {
+            json parts = json::array();
+            for (const DamagePart& part : condition.saveEnds->failDamage) {
+                parts.push_back(json{{"dice", part.dice}, {"type", part.type}});
+            }
+            saveEnds["failDamage"] = std::move(parts);
         }
         if (!condition.saveEnds->worseEndsOn.empty()) {
             saveEnds["worseEndsOn"] = condition.saveEnds->worseEndsOn;
@@ -233,6 +256,45 @@ void readVersion3(Combatant& combatant, const json& value, const std::string& co
             duration.skipNext = json_util::readBoolOr<Error>(row, "skipNext", false, rowContext);
             combatant.timedEffects.emplace_back(json_util::readString<Error>(row, "name", rowContext), duration);
         }
+    }
+    if (const auto delayed = value.find("delayedDamage"); delayed != value.end() && delayed->is_array()) {
+        for (const json& row : *delayed) {
+            const std::string rowContext = context + " delayedDamage";
+            json_util::requireObject<Error>(row, rowContext);
+            DelayedDamage entry;
+            if (const auto parts = row.find("damage"); parts != row.end() && parts->is_array()) {
+                for (const json& part : *parts) {
+                    json_util::requireObject<Error>(part, rowContext);
+                    DamagePart damage;
+                    damage.dice = json_util::readString<Error>(part, "dice", rowContext);
+                    damage.type = json_util::readOptionalString<Error>(part, "type", rowContext);
+                    if (!parseDice(damage.dice).has_value()) {
+                        throw Error(rowContext + ": \"" + damage.dice + "\" is not a dice expression.");
+                    }
+                    entry.damage.push_back(std::move(damage));
+                }
+            }
+            entry.source = json_util::readOptionalString<Error>(row, "source", rowContext);
+            entry.byId = json_util::readOptionalString<Error>(row, "byId", rowContext);
+            entry.when.anchorId = json_util::readString<Error>(row, "anchorId", rowContext);
+            entry.when.boundary = json_util::readOptionalString<Error>(row, "boundary", rowContext) == "start"
+                                      ? TurnBoundary::Start
+                                      : TurnBoundary::End;
+            entry.when.turnsRemaining = std::max(1, json_util::readIntOr<Error>(row, "turns", 1, rowContext));
+            entry.when.skipNext = json_util::readBoolOr<Error>(row, "skipNext", false, rowContext);
+            if (!entry.damage.empty()) {
+                combatant.delayedDamage.push_back(std::move(entry));
+            }
+        }
+    }
+    if (const auto sustained = value.find("sustained"); sustained != value.end() && sustained->is_object()) {
+        const std::string rowContext = context + " sustained";
+        SustainedSpell spell;
+        spell.spellId = json_util::readString<Error>(*sustained, "spellId", rowContext);
+        spell.slot = json_util::readIntOr<Error>(*sustained, "slot", 0, rowContext);
+        spell.saveDc = json_util::readOptionalInt<Error>(*sustained, "saveDc", rowContext);
+        spell.attackBonus = json_util::readOptionalInt<Error>(*sustained, "attackBonus", rowContext);
+        combatant.sustained = std::move(spell);
     }
     const auto block = value.find("statBlock");
     if (block != value.end() && !block->is_null()) {
@@ -385,6 +447,33 @@ json combatantToJson(const Combatant& combatant)
     }
     if (!combatant.auraImmunities.empty()) {
         value["auraImmunities"] = combatant.auraImmunities;
+    }
+    if (!combatant.delayedDamage.empty()) {
+        json delayed = json::array();
+        for (const DelayedDamage& entry : combatant.delayedDamage) {
+            json parts = json::array();
+            for (const DamagePart& part : entry.damage) {
+                parts.push_back(json{{"dice", part.dice}, {"type", part.type}});
+            }
+            delayed.push_back(json{{"damage", std::move(parts)},
+                                   {"source", entry.source},
+                                   {"byId", entry.byId},
+                                   {"anchorId", entry.when.anchorId},
+                                   {"boundary", entry.when.boundary == TurnBoundary::Start ? "start" : "end"},
+                                   {"turns", entry.when.turnsRemaining},
+                                   {"skipNext", entry.when.skipNext}});
+        }
+        value["delayedDamage"] = std::move(delayed);
+    }
+    if (combatant.sustained.has_value()) {
+        json sustained{{"spellId", combatant.sustained->spellId}, {"slot", combatant.sustained->slot}};
+        if (combatant.sustained->saveDc.has_value()) {
+            sustained["saveDc"] = *combatant.sustained->saveDc;
+        }
+        if (combatant.sustained->attackBonus.has_value()) {
+            sustained["attackBonus"] = *combatant.sustained->attackBonus;
+        }
+        value["sustained"] = std::move(sustained);
     }
     if (combatant.statBlock.has_value()) {
         value["statBlock"] = json_codec::monsterToJson(*combatant.statBlock);

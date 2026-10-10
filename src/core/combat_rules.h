@@ -121,6 +121,8 @@ struct RiderOutcome {
     std::vector<std::string> immune;
     std::vector<std::string> already;
     std::vector<std::string> removed;  // ended by it ("no longer Grappled")
+    // Not given because the target cannot see or hear the source (Unconscious).
+    std::vector<std::string> unaware;
     bool stabilized = false;
     // Disadvantage on saves to maintain Concentration, until the rider's duration.
     bool concentrationDisadvantage = false;
@@ -128,9 +130,12 @@ struct RiderOutcome {
 
 // Gives the target the rider's conditions, caused by the attacker: timed,
 // saved against (with the action's save, or its rider save after a hit),
-// tied to another condition, with ongoing damage, and so on.
+// tied to another condition, with ongoing damage, and so on. wasUnconscious
+// is whether the target was Unconscious before the action landed (its damage
+// can knock it out, but it saw the action coming); unset, it is read now.
 RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combatant& target,
-                        const MonsterAttack& attack, const ConditionRider& rider);
+                        const MonsterAttack& attack, const ConditionRider& rider,
+                        std::optional<bool> wasUnconscious = std::nullopt);
 
 // A failed repeat save against a condition that worsens: replaces it with the
 // worse conditions. Returns the ones added; empty when it does not worsen.
@@ -269,6 +274,11 @@ bool hasConcentrationDisadvantage(const Combatant& combatant);
 
 // Starts concentrating on a spell id or ability name. Any other concentration
 // ends first, with the conditions tied to it. Empty ends concentration.
+// Damage the target takes once, at the end of its next turn (Acid Arrow's
+// 2d4 Acid). Hit on its own turn, that is the end of its following turn.
+void addDelayedDamage(const Encounter& encounter, Combatant& target, const std::vector<DamagePart>& damage,
+                      const std::string& source, const std::string& byId);
+
 void setConcentration(Combatant& combatant, const std::string& spellId);
 // Ends concentration and removes the conditions that depended on it. Returns
 // the conditions removed.
@@ -316,6 +326,22 @@ struct AttackRoll {
 
     bool operator==(const AttackRoll&) const = default;
 };
+
+// A d20 roll written out for its dice card, so the result can be followed:
+// "14 + 5 = 19 vs AC 15", "14 (higher of 14 and 7) + 5 − 2 Exhaustion = 17 vs
+// DC 18", "12 + 4 Stealth = 16". The second face counts only with Advantage
+// or Disadvantage; "vs" is left off when against is empty.
+struct D20Calculation {
+    int face = 0;                    // the die kept
+    std::optional<int> otherFace{};  // the die set aside
+    RollMode mode = RollMode::Normal;
+    int bonus = 0;
+    std::string bonusLabel{};  // what the bonus is ("Athletics"); usually empty
+    int penalty = 0;           // the Exhaustion penalty, subtracted
+    int total = 0;
+    std::string against{};     // "AC 15", "DC 14"
+};
+std::string describeD20(const D20Calculation& roll);
 
 // d20 + bonus - attacker's Exhaustion penalty against AC. A natural 20 always
 // hits and is a critical hit; a natural 1 always misses.
@@ -410,6 +436,10 @@ std::vector<std::string> noteDamageTaken(const Encounter& encounter, Combatant& 
 // twice. Ongoing parts are never rolled here.
 std::vector<TypedDamage> rollDamageParts(const std::vector<DamagePart>& parts, const DamageOptions& options,
                                          const RollDie& rollDie);
+// What rollDamageParts rolls for these options, written out: "1d6+2 piercing
+// + 2d6 cold" (a critical hit's dice doubled: "2d6+2 piercing"). Empty when
+// nothing would be rolled.
+std::string damageFormula(const std::vector<DamagePart>& parts, const DamageOptions& options);
 // Halves every part (rounded down), for a successful save.
 std::vector<TypedDamage> halveDamage(const std::vector<TypedDamage>& parts);
 int totalDamage(const std::vector<TypedDamage>& parts);

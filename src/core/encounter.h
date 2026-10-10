@@ -45,6 +45,11 @@ struct SaveEnds {
     // Repeated only when the GM calls for it ("if the creature ends its turn
     // without line of sight to you"), never automatically at the end of its turn.
     bool manual = false;
+    // The save comes at the start of the creature's turn, after the ongoing
+    // damage (Searing Smite), instead of at the end of it.
+    bool atStart = false;
+    // A failed save deals this again (Phantasmal Killer's Psychic damage).
+    std::vector<DamagePart> failDamage{};
 
     bool operator==(const SaveEnds&) const = default;
 };
@@ -75,6 +80,29 @@ struct ActiveCondition {
     std::optional<int> escapeDc{};
 
     bool operator==(const ActiveCondition&) const = default;
+};
+
+// Damage that lands once, later ("2d4 Acid damage at the end of its next
+// turn"): when the duration's boundary comes round, as ongoing damage does.
+struct DelayedDamage {
+    std::vector<DamagePart> damage{};
+    std::string source{};  // "Mage's Acid Arrow"
+    std::string byId{};    // who caused it
+    ConditionDuration when{};
+
+    bool operator==(const DelayedDamage&) const = default;
+};
+
+// A concentration spell the creature cast that it can use again on later
+// turns (Call Lightning's next bolt, Spiritual Weapon's next attack), or whose
+// area hurts creatures that enter it. Only while it still concentrates on it.
+struct SustainedSpell {
+    std::string spellId{};  // the SRD spell id, as in Combatant::concentration
+    int slot = 0;           // the level it was cast at
+    std::optional<int> saveDc{};
+    std::optional<int> attackBonus{};
+
+    bool operator==(const SustainedSpell&) const = default;
 };
 
 // What a combatant has spent this round. Reset at the start of its turn.
@@ -151,6 +179,10 @@ struct Combatant {
     // or more AC ("ac:2:Shimmering Shield", taken off again when it ends).
     // They end like conditions' durations.
     std::vector<std::pair<std::string, ConditionDuration>> timedEffects{};
+    // Damage still to come from someone's spell (Acid Arrow, Vitriolic Sphere).
+    std::vector<DelayedDamage> delayedDamage{};
+    // The concentration spell it cast, for its later uses.
+    std::optional<SustainedSpell> sustained{};
     // The monster's stat block when it was added. Empty for characters and for
     // fights saved before stat blocks were kept.
     std::optional<Monster> statBlock;

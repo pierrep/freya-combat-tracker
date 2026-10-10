@@ -22,12 +22,24 @@ struct ThrownDie {
 struct DiceStage {
     std::vector<ThrownDie> dice;
     QString caption;
+    // The card's second line: a calculation ("1d6+2 slashing"). Empty: none
+    // (the dice themselves are on the table).
+    QString detail{};
+    // No second line at all (the dice are on the table to see).
+    bool noDetail = false;
+    // Extra seconds after the stage before has settled, before this one is
+    // thrown (a hit's card is read before its damage comes).
+    double extraPause = 0.0;
+    // No card at all (initiative).
+    bool noCard = false;
 };
 
-// 3D dice thrown across the page they cover: they tumble, bounce off each
-// other and the edges, and settle with the rolled number on top, then a card
-// shows what the roll was for, and everything fades. Drawn with QPainter (no
-// 3D library). Clicks pass through to the page underneath.
+// 3D dice thrown across the page they cover, over a dimmed page: they tumble,
+// bounce off each other and the edges, and settle with the rolled number on
+// top, then a card shows what the roll was for. They stay until dismissed: a
+// click anywhere in the window (or Escape, Space, or Enter) takes them away at
+// once, whatever they are doing, and goes no further. Drawn with QPainter (no
+// 3D library).
 class DiceOverlay : public QWidget {
     Q_OBJECT
 
@@ -39,11 +51,14 @@ public:
     // page. caption says what they were for ("Goblin's Scimitar hits Aria").
     void throwDice(const std::vector<ThrownDie>& dice, const QString& caption);
     // Throws these in turn: each once the one before has settled (and a
-    // short pause), onto the table beside the dice already there. Each
-    // stage's card replaces the one before.
+    // short pause), onto the table beside the dice already there. The card
+    // before leaves as the next throw starts, and the next card comes up
+    // when that throw settles.
     void throwStages(const std::vector<DiceStage>& stages);
-    // True from the throw until the dice have faded.
-    bool active() const { return m_timer.isActive(); }
+    // True from the throw until it is dismissed.
+    bool active() const { return isVisible() && !m_dismissed; }
+    // Takes the dice, the card, and the dimming away now.
+    void dismiss();
     // How many dice are on the page, and the number each one shows.
     std::vector<int> shownFaces() const;
     // The kind of each die on the page (4 to 20; a percentile roll is two d10s).
@@ -52,6 +67,8 @@ public:
     // d20 to settle), and the caption on the card now (empty while none shows).
     std::vector<int> thrownSides() const;
     QString shownCaption() const;
+    // The second line on the card now: a calculation, or empty.
+    QString shownDetail() const;
     // For checking a throw: the number on each die's face (a d4's corner)
     // nearest the viewer, and the largest turn, in degrees, any die made to
     // settle.
@@ -63,6 +80,7 @@ public:
 protected:
     void paintEvent(QPaintEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     // How a die's faces are labelled.
@@ -102,11 +120,20 @@ private:
 
     std::vector<Body> m_bodies;
     std::vector<QString> m_captions;  // each stage's
+    std::vector<QString> m_details;   // each stage's second line; empty lists its dice
+    std::vector<bool> m_noDetail;
+    std::vector<bool> m_noCard;
     std::vector<double> m_stageAt;    // when each stage is thrown
     double m_lastThrowAt = 0.0;
     QTimer m_timer;
     QElapsedTimer m_clock;
     double m_age = 0.0;  // seconds since the throw, in whole steps
+    // The dimming fades in once, when the overlay comes up (not again when a
+    // later throw replaces the dice on it).
+    QElapsedTimer m_dimClock;
+    // A click took the dice away: its release is swallowed too.
+    bool m_dismissed = false;
+    bool m_swallowRelease = false;
 };
 
 }  // namespace combat::ui

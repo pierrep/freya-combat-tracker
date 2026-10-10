@@ -71,6 +71,14 @@ inline constexpr const char* kRiderOnHit = "hit";
 inline constexpr const char* kRiderOnFailure = "failure";
 inline constexpr const char* kRiderOnFailureBy5 = "failureBy5";  // replaces the failure riders
 inline constexpr const char* kRiderOnZeroHp = "zeroHp";          // the hit dropped the target to 0
+// Conditions that are not SRD conditions but spell effects (the rider's
+// source says which spell). Phantasmal Fear gives Disadvantage on attack rolls
+// and ability checks, as Poisoned does.
+inline constexpr const char* kPhantasmalFear = "phantasmal-fear";
+inline constexpr const char* kBurning = "burning";
+// "Phantasmal Fear" for a spell-effect id; empty for any other.
+std::string spellEffectConditionName(const std::string& id);
+
 inline constexpr const char* kRiderOnCast = "cast";              // granted as the spell is cast
 
 // How long a rider's condition lasts (ConditionRider::until). Empty is until
@@ -169,6 +177,14 @@ struct ConditionRider {
     // A repeat save the GM triggers by hand (the spell names its own trigger,
     // like losing line of sight). Ignored when saveEnds is set.
     bool saveOnDemand = false;
+    // The repeat save comes at the start of the target's turn, after the
+    // ongoing damage (Searing Smite).
+    bool saveAtStart = false;
+    // A failed repeat save deals this again (Phantasmal Killer).
+    std::vector<DamagePart> saveFailDamage{};
+    // The effect works through sight or hearing (Fear, Command), so an
+    // Unconscious target is not affected by it.
+    bool requiresSenses = false;
     std::vector<std::string> endsOn{};
     // A failed repeat save turns it into these instead ("Second Failure").
     std::vector<std::string> worsensTo{};
@@ -261,6 +277,9 @@ struct MonsterAttack {
     std::string multiattackAs{};
     // Half the damage on a miss (Acid Arrow's splash).
     bool halfDamageOnMiss = false;
+    // Damage at the end of the target's next turn, after a hit or a failed
+    // save (Acid Arrow's 2d4 Acid, Vitriolic Sphere's 5d4).
+    std::vector<DamagePart> laterDamage{};
     // The caster may be the target (Invisibility). selfOnly is "on itself":
     // there is nothing to click.
     bool allowSelf = false;

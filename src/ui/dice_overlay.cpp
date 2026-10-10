@@ -3,7 +3,9 @@
 #include "ui/theme.h"
 
 #include <QEvent>
+#include <QApplication>
 #include <QFontMetricsF>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
@@ -24,8 +26,10 @@ constexpr double kPi = 3.14159265358979323846;
 // Timeline, in seconds from the throw.
 constexpr double kSettleAt = 0.75;    // the dice turn to their results
 constexpr double kSettleTime = 0.2;
-constexpr double kHoldUntil = 5.2;    // then they fade
-constexpr double kFadeTime = 0.6;
+// The card is fully in this long after the last throw; then the animation
+// stops and the dice wait for a click.
+constexpr double kStillAfter = 1.4;
+constexpr double kDimIn = 0.15;
 constexpr double kStagePause = 0.35;  // between a stage settling and the next throw
 // The camera looks down at the table, tilted toward the bottom of the page.
 constexpr float kTilt = 0.34f;  // radians from straight down
@@ -341,7 +345,70 @@ bool DiceOverlay::eventFilter(QObject* watched, QEvent* event)
     if (watched == parentWidget() && event->type() == QEvent::Resize) {
         setGeometry(parentWidget()->rect());
     }
+    // While shown, the overlay watches the whole application (installed in
+    // throwStages): the click or key that dismisses it is not passed on.
+    const QEvent::Type type = event->type();
+    auto* widget = qobject_cast<QWidget*>(watched);
+    const bool ours = widget != nullptr && widget->window() == window();
+    if (ours && (type == QEvent::MouseButtonPress || type == QEvent::MouseButtonDblClick)) {
+        if (!m_dismissed) {
+            dismiss();
+        }
+        if (isVisible()) {
+            m_swallowRelease = true;  // hidden on the release, which goes nowhere either
+        }
+        return true;
+    }
+    if (ours && type == QEvent::MouseButtonRelease && m_swallowRelease) {
+        m_swallowRelease = false;
+        hide();
+        return true;
+    }
+    if (ours && !m_dismissed && (type == QEvent::KeyPress || type == QEvent::ShortcutOverride)) {
+        const int key = static_cast<QKeyEvent*>(event)->key();
+        if (key == Qt::Key_Escape || key == Qt::Key_Space || key == Qt::Key_Return || key == Qt::Key_Enter) {
+            if (type == QEvent::ShortcutOverride) {
+                event->accept();  // no shortcut (Escape cancelling targets) takes it
+            } else {
+                dismiss();
+                hide();
+            }
+            return true;
+        }
+    }
     return QWidget::eventFilter(watched, event);
+}
+
+void DiceOverlay::dismiss()
+{
+    m_dismissed = true;
+    m_timer.stop();
+    m_bodies.clear();
+    m_captions.clear();
+    m_details.clear();
+    m_noDetail.clear();
+    m_noCard.clear();
+    m_stageAt.clear();
+    update();
+    if (!m_swallowRelease) {
+        // A click hides it on the release; anything else hides it now.
+        QMetaObject::invokeMethod(
+            this, [this] {
+                if (m_dismissed && !m_swallowRelease) {
+                    hide();
+                }
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+void DiceOverlay::hideEvent(QHideEvent* event)
+{
+    qApp->removeEventFilter(this);
+    m_timer.stop();
+    m_dismissed = true;
+    m_swallowRelease = false;
+    QWidget::hideEvent(event);
 }
 
 std::vector<int> DiceOverlay::shownFaces() const
@@ -405,6 +472,10 @@ int DiceOverlay::cardStage() const
     for (std::size_t k = 0; k < m_stageAt.size(); ++k) {
         if (m_age >= m_stageAt[k] + kSettleAt + kSettleTime * 0.6) {
             shown = static_cast<int>(k);
+        } else if (k > 0 && m_age >= m_stageAt[k]) {
+            // The next throw is in the air. The card before it stays down
+            // until this throw settles and its own card comes up.
+            return -1;
         }
     }
     return shown;
@@ -413,13 +484,27 @@ int DiceOverlay::cardStage() const
 QString DiceOverlay::shownCaption() const
 {
     const int stage = cardStage();
-    return active() && stage >= 0 ? m_captions[static_cast<std::size_t>(stage)] : QString();
+    return active() && stage >= 0 && !m_noCard[static_cast<std::size_t>(stage)] ? m_captions[static_cast<std::size_t>(stage)]
+                                                                               : QString();
+}
+
+QString DiceOverlay::shownDetail() const
+{
+    const int stage = cardStage();
+    if (!active() || stage < 0) {
+        return QString();
+    }
+    const std::size_t at = static_cast<std::size_t>(stage);
+    return m_noDetail[at] ? QString() : m_details[at];
 }
 
 void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
 {
     m_bodies.clear();
     m_captions.clear();
+    m_details.clear();
+    m_noDetail.clear();
+    m_noCard.clear();
     m_stageAt.clear();
     const float width = static_cast<float>(std::max(200, this->width()));
     const float height = static_cast<float>(std::max(200, this->height()));
@@ -450,6 +535,9 @@ void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
         m_bodies.push_back(body);
     };
     for (const DiceStage& stage : stages) {
+        if (stageIndex > 0) {
+            stageAt += std::max(0.0, stage.extraPause);
+        }
         const std::size_t before = m_bodies.size();
         for (const ThrownDie& die : stage.dice) {
             if (die.sides == 100) {
@@ -464,6 +552,9 @@ void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
             continue;  // nothing thrown: no stage
         }
         m_captions.push_back(stage.caption);
+        m_details.push_back(stage.detail);
+        m_noDetail.push_back(stage.noDetail);
+        m_noCard.push_back(stage.noCard);
         m_stageAt.push_back(stageAt);
         m_lastThrowAt = stageAt;
         ++stageIndex;
@@ -489,8 +580,15 @@ void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
     m_age = 0.0;
     m_clock.start();
     setGeometry(parentWidget() != nullptr ? parentWidget()->rect() : geometry());
+    if (!isVisible() || m_dismissed) {
+        m_dimClock.start();
+    }
+    m_dismissed = false;
+    m_swallowRelease = false;
     show();
     raise();
+    qApp->removeEventFilter(this);
+    qApp->installEventFilter(this);
     m_timer.start();
     update();
 }
@@ -708,25 +806,29 @@ void DiceOverlay::tick()
         step(m_bodies, m_age, kStep, width, height);
         ++steps;
     }
-    if (m_age >= m_lastThrowAt + kHoldUntil + kFadeTime) {
-        m_timer.stop();
-        hide();
-        return;
+    if (m_age >= m_lastThrowAt + kStillAfter) {
+        m_timer.stop();  // settled, with its card: it waits for a click
     }
     update();
 }
 
 void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
 {
-    if (m_bodies.empty()) {
+    if (m_bodies.empty() || m_dismissed) {
         return;
     }
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
-    const double fadeAt = m_lastThrowAt + kHoldUntil;  // after the last throw
-    const double fade = m_age > fadeAt ? 1.0 - (m_age - fadeAt) / kFadeTime : 1.0;
-    painter.setOpacity(std::clamp(fade, 0.0, 1.0));
+    // The page under the dice, dimmed: a deeper wash in dark mode, where the
+    // page is already dark and a light one would not show.
+    {
+        const double dimIn = std::clamp(static_cast<double>(m_dimClock.elapsed()) / 1000.0 / kDimIn, 0.0, 1.0);
+        const QColor wash = darkMode() ? QColor(0, 0, 0, static_cast<int>(130 * dimIn))
+                                       : QColor(24, 22, 48, static_cast<int>(95 * dimIn));
+        painter.fillRect(rect(), wash);
+    }
+    const double fade = 1.0;
 
     const float sinT = std::sin(kTilt);
     const float cosT = std::cos(kTilt);
@@ -860,22 +962,17 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
         }
     }
 
-    // Once a throw settles: what it was for, and its dice. A later throw's
-    // card replaces it (the hit, then the damage).
+    // Once a throw settles: what it was for. A later throw takes that card
+    // down while its dice are in the air, then shows its own.
     const int stage = cardStage();
-    if (stage < 0) {
+    if (stage < 0 || m_noCard[static_cast<std::size_t>(stage)]) {
         return;
     }
     const QString caption = m_captions[static_cast<std::size_t>(stage)];
-    QStringList parts;
-    for (const Body& body : m_bodies) {
-        if (body.stage != stage) {
-            continue;
-        }
-        parts << (body.labels == Labels::Plain ? QStringLiteral("d%1 %2").arg(body.sides).arg(body.shown)
-                                               : QStringLiteral("%1").arg(body.shown));
-    }
-    const QString detail = parts.join(QStringLiteral("  \u00B7  "));
+    const std::size_t at = static_cast<std::size_t>(stage);
+    // The dice are on the table, so the card never lists them: only a
+    // calculation (a damage roll's "1d6+2 slashing") when there is one.
+    const QString detail = m_noDetail[at] ? QString() : m_details[at];
     QFont captionFont = font();
     captionFont.setBold(true);
     captionFont.setPixelSize(13);
@@ -886,9 +983,18 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     const QFontMetricsF detailMetrics(detailFont);
     const QRectF captionBounds =
         captionMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0), Qt::TextWordWrap, caption);
-    const QRectF detailBounds = detailMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0), Qt::TextWordWrap, detail);
-    const double cardWidth = std::max(captionBounds.width(), detailBounds.width()) + 28.0;
-    const double cardHeight = (caption.isEmpty() ? 0.0 : captionBounds.height() + 3.0) + detailBounds.height() + 18.0;
+    const QRectF detailBounds =
+        detail.isEmpty() ? QRectF()
+                         : detailMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0), Qt::TextWordWrap, detail);
+    // On the last card: how to get back to the page.
+    const bool last = stage + 1 == static_cast<int>(m_stageAt.size());
+    const QString hint = last ? tr("Click anywhere to continue") : QString();
+    const QRectF hintBounds = hint.isEmpty() ? QRectF()
+                                             : detailMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0),
+                                                                          Qt::TextWordWrap, hint);
+    const double cardWidth = std::max({captionBounds.width(), detailBounds.width(), hintBounds.width()}) + 28.0;
+    const double cardHeight = (caption.isEmpty() ? 0.0 : captionBounds.height() + 3.0) + detailBounds.height() +
+                              (hint.isEmpty() ? 0.0 : hintBounds.height() + (detail.isEmpty() ? 0.0 : 4.0)) + 18.0;
     // Under the dice (the controls that threw them are usually above), or
     // over them when there is no room below.
     double x = cluster.center().x() - cardWidth / 2.0;
@@ -921,6 +1027,12 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     painter.setPen(QColor(255, 255, 255, 215));
     painter.drawText(QRectF(card.left() + 14, textTop, card.width() - 24, detailBounds.height() + 2), Qt::TextWordWrap,
                      detail);
+    if (!hint.isEmpty()) {
+        textTop += detail.isEmpty() ? 0.0 : detailBounds.height() + 4.0;
+        painter.setPen(QColor(255, 255, 255, 150));
+        painter.drawText(QRectF(card.left() + 14, textTop, card.width() - 24, hintBounds.height() + 2),
+                         Qt::TextWordWrap, hint);
+    }
 }
 
 }  // namespace combat::ui

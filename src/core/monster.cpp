@@ -218,6 +218,17 @@ std::optional<std::vector<DamagePart>> parseDamageParts(const std::string& text,
     return parts;
 }
 
+std::string spellEffectConditionName(const std::string& id)
+{
+    if (id == kPhantasmalFear) {
+        return "Phantasmal Fear";
+    }
+    if (id == kBurning) {
+        return "Burning";
+    }
+    return {};
+}
+
 std::string abilityDisplayName(const std::string& name)
 {
     const std::string marker = " (Recharge ";

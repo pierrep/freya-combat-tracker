@@ -58,6 +58,17 @@ bool hasManualRepeatSave(const char* spellId)
     return std::strcmp(spellId, "fear") == 0;
 }
 
+// Spells whose conditions come through the target seeing or hearing the caster.
+bool needsSightOrHearing(const char* spellId)
+{
+    for (const char* id : {"fear", "command", "hypnotic-pattern", "color-spray", "dissonant-whispers", "vicious-mockery"}) {
+        if (std::strcmp(spellId, id) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::vector<std::string> splitWords(const char* text)
 {
     std::vector<std::string> words;
@@ -373,6 +384,10 @@ std::optional<MonsterAttack> buildAttack(const Mention& mention, std::optional<i
             attack.damage.push_back(std::move(part));
         } else if (std::strcmp(die.when, "later") == 0) {
             attack.effect += " At the end of its next turn it takes " + damageClause(die, count) + ".";
+            DamagePart part;
+            part.dice = diceText(count, die.sides, die.flat);
+            part.type = die.type;
+            attack.laterDamage.push_back(std::move(part));
         } else if (std::strcmp(die.when, "aside") == 0) {
             attack.effect += " Hit or miss, a saving throw or " + damageClause(die, count) + ".";
         } else if (std::strcmp(die.when, "zone") == 0) {
@@ -437,6 +452,7 @@ std::optional<MonsterAttack> buildAttack(const Mention& mention, std::optional<i
         rider.until = grant.until;
         rider.saveEnds = grant.saveEnds;
         rider.saveOnDemand = !grant.saveEnds && hasManualRepeatSave(rule.id);
+        rider.requiresSenses = needsSightOrHearing(rule.id);
         rider.worsensTo = splitWords(grant.worsens);
         rider.endsOn = splitWords(grant.endsOn);
         rider.worseEndsOn = rider.worsensTo.empty() ? std::vector<std::string>{} : rider.endsOn;
@@ -446,6 +462,53 @@ std::optional<MonsterAttack> buildAttack(const Mention& mention, std::optional<i
             rider.concentration = rule.id;
         }
         attack.riders.push_back(std::move(rider));
+    }
+    if (std::strcmp(rule.id, "heat-metal") == 0) {
+        // The burn is automatic; the save is only to keep hold of the object.
+        attack.save.reset();
+    }
+    if (std::strcmp(rule.id, "searing-smite") == 0 && saveDc.has_value()) {
+        // The extra damage comes with the hit (no save for it). Then, at the
+        // start of each of its turns until the spell ends: the same damage,
+        // and a Constitution save that ends it.
+        SaveSpec repeat;
+        repeat.ability = Ability::Constitution;
+        repeat.dc = *saveDc;
+        attack.save.reset();
+        attack.repeatSave = repeat;
+        ConditionRider burn;
+        burn.conditions = {kBurning};
+        burn.on = kRiderOnCast;
+        burn.until = kUntilMinute;
+        burn.saveEnds = true;
+        burn.saveAtStart = true;
+        burn.ongoing = attack.damage;
+        burn.ongoingAt = kOngoingAtTarget;
+        attack.riders.push_back(std::move(burn));
+        attack.effect += " At the start of each of its turns until the spell ends, the target takes the damage again "
+                         "and makes a Constitution save: on a success the spell ends.";
+    }
+    if (std::strcmp(rule.id, "phantasmal-killer") == 0 && saveDc.has_value()) {
+        // Failed: Disadvantage on ability checks and attack rolls, and at the
+        // end of each of its turns a save: a failure takes the damage again, a
+        // success ends the spell.
+        ConditionRider fear;
+        fear.conditions = {kPhantasmalFear};
+        fear.on = kRiderOnFailure;
+        fear.until = kUntilMinute;
+        fear.saveEnds = true;
+        fear.saveFailDamage = attack.damage;
+        fear.concentration = rule.id;
+        attack.riders.push_back(std::move(fear));
+        attack.effect += " On a failed save it has Disadvantage on ability checks and attack rolls. At the end of each "
+                         "of its turns it saves again: a failure takes the damage again, a success ends the spell.";
+    }
+    if (std::strcmp(rule.id, "ensnaring-strike") == 0 && !attack.riders.empty()) {
+        // The 1d6 Piercing comes at the start of each of its turns while it is
+        // Restrained, not with the hit.
+        attack.riders.front().ongoing = attack.damage;
+        attack.riders.front().ongoingAt = kOngoingAtTarget;
+        attack.damage.clear();
     }
     return attack;
 }
@@ -600,6 +663,186 @@ SpellStrike resolveSpellStrike(const MonsterAttack& attack, int currentHp)
     strike.applyDamage = false;
     strike.applyConditions = below;
     return strike;
+}
+
+namespace {
+
+struct FollowUpRule {
+    const char* spell;
+    FollowUpCost cost;
+    const char* suffix;  // after the spell's name: "Call Lightning (again)"
+    const char* text;
+    bool zone;    // the area's own damage (a creature entering it), any time
+    bool single;  // one creature, though the spell is an area
+};
+
+// What a concentration spell lets the caster do on later turns, and areas that
+// hurt a creature that enters them or ends its turn there.
+constexpr FollowUpRule kFollowUps[] = {
+    {"call-lightning", FollowUpCost::Action, "again",
+     "Magic action: another bolt from the storm cloud, at the same point or a different one. Each creature within 5 "
+     "feet of it saves.",
+     false, false},
+    {"moonbeam", FollowUpCost::Action, "move",
+     "Magic action: move the beam up to 60 feet. Each creature it moves into saves (once per turn).", false, false},
+    {"moonbeam", FollowUpCost::Free, "in the beam",
+     "No action: a creature that enters the beam or ends its turn there saves, once per turn.", true, false},
+    {"heat-metal", FollowUpCost::BonusAction, "again",
+     "Bonus action: the metal burns whoever is touching it again, if it is within range.", false, true},
+    {"spiritual-weapon", FollowUpCost::BonusAction, "again",
+     "Bonus action: move the weapon up to 20 feet and attack a creature within 5 feet of it.", false, false},
+    {"flaming-sphere", FollowUpCost::BonusAction, "ram",
+     "Bonus action: roll the sphere up to 30 feet into a creature's space; that creature saves, and the sphere stops.",
+     false, true},
+    {"flaming-sphere", FollowUpCost::Free, "nearby",
+     "No action: a creature that ends its turn within 5 feet of the sphere saves.", true, false},
+    {"vampiric-touch", FollowUpCost::Action, "again",
+     "Magic action: touch the same creature or a different one.", false, false},
+    {"sunbeam", FollowUpCost::Action, "again", "Magic action: a new Line of radiance.", false, false},
+    {"eyebite", FollowUpCost::Action, "again",
+     "Magic action: target another creature, not one that has succeeded on a save against this casting.", false,
+     false},
+    {"arcane-hand", FollowUpCost::BonusAction, "again",
+     "Bonus action: move the hand up to 60 feet and strike with the Clenched Fist.", false, false},
+    {"arcane-sword", FollowUpCost::BonusAction, "again",
+     "Bonus action: move the sword up to 30 feet and attack the same target or a different one.", false, false},
+    {"flame-blade", FollowUpCost::Action, "again", "Magic action: another melee spell attack with the blade.", false,
+     false},
+    {"spirit-guardians", FollowUpCost::Free, "in the aura",
+     "No action: a creature the aura moves into, or that enters it or ends its turn there, saves (once per turn).",
+     true, false},
+    {"cloudkill", FollowUpCost::Free, "in the cloud",
+     "No action: a creature the cloud moves into, or that enters it or ends its turn there, saves (once per turn).",
+     true, false},
+    {"incendiary-cloud", FollowUpCost::Free, "in the cloud",
+     "No action: a creature the cloud moves into, or that enters it or ends its turn there, saves (once per turn).",
+     true, false},
+    {"insect-plague", FollowUpCost::Free, "in the swarm",
+     "No action: a creature that enters the swarm for the first time on a turn or ends its turn there saves.", true,
+     false},
+    {"wall-of-fire", FollowUpCost::Free, "at the wall",
+     "No action: a creature that ends its turn within 10 feet of the hot side or inside the wall, or enters it for "
+     "the first time on a turn, saves.",
+     true, false},
+    {"wall-of-thorns", FollowUpCost::Free, "in the wall",
+     "No action: a creature that enters the wall or ends its turn there saves.", true, false},
+    {"wall-of-ice", FollowUpCost::Free, "the frigid air",
+     "No action: a creature moving through the frigid air where a panel broke, for the first time on a turn, saves.",
+     true, false},
+    {"blade-barrier", FollowUpCost::Free, "in the wall",
+     "No action: a creature that enters the wall for the first time on a turn or ends its turn there saves.", true,
+     false},
+    {"black-tentacles", FollowUpCost::Free, "in the area",
+     "No action: a creature that enters the area or ends its turn there saves (once per turn).", true, false},
+};
+
+const SpellCombatRule* ruleById(const std::string& id)
+{
+    for (const SpellCombatRule& rule : kSpellRules) {
+        if (id == rule.id) {
+            return &rule;
+        }
+    }
+    return nullptr;
+}
+
+bool hasFollowUps(const std::string& spellId)
+{
+    return std::any_of(std::begin(kFollowUps), std::end(kFollowUps),
+                       [&spellId](const FollowUpRule& row) { return spellId == row.spell; });
+}
+
+}  // namespace
+
+std::optional<SustainedSpell> sustainedSpellFor(const MonsterAttack& cast)
+{
+    if (cast.concentration.empty() || !hasFollowUps(cast.concentration)) {
+        return std::nullopt;
+    }
+    const SpellCombatRule* rule = ruleById(cast.concentration);
+    if (rule == nullptr) {
+        return std::nullopt;
+    }
+    SustainedSpell sustained;
+    sustained.spellId = rule->id;
+    sustained.slot = rule->level;
+    // "Call Lightning (level 4)"
+    const std::string marker = " (level ";
+    if (const std::size_t at = cast.name.rfind(marker); at != std::string::npos) {
+        sustained.slot = std::max(rule->level, std::atoi(cast.name.c_str() + at + marker.size()));
+    }
+    if (cast.save.has_value()) {
+        sustained.saveDc = cast.save->dc;
+    } else if (cast.repeatSave.has_value()) {
+        sustained.saveDc = cast.repeatSave->dc;
+    }
+    sustained.attackBonus = cast.attackBonus;
+    return sustained;
+}
+
+std::vector<SpellFollowUp> spellFollowUps(const SustainedSpell& sustained)
+{
+    std::vector<SpellFollowUp> followUps;
+    const SpellCombatRule* rule = ruleById(sustained.spellId);
+    if (rule == nullptr) {
+        return followUps;
+    }
+    Mention mention;
+    mention.rule = rule;
+    mention.slot = std::max(rule->level, sustained.slot);
+    // A save spell whose save was set aside (Heat Metal) still needs a DC to build.
+    std::optional<int> dc = sustained.saveDc;
+    if (!dc.has_value() && sustained.attackBonus.has_value()) {
+        dc = *sustained.attackBonus + 8;
+    }
+    if (!dc.has_value() && std::strcmp(rule->id, "heat-metal") == 0) {
+        dc = 10;  // set aside again as it is built: the burn has no save
+    }
+    std::optional<int> bonus = sustained.attackBonus;
+    if (!bonus.has_value() && dc.has_value()) {
+        bonus = *dc - 8;
+    }
+    const std::optional<MonsterAttack> base = buildAttack(mention, dc, bonus, false);
+    if (!base.has_value()) {
+        return followUps;
+    }
+    const int extra = std::max(0, mention.slot - rule->level);
+    for (const FollowUpRule& row : kFollowUps) {
+        if (sustained.spellId != row.spell) {
+            continue;
+        }
+        MonsterAttack attack = *base;
+        attack.name = std::string(rule->name) + " (" + row.suffix + ")";
+        attack.effect = row.text;
+        // Using it again is not a new casting: no new concentration, no use spent.
+        attack.concentration.clear();
+        attack.perDay.reset();
+        attack.multiattackAs.clear();
+        attack.inMultiattack = false;
+        attack.laterDamage.clear();
+        if (row.zone) {
+            std::vector<DamagePart> zone;
+            for (int i = 0; i < rule->damageCount; ++i) {
+                const SpellDice& die = rule->damage[i];
+                const int count = scaledCount(die, *rule, extra);
+                if (std::strcmp(die.when, "zone") == 0 && count > 0) {
+                    DamagePart part;
+                    part.dice = diceText(count, die.sides, die.flat);
+                    part.type = die.type;
+                    zone.push_back(std::move(part));
+                }
+            }
+            if (!zone.empty()) {
+                attack.damage = std::move(zone);
+            }
+            attack.area = true;
+        }
+        if (row.single) {
+            attack.area = false;
+        }
+        followUps.push_back(SpellFollowUp{std::move(attack), row.cost});
+    }
+    return followUps;
 }
 
 int spellCombatRuleCount()

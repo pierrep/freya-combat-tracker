@@ -142,7 +142,13 @@ private:
         std::string attackerId;
         MonsterAttack attack;
         std::vector<TypedDamage> saveDamage;  // rolled once for a save effect
+        // Rolled with the first creature it is used on (for an area, when End
+        // is clicked), not when the action is picked.
+        bool saveDamageRolled = false;
         std::vector<std::string> targets;     // already resolved
+        // An area (a breath weapon, Fireball): creatures picked but not yet
+        // rolled for. Clicking one again takes it back out; End rolls for them.
+        std::vector<std::string> picked;
         bool spent = false;
         // A character's attack: damage typed in, no roll.
         std::optional<std::vector<TypedDamage>> fixedDamage;
@@ -227,15 +233,44 @@ private:
     void flushDice();
     // Ends a stage of the dice rolled so far (an attack's d20s), with its
     // card's caption: what comes after is thrown once these have settled.
-    void splitDice(const QString& caption);
-    // The caption for the last stage (the damage), instead of the log lines.
-    void setDiceCaption(const QString& caption) { m_finalDiceCaption = caption; }
+    // detail is the card's second line (the roll's calculation).
+    void splitDice(const QString& caption, bool listDice = true, const QString& detail = QString());
+    // The last stage's card: its caption, its second line in place of the dice
+    // list, and extra seconds before it is thrown.
+    void setDiceCaption(const QString& caption, const QString& detail = QString(), double extraPause = 0.0)
+    {
+        if (!m_diceFlushPending) {
+            return;  // nothing thrown (dice off, or no dice in the roll): it would wait for the next throw
+        }
+        m_finalDiceCaption = caption;
+        m_finalDiceDetail = detail;
+        m_finalDicePause = extraPause;
+    }
+    // The next throw gets no card (initiative: the dice and the log are enough).
+    void setNoDiceCard()
+    {
+        if (m_diceFlushPending) {
+            m_finalDiceNoCard = true;
+        }
+    }
+    // Adds a calculation ("2d6 fire") to the next throw's card, under the
+    // caption it would have anyway (the log lines). Several join with "; ".
+    void addDiceDetail(const QString& detail)
+    {
+        if (m_diceFlushPending && !detail.isEmpty()) {
+            m_finalDiceDetail += (m_finalDiceDetail.isEmpty() ? QString() : QStringLiteral("; ")) + detail;
+        }
+    }
     // The dice tray: add a die, roll what is in it, empty it.
     void addTrayDie(int sides);
     void rollTray();
     void refreshTray();
     // Done choosing targets (Escape, or the action's button again).
     void stopTargeting();
+    // End: rolls for the creatures picked for an area, then stops choosing.
+    void finishTargeting();
+    QString targetProblem(const ArmedAction& armed, const Combatant& attacker, const Combatant& target);
+    static bool picksBeforeRolling(const ArmedAction& armed);
     // While choosing targets, highlights the creatures picked so far.
     void showArmedTargets();
     // Selects one creature's row (and no others), without signals.
@@ -245,6 +280,8 @@ private:
     void afterDamage(Combatant& target, const DamageResult& result, const QString& source,
                      bool askConcentration = true);
     void askConcentrationSave(const Combatant& target, int dc);
+    // A hit or failed save that hurts again later (Acid Arrow): booked on the target.
+    void addLaterDamage(const Combatant& attacker, Combatant& target, const MonsterAttack& attack);
     void maybeAutoPass(const std::string& attackerId);
     // Conditions the action gives the target for this outcome (kRiderOn...).
     // dealt is the damage just taken, for a rider that replaces it.
@@ -307,6 +344,8 @@ private:
     Character* characterFor(const Combatant& combatant);
     std::string currentTurnId();
     bool isTheirTurn(const Combatant& combatant);
+    // The current turn is over and legendary actions may be taken.
+    bool turnIsEnding() const;
     QString nameOf(const std::string& combatantId);
     QString conditionName(const std::string& id) const;
     // "Blinded and Restrained".
@@ -381,7 +420,14 @@ private:
     bool m_showDice = true;
     std::vector<ThrownDie> m_rolledDice;
     std::vector<DiceStage> m_diceStages;  // stages ended by splitDice, waiting to be thrown
+    // Whether the creature an action is landing on was Unconscious before it
+    // did (its damage may knock it out first), for conditions that need sight.
+    std::optional<bool> m_riderTargetWasUnconscious;
+    std::string m_riderTargetId;
     QString m_finalDiceCaption;
+    QString m_finalDiceDetail;
+    double m_finalDicePause = 0.0;
+    bool m_finalDiceNoCard = false;
     bool m_diceFlushPending = false;
     qsizetype m_diceLogMark = 0;
 

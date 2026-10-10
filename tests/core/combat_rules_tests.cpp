@@ -354,6 +354,28 @@ TEST_CASE("conditions suggest advantage and disadvantage, which cancel")
     CHECK(meleeHitIsCritical(target));
 }
 
+TEST_CASE("the damage formula is what is rolled: chosen parts, a critical's doubled dice")
+{
+    const std::vector<DamagePart> axe{{"2d12+6", "slashing", DamageWhen::Always},
+                                      {"2d8", "cold", DamageWhen::Always},
+                                      {"1d4", "slashing", DamageWhen::Advantage},
+                                      {"2d6", "acid", DamageWhen::Ongoing}};
+    CHECK_EQ(damageFormula(axe, {}), std::string("2d12+6 slashing + 2d8 cold"));
+    DamageOptions critical;
+    critical.critical = true;
+    CHECK_EQ(damageFormula(axe, critical), std::string("4d12+6 slashing + 4d8 cold"));
+    DamageOptions advantage;
+    advantage.advantage = true;
+    CHECK_EQ(damageFormula(axe, advantage), std::string("2d12+6 slashing + 2d8 cold + 1d4 slashing"));
+    // An alternative replaces the part of its type.
+    const std::vector<DamagePart> swarm{{"2d4", "piercing", DamageWhen::Always},
+                                        {"1d4", "piercing", DamageWhen::Alternative}};
+    DamageOptions alternative;
+    alternative.alternative = true;
+    CHECK_EQ(damageFormula(swarm, alternative), std::string("1d4 piercing"));
+    CHECK(damageFormula({}, {}).empty());
+}
+
 TEST_CASE("damage parts: advantage dice, alternatives, and ongoing damage")
 {
     const std::vector<DamagePart> scimitar{{"1d6+2", "slashing", DamageWhen::Always},
@@ -1085,6 +1107,90 @@ TEST_CASE("a rider's condition can be timed, saved against, and worsen on a seco
     CHECK(hasCondition(aria, "unconscious"));
     endConditionsOn(aria, {kEndsOnTakesDamage});
     CHECK(!hasCondition(aria, "unconscious"));
+}
+
+TEST_CASE("a d20 roll is written out for its dice card")
+{
+    D20Calculation attack;
+    attack.face = 14;
+    attack.bonus = 5;
+    attack.total = 19;
+    attack.against = "AC 15";
+    CHECK_EQ(describeD20(attack), std::string("14 + 5 = 19 vs AC 15"));
+
+    D20Calculation save;
+    save.face = 14;
+    save.otherFace = 7;
+    save.mode = RollMode::Advantage;
+    save.bonus = -1;
+    save.penalty = 2;
+    save.total = 11;
+    save.against = "DC 13";
+    CHECK_EQ(describeD20(save), std::string("14 (higher of 14 and 7) \u2212 1 \u2212 2 Exhaustion = 11 vs DC 13"));
+
+    D20Calculation stealth;
+    stealth.face = 12;
+    stealth.bonus = 4;
+    stealth.bonusLabel = "Stealth";
+    stealth.total = 16;
+    CHECK_EQ(describeD20(stealth), std::string("12 + 4 Stealth = 16"));
+
+    D20Calculation death;
+    death.face = 8;
+    death.against = "10";
+    CHECK_EQ(describeD20(death), std::string("8 vs 10"));
+}
+
+TEST_CASE("an unconscious creature is not affected by a condition that needs sight or hearing")
+{
+    Encounter encounter;
+    Monster caster;
+    caster.id = "caster";
+    caster.name = "Caster";
+    encounter.combatants.push_back(makeMonsterCombatant(caster, "c"));
+    encounter.combatants.push_back(hero());
+    encounter.started = true;
+    Combatant& aria = encounter.combatants[1];
+
+    const auto fear = spellAsAttack("Fear", 3, 15, std::nullopt);
+    CHECK(fear.has_value());
+    if (!fear.has_value() || fear->riders.empty()) {
+        return;
+    }
+    CHECK(fear->riders[0].requiresSenses);
+    {
+        ActiveCondition sleeping;
+        sleeping.id = "unconscious";
+        addCondition(aria, std::move(sleeping));
+    }
+    const RiderOutcome asleep = applyRider(encounter, encounter.combatants[0], aria, *fear, fear->riders[0]);
+    CHECK(asleep.added.empty());
+    CHECK(!asleep.unaware.empty());
+    CHECK(!hasCondition(aria, "frightened"));
+
+    // A stat block says it in words.
+    MonsterAttack gaze;
+    gaze.name = "Gaze";
+    gaze.effect = "Each creature that can see the monster is frightened.";
+    ConditionRider scare;
+    scare.conditions = {"frightened"};
+    CHECK(applyRider(encounter, encounter.combatants[0], aria, gaze, scare).added.empty());
+
+    // An awake target is affected; a Blinded one is not affected by sight.
+    Combatant bob = hero();
+    bob.id = "bob";
+    CHECK(!applyRider(encounter, encounter.combatants[0], bob, gaze, scare).added.empty());
+    Combatant blind = hero();
+    blind.id = "blind";
+    {
+        ActiveCondition sightless;
+        sightless.id = "blinded";
+        addCondition(blind, std::move(sightless));
+    }
+    CHECK(applyRider(encounter, encounter.combatants[0], blind, gaze, scare).added.empty());
+
+    // Knocked out by the same action's damage: it saw the action coming.
+    CHECK(!applyRider(encounter, encounter.combatants[0], aria, gaze, scare, false).added.empty());
 }
 
 TEST_CASE("ongoing damage comes at the start of the target's or the monster's turn")
@@ -2168,4 +2274,211 @@ TEST_CASE("only the spell Multiattack names counts as part of it: Shatter, not I
     for (const MonsterAttack& spell : actionableSpells(oni, oni.attacks[2])) {
         CHECK(spell.inMultiattack);
     }
+}
+
+TEST_CASE("Acid Arrow and Vitriolic Sphere hurt again at the end of the target's next turn")
+{
+    const auto arrow = spellAsAttack("Acid Arrow", 3, 15, 7);
+    CHECK(arrow.has_value());
+    if (!arrow.has_value() || arrow->laterDamage.empty()) {
+        return;
+    }
+    CHECK_EQ(arrow->laterDamage[0].dice, std::string("3d4"));  // both parts scale
+    CHECK_EQ(arrow->laterDamage[0].type, std::string("acid"));
+    const auto sphere = spellAsAttack("Vitriolic Sphere", 5, 15, std::nullopt);
+    CHECK(sphere.has_value());
+    if (sphere.has_value() && !sphere->laterDamage.empty()) {
+        CHECK_EQ(sphere->laterDamage[0].dice, std::string("5d4"));  // only the first part scales
+    }
+
+    Encounter encounter;
+    Monster dragon;
+    dragon.id = "dragon";
+    dragon.name = "Dragon";
+    encounter.combatants.push_back(makeMonsterCombatant(dragon, "d"));
+    encounter.combatants.push_back(hero());
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    encounter.started = true;
+    encounter.turnIndex = 0;  // the dragon's turn
+    addDelayedDamage(encounter, encounter.combatants[1], arrow->laterDamage, "Dragon's Acid Arrow", "d");
+    CHECK(advanceTurn(encounter).empty());  // the dragon's turn ends: nothing
+    const std::vector<TurnEvent> events = advanceTurn(encounter);  // Aria's turn ends
+    CHECK_EQ(events.size(), std::size_t{1});
+    if (!events.empty()) {
+        CHECK(events[0].kind == TurnEvent::Kind::OngoingDamage);
+        CHECK_EQ(events[0].combatantId, std::string("c"));
+        CHECK_EQ(events[0].sourceId, std::string("d"));
+        CHECK_EQ(events[0].damage[0].dice, std::string("3d4"));
+    }
+    CHECK(encounter.combatants[1].delayedDamage.empty());
+    advanceTurn(encounter);
+    CHECK(advanceTurn(encounter).empty());  // only once
+
+    // Hit on its own turn: the end of its following turn.
+    encounter.turnIndex = 1;
+    addDelayedDamage(encounter, encounter.combatants[1], arrow->laterDamage, "Dragon's Acid Arrow", "d");
+    CHECK(advanceTurn(encounter).empty());
+    CHECK(advanceTurn(encounter).empty());
+    CHECK_EQ(advanceTurn(encounter).size(), std::size_t{1});
+}
+
+TEST_CASE("a concentration spell can be used again on later turns, at the level it was cast")
+{
+    const auto lightning = spellAsAttack("Call Lightning", 4, 15, std::nullopt);
+    CHECK(lightning.has_value());
+    if (!lightning.has_value()) {
+        return;
+    }
+    const std::optional<SustainedSpell> sustained = sustainedSpellFor(*lightning);
+    CHECK(sustained.has_value());
+    if (!sustained.has_value()) {
+        return;
+    }
+    CHECK_EQ(sustained->spellId, std::string("call-lightning"));
+    CHECK_EQ(sustained->slot, 4);
+    CHECK_EQ(sustained->saveDc.value_or(0), 15);
+    const std::vector<SpellFollowUp> again = spellFollowUps(*sustained);
+    CHECK_EQ(again.size(), std::size_t{1});
+    if (!again.empty()) {
+        CHECK(again[0].cost == FollowUpCost::Action);
+        CHECK_EQ(again[0].attack.name, std::string("Call Lightning (again)"));
+        CHECK(again[0].attack.concentration.empty());  // not a new casting
+        CHECK(again[0].attack.area);
+        CHECK_EQ(again[0].attack.damage[0].dice, std::string("4d10"));
+        CHECK_EQ(again[0].attack.save->dc, 15);
+    }
+
+    // A spell with nothing to do later keeps no record.
+    const auto fireball = spellAsAttack("Fireball", 3, 15, std::nullopt);
+    CHECK(fireball.has_value() && !sustainedSpellFor(*fireball).has_value());
+
+    // Moonbeam: move it (an action), and its area (no action).
+    const auto moon = spellAsAttack("Moonbeam", 2, 14, std::nullopt);
+    CHECK(moon.has_value());
+    if (moon.has_value()) {
+        const std::vector<SpellFollowUp> uses = spellFollowUps(*sustainedSpellFor(*moon));
+        CHECK_EQ(uses.size(), std::size_t{2});
+        if (uses.size() == 2) {
+            CHECK(uses[0].cost == FollowUpCost::Action);
+            CHECK(uses[1].cost == FollowUpCost::Free);
+        }
+    }
+
+    // Spiritual Weapon: a bonus action attack. Wall of Fire: its area's own damage.
+    const auto weapon = spellAsAttack("Spiritual Weapon", 2, 13, 5);
+    CHECK(weapon.has_value());
+    if (weapon.has_value()) {
+        const std::vector<SpellFollowUp> uses = spellFollowUps(*sustainedSpellFor(*weapon));
+        CHECK(!uses.empty() && uses[0].cost == FollowUpCost::BonusAction);
+        CHECK(!uses.empty() && uses[0].attack.attackBonus.value_or(0) == 5);
+    }
+    const auto wall = spellAsAttack("Wall of Fire", 4, 16, std::nullopt);
+    CHECK(wall.has_value());
+    if (wall.has_value()) {
+        const std::vector<SpellFollowUp> uses = spellFollowUps(*sustainedSpellFor(*wall));
+        CHECK(!uses.empty() && uses[0].cost == FollowUpCost::Free);
+        CHECK(!uses.empty() && uses[0].attack.damage.size() == 1 && uses[0].attack.damage[0].dice == "5d8");
+    }
+
+    // The record goes when the concentration does.
+    Combatant priest = hero();
+    setConcentration(priest, "call-lightning");
+    priest.sustained = sustained;
+    endConcentration(priest);
+    CHECK(!priest.sustained.has_value());
+}
+
+TEST_CASE("Heat Metal burns without a save, and Ensnaring Strike hurts only while Restrained")
+{
+    const auto heat = spellAsAttack("Heat Metal", 2, 13, std::nullopt);
+    CHECK(heat.has_value());
+    if (heat.has_value()) {
+        CHECK(!heat->save.has_value());
+        CHECK_EQ(heat->damage.size(), std::size_t{1});
+        const std::vector<SpellFollowUp> uses = spellFollowUps(*sustainedSpellFor(*heat));
+        CHECK(!uses.empty() && uses[0].cost == FollowUpCost::BonusAction && !uses[0].attack.save.has_value());
+    }
+    const auto ensnare = spellAsAttack("Ensnaring Strike", 2, 13, std::nullopt);
+    CHECK(ensnare.has_value());
+    if (ensnare.has_value() && !ensnare->riders.empty()) {
+        CHECK(ensnare->damage.empty());
+        CHECK_EQ(ensnare->riders[0].ongoing.size(), std::size_t{1});
+        CHECK_EQ(ensnare->riders[0].ongoing[0].dice, std::string("2d6"));
+        CHECK_EQ(ensnare->riders[0].ongoingAt, std::string(kOngoingAtTarget));
+    }
+}
+
+TEST_CASE("Searing Smite burns at the start of each turn and saves after; Phantasmal Killer saves at the end")
+{
+    const auto smite = spellAsAttack("Searing Smite", 2, 14, std::nullopt);
+    CHECK(smite.has_value());
+    if (!smite.has_value()) {
+        return;
+    }
+    CHECK(!smite->save.has_value());  // the extra damage comes with the hit
+    CHECK(smite->repeatSave.has_value());
+    CHECK_EQ(smite->damage.size(), std::size_t{1});
+    CHECK_EQ(smite->damage[0].dice, std::string("2d6"));  // all the damage scales
+    CHECK_EQ(smite->riders.size(), std::size_t{1});
+    if (smite->riders.empty()) {
+        return;
+    }
+    CHECK(smite->riders[0].saveAtStart);
+    CHECK_EQ(smite->riders[0].ongoing[0].dice, std::string("2d6"));
+
+    Encounter encounter;
+    Monster paladin;
+    paladin.id = "paladin";
+    paladin.name = "Paladin";
+    encounter.combatants.push_back(makeMonsterCombatant(paladin, "p"));
+    encounter.combatants.push_back(hero());
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    encounter.started = true;
+    encounter.turnIndex = 0;
+    applyRider(encounter, encounter.combatants[0], encounter.combatants[1], *smite, smite->riders[0]);
+    CHECK(hasCondition(encounter.combatants[1], kBurning));
+    std::vector<TurnEvent> events = advanceTurn(encounter);  // the paladin's turn ends; Aria's starts
+    CHECK_EQ(events.size(), std::size_t{2});
+    if (events.size() == 2) {
+        CHECK(events[0].kind == TurnEvent::Kind::OngoingDamage);  // the damage first
+        CHECK(events[1].kind == TurnEvent::Kind::SaveToEnd);      // then the save
+        CHECK_EQ(events[1].dc, 14);
+    }
+    events = advanceTurn(encounter);  // Aria's turn ends: no second save
+    CHECK(std::none_of(events.begin(), events.end(),
+                       [](const TurnEvent& event) { return event.kind == TurnEvent::Kind::SaveToEnd; }));
+
+    const auto killer = spellAsAttack("Phantasmal Killer", 5, 15, std::nullopt);
+    CHECK(killer.has_value());
+    if (!killer.has_value() || killer->riders.empty()) {
+        return;
+    }
+    const ConditionRider& fear = killer->riders[0];
+    CHECK(fear.saveEnds && !fear.saveAtStart);
+    CHECK_EQ(fear.saveFailDamage[0].dice, std::string("5d10"));
+    Combatant& aria = encounter.combatants[1];
+    aria.conditions.clear();
+    applyRider(encounter, encounter.combatants[0], aria, *killer, fear);
+    CHECK(hasCondition(aria, kPhantasmalFear));
+    CHECK(aria.conditions[0].saveEnds.has_value());
+    CHECK_EQ(aria.conditions[0].saveEnds->failDamage[0].dice, std::string("5d10"));
+    CHECK_EQ(aria.conditions[0].concentration, std::string("phantasmal-killer"));
+
+    // Disadvantage on attack rolls, with the reason named.
+    MonsterAttack bite;
+    bite.name = "Bite";
+    bite.attackBonus = 5;
+    CHECK(suggestedAttackMode(aria, encounter.combatants[0], false) == RollMode::Disadvantage);
+    const AttackModeChoice choice = decideAttackMode(encounter, aria, encounter.combatants[0], bite);
+    CHECK(choice.mode == RollMode::Disadvantage);
+    CHECK(!choice.disadvantages.empty() && choice.disadvantages[0] == "Aria is Phantasmal Fear");
+
+    // Its save is asked at the end of Aria's turn.
+    encounter.turnIndex = 1;
+    events = advanceTurn(encounter);
+    CHECK(std::any_of(events.begin(), events.end(), [](const TurnEvent& event) {
+        return event.kind == TurnEvent::Kind::SaveToEnd && event.conditionId == kPhantasmalFear;
+    }));
 }

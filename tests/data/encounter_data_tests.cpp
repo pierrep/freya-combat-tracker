@@ -175,6 +175,57 @@ TEST_CASE("encounters round-trip and a tie keeps the saved order")
     CHECK(!fs::exists(path.string() + ".tmp"));
 }
 
+TEST_CASE("damage still to come and a sustained spell are saved with the fight")
+{
+    TempDir dir;
+    const fs::path path = dir.path() / "encounters.json";
+    JsonEncounterStore store(path);
+    Encounter encounter;
+    encounter.id = "enc-1";
+    encounter.name = "Lair";
+    Combatant aria;
+    aria.id = "c1";
+    aria.source = kCombatantSourceCharacter;
+    aria.sourceId = "sheet-1";
+    aria.name = "Aria";
+    aria.hp = 30;
+    DelayedDamage acid;
+    DamagePart part;
+    part.dice = "2d4";
+    part.type = "acid";
+    acid.damage = {part};
+    acid.source = "Dragon's Acid Arrow";
+    acid.byId = "c2";
+    acid.when.anchorId = "c1";
+    acid.when.skipNext = true;
+    aria.delayedDamage = {acid};
+    Combatant priest;
+    priest.id = "c2";
+    priest.source = kCombatantSourceMonster;
+    priest.sourceId = "priest";
+    priest.name = "Priest";
+    priest.hp = 38;
+    priest.initiativeBonus = 0;
+    priest.concentration = "spirit-guardians";
+    SustainedSpell guardians;
+    guardians.spellId = "spirit-guardians";
+    guardians.slot = 4;
+    guardians.saveDc = 13;
+    priest.sustained = guardians;
+    SaveEnds repeat{Ability::Wisdom, 15};
+    repeat.atStart = true;
+    repeat.failDamage = {part};
+    ActiveCondition fear;
+    fear.id = kPhantasmalFear;
+    fear.saveEnds = repeat;
+    aria.conditions = {fear};
+    encounter.combatants = {aria, priest};
+    store.saveAll({encounter});
+    const std::vector<Encounter> loaded = store.loadAll();
+    CHECK_EQ(loaded.size(), 1U);
+    CHECK(loaded[0] == encounter);
+}
+
 TEST_CASE("a monster with no initiative bonus is stored without that field")
 {
     Combatant wolf;

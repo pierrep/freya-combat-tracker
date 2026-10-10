@@ -545,7 +545,7 @@ std::string riderSourceName(const Combatant& attacker, const MonsterAttack& atta
 }
 
 RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combatant& target,
-                        const MonsterAttack& attack, const ConditionRider& rider)
+                        const MonsterAttack& attack, const ConditionRider& rider, std::optional<bool> wasUnconscious)
 {
     RiderOutcome outcome;
     // Nothing more lands on a creature the hit killed.
@@ -561,6 +561,25 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
             } else {
                 ++it;
             }
+        }
+    }
+    // A condition that comes through sight or hearing does not land on a
+    // creature that cannot see or hear (Unconscious, or Blinded / Deafened for
+    // the matching sense). Stat blocks say it as "can see" / "can hear".
+    {
+        const std::string text = asciiLower(attack.effect);
+        const auto mentions = [&text](std::initializer_list<const char*> words) {
+            return std::any_of(words.begin(), words.end(),
+                               [&text](const char* word) { return text.find(word) != std::string::npos; });
+        };
+        const bool sight = mentions({"can see", "that see", "who see", "looks at", "look at"});
+        const bool hearing = mentions({"can hear", "that hear", "who hear"});
+        const bool unaware = wasUnconscious.value_or(hasCondition(target, "unconscious")) ||
+                             ((sight && !hearing && !rider.requiresSenses) && hasCondition(target, "blinded")) ||
+                             ((hearing && !sight && !rider.requiresSenses) && hasCondition(target, "deafened"));
+        if ((rider.requiresSenses || sight || hearing) && unaware) {
+            outcome.unaware = rider.conditions;
+            return outcome;
         }
     }
     const std::optional<SaveSpec> save = attack.attackBonus.has_value() && attack.riderSave.has_value() ? attack.riderSave
@@ -597,6 +616,8 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
         if ((rider.saveEnds || rider.saveOnDemand) && save.has_value()) {
             SaveEnds ends{save->ability, save->dc};
             ends.manual = !rider.saveEnds;
+            ends.atStart = rider.saveAtStart;
+            ends.failDamage = rider.saveFailDamage;
             ends.worsensTo = rider.worsensTo;
             ends.worseSaveEnds = rider.worseSaveEnds;
             ends.worseEndsOn = rider.worseEndsOn;
@@ -1236,6 +1257,20 @@ int concentrationDc(int damage)
     return std::clamp(damage / 2, 10, 30);
 }
 
+void addDelayedDamage(const Encounter& encounter, Combatant& target, const std::vector<DamagePart>& damage,
+                      const std::string& source, const std::string& byId)
+{
+    if (damage.empty()) {
+        return;
+    }
+    DelayedDamage delayed;
+    delayed.damage = damage;
+    delayed.source = source;
+    delayed.byId = byId;
+    delayed.when = makeDuration(encounter, target.id, TurnBoundary::End, 1);
+    target.delayedDamage.push_back(std::move(delayed));
+}
+
 void setConcentration(Combatant& combatant, const std::string& spellId)
 {
     if (combatant.concentration == spellId) {
@@ -1253,6 +1288,7 @@ std::vector<ActiveCondition> endConcentration(Combatant& combatant)
     }
     const std::string ending = combatant.concentration;
     combatant.concentration.clear();
+    combatant.sustained.reset();
     for (auto it = combatant.conditions.begin(); it != combatant.conditions.end();) {
         if (!it->concentration.empty() && it->concentration == ending) {
             removed.push_back(std::move(*it));
@@ -1518,6 +1554,33 @@ SaveRoll rollSave(const Combatant& combatant, Ability ability, int dc, int face)
     return roll;
 }
 
+std::string describeD20(const D20Calculation& roll)
+{
+    std::string text = std::to_string(roll.face);
+    if (roll.otherFace.has_value() && roll.mode != RollMode::Normal) {
+        // face is the die kept; otherFace the one set aside.
+        text += (roll.mode == RollMode::Advantage ? " (higher of " : " (lower of ") + std::to_string(roll.face) +
+                " and " + std::to_string(*roll.otherFace) + ")";
+    }
+    const bool adjusted = roll.bonus != 0 || roll.penalty > 0;
+    if (roll.bonus != 0) {
+        text += (roll.bonus > 0 ? " + " : " − ") + std::to_string(std::abs(roll.bonus));
+        if (!roll.bonusLabel.empty()) {
+            text += " " + roll.bonusLabel;
+        }
+    }
+    if (roll.penalty > 0) {
+        text += " − " + std::to_string(roll.penalty) + " Exhaustion";
+    }
+    if (adjusted) {
+        text += " = " + std::to_string(roll.total);
+    }
+    if (!roll.against.empty()) {
+        text += " vs " + roll.against;
+    }
+    return text;
+}
+
 AttackRoll resolveAttackRoll(int attackBonus, int targetAc, int attackerPenalty, int face)
 {
     AttackRoll roll;
@@ -1546,7 +1609,7 @@ RollMode suggestedAttackMode(const Combatant& attacker, const Combatant& target,
     if (hasCondition(attacker, "invisible")) {
         advantage = true;
     }
-    for (const char* id : {"blinded", "frightened", "poisoned", "prone", "restrained"}) {
+    for (const char* id : {"blinded", "frightened", "poisoned", "prone", "restrained", kPhantasmalFear}) {
         if (hasCondition(attacker, id)) {
             disadvantage = true;
         }
@@ -1606,9 +1669,10 @@ std::vector<std::string> attackModeReasons(const Combatant& attacker, const Comb
     if (hasCondition(attacker, "invisible")) {
         reasons.push_back(attacker.name + " is Invisible");
     }
-    for (const char* id : {"blinded", "frightened", "poisoned", "prone", "restrained"}) {
+    for (const char* id : {"blinded", "frightened", "poisoned", "prone", "restrained", kPhantasmalFear}) {
         if (hasCondition(attacker, id)) {
-            reasons.push_back(attacker.name + " is " + capitalized(id));
+            const std::string custom = spellEffectConditionName(id);
+            reasons.push_back(attacker.name + " is " + (custom.empty() ? capitalized(id) : custom));
         }
     }
     if (attack.advantageIfGrappled && isGrappledBy(target, attacker.id) && hasCondition(target, "grappled")) {
@@ -1717,9 +1781,10 @@ AttackModeChoice decideAttackMode(const Encounter& encounter, const Combatant& a
     if (hasCondition(attacker, "invisible")) {
         choice.advantages.push_back(attacker.name + " is Invisible");
     }
-    for (const char* id : {"blinded", "frightened", "poisoned", "prone", "restrained"}) {
+    for (const char* id : {"blinded", "frightened", "poisoned", "prone", "restrained", kPhantasmalFear}) {
         if (hasCondition(attacker, id)) {
-            choice.disadvantages.push_back(attacker.name + " is " + capitalized(id));
+            const std::string custom = spellEffectConditionName(id);
+            choice.disadvantages.push_back(attacker.name + " is " + (custom.empty() ? capitalized(id) : custom));
         }
     }
     if (attack.advantageIfGrappled && isGrappledBy(target, attacker.id) && hasCondition(target, "grappled")) {
@@ -1881,6 +1946,71 @@ std::vector<TypedDamage> rollDamageParts(const std::vector<DamagePart>& parts, c
         }
     }
     return rolled;
+}
+
+std::string damageFormula(const std::vector<DamagePart>& parts, const DamageOptions& options)
+{
+    // The same choices as rollDamageParts, with text in place of rolls.
+    std::vector<std::pair<std::string, std::string>> chosen;  // type, dice
+    const auto text = [&options](Dice dice) {
+        if (options.critical) {
+            dice.count *= 2;
+        }
+        return formatDice(dice);
+    };
+    auto replaceLast = [&chosen](const std::string& type, const std::string& dice) {
+        for (auto it = chosen.rbegin(); it != chosen.rend(); ++it) {
+            if (it->first == type) {
+                it->second = dice;
+                return;
+            }
+        }
+        chosen.emplace_back(type, dice);
+    };
+    for (const DamagePart& part : parts) {
+        const std::optional<Dice> dice = parseDice(part.dice);
+        if (!dice.has_value()) {
+            continue;
+        }
+        switch (part.when) {
+        case DamageWhen::Always:
+            chosen.emplace_back(part.type, text(*dice));
+            break;
+        case DamageWhen::Advantage:
+            if (options.advantage) {
+                chosen.emplace_back(part.type, text(*dice));
+            }
+            break;
+        case DamageWhen::AdvantageAlt:
+            if (options.advantage) {
+                replaceLast(part.type, text(*dice));
+            }
+            break;
+        case DamageWhen::Alternative:
+            if (part.condition.empty() ? options.alternative : contains(options.conditionsMet, part.condition)) {
+                replaceLast(part.type, text(*dice));
+            }
+            break;
+        case DamageWhen::Conditional:
+            if (part.condition.empty() ? options.conditional : contains(options.conditionsMet, part.condition)) {
+                chosen.emplace_back(part.type, text(*dice));
+            }
+            break;
+        case DamageWhen::Ongoing:
+            break;
+        }
+    }
+    std::string formula;
+    for (const auto& [type, dice] : chosen) {
+        if (!formula.empty()) {
+            formula += " + ";
+        }
+        formula += dice;
+        if (!type.empty()) {
+            formula += " " + type;
+        }
+    }
+    return formula;
 }
 
 std::vector<TypedDamage> halveDamage(const std::vector<TypedDamage>& parts)

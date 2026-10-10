@@ -255,6 +255,9 @@ std::vector<ConditionRider> readRiders(const json& value, const std::string& con
         rider.tiedTo = asciiLower(json_util::readOptionalString<Error>(row, "tiedTo", riderContext));
         rider.saveEnds = json_util::readBoolOr<Error>(row, "saveEnds", false, riderContext);
         rider.saveOnDemand = json_util::readBoolOr<Error>(row, "saveOnDemand", false, riderContext);
+        rider.requiresSenses = json_util::readBoolOr<Error>(row, "requiresSenses", false, riderContext);
+        rider.saveAtStart = json_util::readBoolOr<Error>(row, "saveAtStart", false, riderContext);
+        rider.saveFailDamage = readDamage(row, riderContext, "saveFailDamage");
         rider.endsOn = json_util::readStringList<Error>(row, "endsOn", riderContext);
         rider.worsensTo = lowerList(json_util::readStringList<Error>(row, "worsensTo", riderContext));
         rider.worseSaveEnds = json_util::readBoolOr<Error>(row, "worseSaveEnds", false, riderContext);
@@ -303,6 +306,15 @@ json ridersJson(const std::vector<ConditionRider>& riders)
         }
         if (rider.saveOnDemand) {
             row["saveOnDemand"] = true;
+        }
+        if (rider.requiresSenses) {
+            row["requiresSenses"] = true;
+        }
+        if (rider.saveAtStart) {
+            row["saveAtStart"] = true;
+        }
+        if (!rider.saveFailDamage.empty()) {
+            row["saveFailDamage"] = damageJson(rider.saveFailDamage, false);
         }
         if (!rider.endsOn.empty()) {
             row["endsOn"] = rider.endsOn;
@@ -388,6 +400,7 @@ void readAttackFields(const json& value, MonsterAttack& attack, const std::strin
     }
     attack.multiattackAs = json_util::readOptionalString<Error>(value, "multiattackAs", attackContext);
     attack.halfDamageOnMiss = json_util::readBoolOr<Error>(value, "halfDamageOnMiss", false, attackContext);
+    attack.laterDamage = readDamage(value, attackContext, "laterDamage");
     attack.allowSelf = json_util::readBoolOr<Error>(value, "allowSelf", false, attackContext);
     attack.selfOnly = json_util::readBoolOr<Error>(value, "selfOnly", false, attackContext);
     attack.strikes = json_util::readIntOr<Error>(value, "strikes", 1, attackContext);
@@ -482,6 +495,9 @@ void writeAttackFields(json& row, const MonsterAttack& attack)
     }
     if (attack.halfDamageOnMiss) {
         row["halfDamageOnMiss"] = true;
+    }
+    if (!attack.laterDamage.empty()) {
+        row["laterDamage"] = damageJson(attack.laterDamage, false);
     }
     if (attack.allowSelf) {
         row["allowSelf"] = true;

@@ -36,6 +36,27 @@ SpellStrike resolveSpellStrike(const MonsterAttack& attack, int currentHp);
 // would be named ("Fear", "Acid Arrow (level 3)").
 std::vector<std::string> combatSpellMentions(const std::string& text);
 
+// What a sustained spell costs to use again.
+enum class FollowUpCost {
+    Action,       // a Magic action (Call Lightning's next bolt)
+    BonusAction,  // Spiritual Weapon's next attack
+    Free,         // no action: its area hurts a creature that enters it
+};
+
+struct SpellFollowUp {
+    MonsterAttack attack;  // aimed like the spell itself; no new concentration
+    FollowUpCost cost = FollowUpCost::Action;
+};
+
+// The record kept when a creature casts a concentration spell it can use
+// again on later turns (Call Lightning, Moonbeam, Spiritual Weapon) or whose
+// area keeps hurting (Spirit Guardians). Empty for other spells.
+std::optional<SustainedSpell> sustainedSpellFor(const MonsterAttack& cast);
+
+// Those later uses, at the level it was cast with: "Call Lightning (again)"
+// for a Magic action, "Spirit Guardians (in the aura)" for no action.
+std::vector<SpellFollowUp> spellFollowUps(const SustainedSpell& sustained);
+
 // How many SRD spells have a combat rule. For tests.
 int spellCombatRuleCount();
 
