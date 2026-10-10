@@ -43,6 +43,8 @@ class MonsterCatalog;
 
 namespace combat::ui {
 
+class DiceSampleBank;
+
 // The fight for one encounter chosen from the dropdown. Every rule (attack
 // rolls, saves, damage, death saves, the action economy, durations) goes
 // through the Qt-free core; this page shows the result and asks the GM when a
@@ -103,6 +105,10 @@ public:
     void setAutoPass(bool on) { m_autoPass = on; }
     // Throws the dice the app rolls across the page (Options can turn it off).
     void setShowDice(bool on) { m_showDice = on; }
+    // The dice's sound: on, volume 0 to 100, and "wood" or "felt".
+    void setDiceSound(bool on, int volume, const QString& surface);
+    // Recordings for the dice to play (null: silent). Kept by the caller.
+    void setDiceSamples(const DiceSampleBank* samples);
     // Redraws what was drawn in the old colours after a switch to or from dark mode.
     void refreshTheme();
     // Remembers the encounter shown here in this file, and opens it next time.
@@ -344,8 +350,6 @@ private:
     Character* characterFor(const Combatant& combatant);
     std::string currentTurnId();
     bool isTheirTurn(const Combatant& combatant);
-    // The current turn is over and legendary actions may be taken.
-    bool turnIsEnding() const;
     QString nameOf(const std::string& combatantId);
     QString conditionName(const std::string& id) const;
     // "Blinded and Restrained".

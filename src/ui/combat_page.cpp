@@ -2406,6 +2406,21 @@ int CombatPage::rollDie(int sides)
     return rolled;
 }
 
+void CombatPage::setDiceSound(bool on, int volume, const QString& surface)
+{
+    if (m_diceOverlay != nullptr) {
+        m_diceOverlay->setSound(on, volume,
+                                surface == QStringLiteral("felt") ? TableSurface::Felt : TableSurface::Wood);
+    }
+}
+
+void CombatPage::setDiceSamples(const DiceSampleBank* samples)
+{
+    if (m_diceOverlay != nullptr) {
+        m_diceOverlay->setSamples(samples);
+    }
+}
+
 void CombatPage::splitDice(const QString& caption, bool listDice, const QString& detail)
 {
     if (!m_rolledDice.empty()) {

@@ -7,6 +7,8 @@
 #include <QString>
 
 #include <system_error>
+#include <algorithm>
+#include <cctype>
 #include <vector>
 
 namespace combat::ui {
@@ -78,6 +80,51 @@ std::filesystem::path srdDirectory()
         }
     }
     return candidates.empty() ? std::filesystem::path{} : candidates.back();
+}
+
+namespace {
+
+bool hasWav(const std::filesystem::path& folder)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_directory(folder, ec)) {
+        return false;
+    }
+    for (auto it = std::filesystem::recursive_directory_iterator(folder, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        std::string extension = it->path().extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension == ".wav") {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+std::filesystem::path soundsDirectory()
+{
+    std::vector<std::filesystem::path> candidates;
+    const QByteArray fromEnvironment = qgetenv("FREYA_SOUNDS_DIR");
+    if (!fromEnvironment.isEmpty()) {
+        candidates.emplace_back(QString::fromLocal8Bit(fromEnvironment).toStdU16String());
+    }
+    const std::filesystem::path own = appDataFolder() / "sounds";
+    candidates.push_back(own);
+#ifdef COMBAT_TRACKER_SOUNDS_DIR
+    candidates.emplace_back(COMBAT_TRACKER_SOUNDS_DIR);
+#endif
+    const std::filesystem::path executable(QCoreApplication::applicationDirPath().toStdU16String());
+    candidates.push_back(executable / ".." / "share" / "freya-combat-tracker" / "sounds");
+    candidates.push_back(executable / "sounds");
+    for (const std::filesystem::path& candidate : candidates) {
+        if (hasWav(candidate)) {
+            return candidate.lexically_normal();
+        }
+    }
+    return own;
 }
 
 std::filesystem::path srdMonstersFilePath()

@@ -7,9 +7,13 @@
 #include <QVector3D>
 #include <QWidget>
 
+#include "ui/dice_sound.h"
+
 #include <vector>
 
 namespace combat::ui {
+
+class DiceAudio;
 
 // One die the app rolled: its kind (4, 6, 8, 10, 12, 20, or 100 for a
 // percentile roll) and the face it came up.
@@ -75,6 +79,18 @@ public:
     std::vector<int> facesTowardViewer() const;
     float largestSettleTurn() const;
 
+    // Each throw's sound: on or off, how loud (0 to 100), and the table.
+    void setSound(bool on, int volume, TableSurface surface);
+    bool soundOn() const { return m_soundOn; }
+    // The recordings each throw plays (null or empty: silent). Kept by the
+    // caller, alive while the overlay is.
+    void setSamples(const DiceSampleBank* samples) { m_samples = samples; }
+    // The last throw's contacts, and the sound made from them (empty when the
+    // sound is off or there are no recordings), at this rate. For checking a throw.
+    const std::vector<DiceImpact>& lastImpacts() const { return m_lastImpacts; }
+    const std::vector<float>& lastSound() const { return m_lastSound; }
+    int lastSoundRate() const { return m_lastSoundRate; }
+
     static constexpr int kMaxDice = 16;
 
 protected:
@@ -100,6 +116,9 @@ private:
         bool settling = false;
         int settleOn = 0;    // the face (a d4's corner) it settles showing
         int plannedOn = -1;  // the one the run-ahead chose and numbered
+        // Which corners touched the table last step: a corner that comes down
+        // as it tumbles is a contact the ear hears (sound only, not physics).
+        unsigned touching = 0;
         int stage = 0;          // which throw of the sequence it is in
         double thrownAt = 0.0;  // when that throw starts, seconds after the first
         // Its numbers: arranged per throw so the face it settles on shows
@@ -109,8 +128,12 @@ private:
     };
 
     void tick();
-    // One fixed step of the dice, at this time since the throw.
-    static void step(std::vector<Body>& bodies, double time, float dt, float width, float height);
+    // One fixed step of the dice, at this time since the throw. Each contact
+    // loud enough to hear goes in impacts, when given.
+    static void step(std::vector<Body>& bodies, double time, float dt, float width, float height,
+                     std::vector<DiceImpact>* impacts = nullptr);
+    // Makes the throw's sound from its contacts and starts it.
+    void sound(const std::vector<DiceImpact>& impacts);
     static void startSettling(Body& body);
     static int nearestToCamera(const Body& body);
     static void numberForResult(Body& body, int settleOn);
@@ -134,6 +157,15 @@ private:
     // A click took the dice away: its release is swallowed too.
     bool m_dismissed = false;
     bool m_swallowRelease = false;
+
+    bool m_soundOn = false;
+    float m_volume = 0.6f;
+    TableSurface m_surface = TableSurface::Wood;
+    std::vector<DiceImpact> m_lastImpacts;
+    std::vector<float> m_lastSound;
+    int m_lastSoundRate = 48000;
+    DiceAudio* m_audio = nullptr;  // only with Qt Multimedia
+    const DiceSampleBank* m_samples = nullptr;
 };
 
 }  // namespace combat::ui

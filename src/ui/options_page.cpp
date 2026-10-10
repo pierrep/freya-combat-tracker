@@ -1,6 +1,11 @@
 #include "ui/options_page.h"
 
 #include "ui/app_paths.h"
+#include "ui/dice_samples.h"
+#include "ui/dice_sound.h"
+#ifdef FREYA_HAVE_AUDIO
+#include "ui/dice_audio.h"
+#endif
 #include "ui/page_title.h"
 #include "ui/theme.h"
 
@@ -11,11 +16,19 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QFrame>
+#include <QScrollArea>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QVBoxLayout>
+
+#include <QHideEvent>
+#include <QRandomGenerator>
+
+#include <algorithm>
+#include <cmath>
 
 namespace combat::ui {
 
@@ -24,6 +37,9 @@ namespace {
 const QString kGroupInitiativeKey = QStringLiteral("combat/groupInitiative");
 const QString kAutoPassKey = QStringLiteral("combat/autoPass");
 const QString kShowDiceKey = QStringLiteral("combat/showDice");
+const QString kDiceSoundKey = QStringLiteral("combat/diceSound");
+const QString kDiceVolumeKey = QStringLiteral("combat/diceVolume");
+const QString kTableSurfaceKey = QStringLiteral("combat/tableSurface");
 const QString kThemeKey = QStringLiteral("appearance/theme");
 // The first version kept only a dark-mode tick.
 const QString kOldDarkModeKey = QStringLiteral("appearance/darkMode");
@@ -47,7 +63,18 @@ QWidget* option(QCheckBox* box, const QString& explanation)
 OptionsPage::OptionsPage(QWidget* parent)
     : QWidget(parent)
 {
-    auto* outer = new QVBoxLayout(this);
+    // Everything scrolls when the window is shorter than the page.
+    auto* frame = new QVBoxLayout(this);
+    frame->setContentsMargins(0, 0, 0, 0);
+    auto* scroll = new QScrollArea;
+    scroll->setObjectName(QStringLiteral("optionsScroll"));
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* content = new QWidget;
+    scroll->setWidget(content);
+    frame->addWidget(scroll);
+    auto* outer = new QVBoxLayout(content);
     outer->setContentsMargins(28, 20, 28, 20);
     outer->setSpacing(14);
 
@@ -84,6 +111,71 @@ OptionsPage::OptionsPage(QWidget* parent)
     layout->addWidget(option(m_showDice,
                              tr("The dice the app rolls (attacks, damage, saves, initiative) and the Dice tray's tumble "
                                 "across the Dashboard and show what they came up. The log has every roll either way.")));
+
+    m_diceSound = new QCheckBox(tr("Dice make a sound as they land"));
+    m_diceSound->setObjectName(QStringLiteral("diceSound"));
+    m_diceSound->setChecked(soundAvailable());
+    layout->addWidget(option(m_diceSound,
+                             soundAvailable()
+                                 ? tr("Each die clatters as it hits the table or another die, played from recordings "
+                                      "of real dice: the closest one to each hit, louder the harder it lands.")
+                                 : tr("This copy of the app was built without Qt Multimedia, so the dice are silent.")));
+    auto* soundRow = new QHBoxLayout;
+    soundRow->setContentsMargins(24, 0, 0, 0);
+    soundRow->setSpacing(10);
+    auto* volumeLabel = new QLabel(tr("Volume"));
+    m_diceVolume = new QSlider(Qt::Horizontal);
+    m_diceVolume->setObjectName(QStringLiteral("diceVolume"));
+    m_diceVolume->setRange(0, 100);
+    m_diceVolume->setValue(60);
+    m_diceVolume->setFixedWidth(160);
+    volumeLabel->setBuddy(m_diceVolume);
+    m_volumeValue = new QLabel(QStringLiteral("60%"));
+    m_volumeValue->setMinimumWidth(36);
+    auto* surfaceLabel = new QLabel(tr("Table"));
+    m_tableSurface = new QComboBox;
+    m_tableSurface->setObjectName(QStringLiteral("tableSurface"));
+    m_tableSurface->addItem(tr("Wooden table"), QStringLiteral("wood"));
+    m_tableSurface->addItem(tr("Felt dice tray"), QStringLiteral("felt"));
+    surfaceLabel->setBuddy(m_tableSurface);
+    soundRow->addWidget(volumeLabel);
+    soundRow->addWidget(m_diceVolume);
+    soundRow->addWidget(m_volumeValue);
+    soundRow->addSpacing(14);
+    soundRow->addWidget(surfaceLabel);
+    soundRow->addWidget(m_tableSurface);
+    soundRow->addStretch(1);
+    layout->addLayout(soundRow);
+
+    // The recordings: how many, and a way to read new ones.
+    auto* sourceRow = new QHBoxLayout;
+    sourceRow->setContentsMargins(24, 0, 0, 0);
+    sourceRow->setSpacing(10);
+    m_reloadSamples = new QPushButton(tr("Reload recordings"));
+    m_reloadSamples->setObjectName(QStringLiteral("reloadSamples"));
+    sourceRow->addWidget(m_reloadSamples);
+    sourceRow->addStretch(1);
+    layout->addLayout(sourceRow);
+    m_samplesNote = makeMuted(QString());
+    m_samplesNote->setObjectName(QStringLiteral("diceSamplesNote"));
+    m_samplesNote->setWordWrap(true);
+    m_samplesNote->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_samplesNote->setContentsMargins(24, 0, 0, 0);
+    layout->addWidget(m_samplesNote);
+
+    auto* testRow = new QHBoxLayout;
+    testRow->setContentsMargins(24, 0, 0, 0);
+    testRow->setSpacing(10);
+    m_testSound = new QPushButton(tr("Play test throw"));
+    m_testSound->setObjectName(QStringLiteral("playTestSound"));
+    m_testLoop = new QCheckBox(tr("Loop"));
+    m_testLoop->setObjectName(QStringLiteral("testSoundLoop"));
+    testRow->addWidget(m_testSound);
+    testRow->addWidget(m_testLoop);
+    testRow->addStretch(1);
+    layout->addLayout(testRow);
+    showSamplesNote();
+    showSoundChoices();
 
     outer->addWidget(card);
 
@@ -152,8 +244,46 @@ OptionsPage::OptionsPage(QWidget* parent)
     });
     connect(m_showDice, &QCheckBox::toggled, this, [this](bool on) {
         save();
+        showSoundChoices();
         emit showDiceChanged(on);
     });
+    const auto soundChanged = [this] {
+        m_volumeValue->setText(tr("%1%").arg(m_diceVolume->value()));
+        showSoundChoices();
+        save();
+        emit diceSoundChanged(diceSound(), diceVolume(), tableSurface());
+    };
+    connect(m_diceSound, &QCheckBox::toggled, this, soundChanged);
+    connect(m_diceVolume, &QSlider::valueChanged, this, soundChanged);
+    connect(m_tableSurface, &QComboBox::currentIndexChanged, this, soundChanged);
+    connect(m_reloadSamples, &QPushButton::clicked, this, [this] { emit reloadSamplesRequested(); });
+    connect(m_testSound, &QPushButton::clicked, this, [this] {
+        if (m_testLooping) {
+            stopTestSound();
+        } else {
+            playTestSound();
+        }
+    });
+    connect(m_testLoop, &QCheckBox::toggled, this, [this](bool loop) {
+        if (!loop && m_testLooping) {
+            stopTestSound();
+        }
+    });
+    // A looping test plays the new choice at once (the volume once its slider
+    // is let go: restarting while it's dragged would only stutter).
+    const auto restartTest = [this] {
+        if (m_testLooping) {
+            playTestSound();
+        }
+    };
+    connect(m_diceVolume, &QSlider::valueChanged, this, [this, restartTest] {
+        if (!m_diceVolume->isSliderDown()) {
+            restartTest();
+        }
+    });
+    connect(m_diceVolume, &QSlider::sliderReleased, this, restartTest);
+    connect(m_tableSurface, &QComboBox::currentIndexChanged, this, restartTest);
+
     connect(m_theme, &QComboBox::currentIndexChanged, this, [this] {
         save();
         emit themeChanged(theme());
@@ -169,6 +299,9 @@ void OptionsPage::setFile(const QString& path)
     const bool group = settings.value(kGroupInitiativeKey, m_groupInitiative->isChecked()).toBool();
     const bool pass = settings.value(kAutoPassKey, m_autoPass->isChecked()).toBool();
     const bool dice = settings.value(kShowDiceKey, m_showDice->isChecked()).toBool();
+    const bool sound = settings.value(kDiceSoundKey, m_diceSound->isChecked()).toBool();
+    const int volume = std::clamp(settings.value(kDiceVolumeKey, m_diceVolume->value()).toInt(), 0, 100);
+    const QString surface = settings.value(kTableSurfaceKey, tableSurface()).toString();
     QString look = settings.value(kThemeKey).toString();
     if (look.isEmpty()) {
         look = settings.value(kOldDarkModeKey, false).toBool() ? QStringLiteral("dark") : theme();
@@ -179,6 +312,14 @@ void OptionsPage::setFile(const QString& path)
     m_groupInitiative->setChecked(group);
     m_autoPass->setChecked(pass);
     m_showDice->setChecked(dice);
+    m_diceSound->setChecked(sound && soundAvailable());
+    m_diceVolume->setValue(volume);
+    m_volumeValue->setText(tr("%1%").arg(volume));
+    if (const int index = m_tableSurface->findData(surface); index >= 0) {
+        m_tableSurface->setCurrentIndex(index);
+    }
+    showSamplesNote();
+    showSoundChoices();
     if (const int index = m_theme->findData(look); index >= 0) {
         m_theme->setCurrentIndex(index);
     }
@@ -250,6 +391,124 @@ bool OptionsPage::showDice() const
     return m_showDice->isChecked();
 }
 
+bool OptionsPage::soundAvailable()
+{
+#ifdef FREYA_HAVE_AUDIO
+    return true;
+#else
+    return false;
+#endif
+}
+
+void OptionsPage::showSoundChoices()
+{
+    // The sound comes with the dice: no dice on the page, no clatter.
+    m_diceSound->setEnabled(soundAvailable() && m_showDice->isChecked());
+    const bool on = m_diceSound->isEnabled() && m_diceSound->isChecked();
+    m_diceVolume->setEnabled(on);
+    m_tableSurface->setEnabled(on);
+    m_reloadSamples->setEnabled(on);
+    m_testSound->setEnabled(on);
+    m_testLoop->setEnabled(on);
+    if (!on) {
+        stopTestSound();
+    }
+}
+
+void OptionsPage::setSamples(const DiceSampleBank* samples)
+{
+    m_samples = samples;
+    showSamplesNote();
+    if (m_testLooping) {
+        playTestSound();
+    }
+}
+
+void OptionsPage::showSamplesNote()
+{
+    const int count = m_samples != nullptr ? m_samples->size() : 0;
+    const QString folder =
+        m_samples != nullptr ? QDir::toNativeSeparators(QString::fromStdU16String(m_samples->folder().u16string()))
+                             : QString();
+    QString text;
+    if (count == 0) {
+        text = folder.isEmpty()
+                   ? tr("No recordings yet, so the dice are silent.")
+                   : tr("No recordings found yet, so the dice are silent. Put WAV clips in %1 or the app's "
+                        "data/sounds (its README.md says how to name them), then Reload recordings.")
+                         .arg(folder);
+    } else {
+        text = tr("%n recording(s) from %1. A kind of hit with none recorded is silent.", nullptr, count).arg(folder);
+    }
+    if (m_samples != nullptr && !m_samples->problems().empty()) {
+        const auto& problems = m_samples->problems();
+        text += QLatin1Char('\n') + tr("Skipped %n file(s): ", nullptr, static_cast<int>(problems.size())) +
+                QString::fromStdString(problems.front()) + (problems.size() > 1 ? QStringLiteral(", ...") : QString());
+    }
+    m_samplesNote->setText(text);
+}
+
+void OptionsPage::playTestSound()
+{
+    const DiceTestThrow test = diceTestThrow();
+    DiceSoundSettings settings;
+    settings.surface = tableSurface() == QStringLiteral("felt") ? TableSurface::Felt : TableSurface::Wood;
+    settings.volume = static_cast<float>(diceVolume()) / 100.0f;
+#ifdef FREYA_HAVE_AUDIO
+    if (m_testAudio == nullptr) {
+        m_testAudio = new DiceAudio(this);
+    }
+    const bool output = m_testAudio->prepare();
+    if (output) {
+        settings.sampleRate = m_testAudio->sampleRate();
+    }
+#endif
+    m_lastTestSound = renderDiceSound(test.impacts, test.voices, settings, QRandomGenerator::global()->generate(),
+                                      m_samples);
+    const bool loop = m_testLoop->isChecked();
+#ifdef FREYA_HAVE_AUDIO
+    if (output) {
+        m_testAudio->play(m_lastTestSound, loop);
+    }
+#endif
+    m_testLooping = loop;
+    m_testSound->setText(loop ? tr("Stop") : tr("Play test throw"));
+}
+
+void OptionsPage::stopTestSound()
+{
+#ifdef FREYA_HAVE_AUDIO
+    if (m_testAudio != nullptr) {
+        m_testAudio->stop();
+    }
+#endif
+    m_testLooping = false;
+    if (m_testSound != nullptr) {
+        m_testSound->setText(tr("Play test throw"));
+    }
+}
+
+void OptionsPage::hideEvent(QHideEvent* event)
+{
+    stopTestSound();
+    QWidget::hideEvent(event);
+}
+
+bool OptionsPage::diceSound() const
+{
+    return soundAvailable() && m_diceSound->isChecked();
+}
+
+int OptionsPage::diceVolume() const
+{
+    return m_diceVolume->value();
+}
+
+QString OptionsPage::tableSurface() const
+{
+    return m_tableSurface->currentData().toString();
+}
+
 bool OptionsPage::groupInitiative() const
 {
     return m_groupInitiative->isChecked();
@@ -269,6 +528,11 @@ void OptionsPage::save()
     settings.setValue(kGroupInitiativeKey, m_groupInitiative->isChecked());
     settings.setValue(kAutoPassKey, m_autoPass->isChecked());
     settings.setValue(kShowDiceKey, m_showDice->isChecked());
+    if (soundAvailable()) {
+        settings.setValue(kDiceSoundKey, m_diceSound->isChecked());
+    }
+    settings.setValue(kDiceVolumeKey, m_diceVolume->value());
+    settings.setValue(kTableSurfaceKey, tableSurface());
     settings.setValue(kThemeKey, theme());
     settings.remove(kOldDarkModeKey);
     if (m_dataFolder.isEmpty()) {

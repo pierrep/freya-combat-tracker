@@ -1,6 +1,8 @@
 #include "ui/main_window.h"
 
+#include "ui/app_paths.h"
 #include "ui/characters_page.h"
+#include "ui/dice_samples.h"
 #include "ui/combat_page.h"
 #include "ui/encounter_builder_page.h"
 #include "ui/monsters_page.h"
@@ -105,6 +107,11 @@ MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, Cus
     connect(m_options, &OptionsPage::autoPassChanged, m_combat, &CombatPage::setAutoPass);
     m_combat->setShowDice(m_options->showDice());
     connect(m_options, &OptionsPage::showDiceChanged, m_combat, &CombatPage::setShowDice);
+    m_combat->setDiceSound(m_options->diceSound(), m_options->diceVolume(), m_options->tableSurface());
+    connect(m_options, &OptionsPage::diceSoundChanged, m_combat, &CombatPage::setDiceSound);
+    m_diceSamples = std::make_shared<DiceSampleBank>();
+    loadDiceSamples();
+    connect(m_options, &OptionsPage::reloadSamplesRequested, this, &MainWindow::loadDiceSamples);
     connect(m_options, &OptionsPage::themeChanged, this, &MainWindow::setThemeChoice);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     // Older Qt can't tell when the desktop changes; it reads it at start-up.
@@ -184,6 +191,13 @@ void MainWindow::setThemeChoice(const QString& choice)
     const bool dark =
         choice == QStringLiteral("dark") || (choice == QStringLiteral("system") && systemPrefersDark());
     setDarkTheme(dark);
+}
+
+void MainWindow::loadDiceSamples()
+{
+    m_diceSamples->load(soundsDirectory());
+    m_options->setSamples(m_diceSamples.get());
+    m_combat->setDiceSamples(m_diceSamples.get());
 }
 
 void MainWindow::setOptionsFile(const QString& path)

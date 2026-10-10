@@ -6,12 +6,15 @@
 #include <QtGlobal>
 #include <QFont>
 #include <QFrame>
+#include <QIcon>
+#include <QIconEngine>
 #include <QLabel>
 #include <QPainter>
 #include <QPalette>
 #include <QPen>
 #include <QPixmap>
 #include <QPolygonF>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QStyle>
 #include <QStringList>
@@ -77,6 +80,41 @@ void repolish(QWidget* widget)
 bool g_dark = false;
 // The desktop's own window colour, read before the app's palette replaces it.
 QColor g_systemWindow;
+
+// The confirmation's question mark: an accent circle, like the default button, with a white "?".
+class QuestionMarkIcon : public QIconEngine
+{
+public:
+    QIconEngine* clone() const override { return new QuestionMarkIcon; }
+
+    void paint(QPainter* painter, const QRect& rect, QIcon::Mode, QIcon::State) override
+    {
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(palette::accent);
+        painter->drawEllipse(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5));
+        painter->setPen(Qt::white);
+        QFont font = QApplication::font();
+        font.setBold(true);
+        font.setPixelSize(qMax(1, rect.height() * 62 / 100));
+        painter->setFont(font);
+        painter->drawText(rect, Qt::AlignCenter, QStringLiteral("?"));
+    }
+};
+
+class AppStyle : public QProxyStyle
+{
+public:
+    explicit AppStyle(QStyle* base) : QProxyStyle(base) {}
+
+    QIcon standardIcon(StandardPixmap icon, const QStyleOption* option, const QWidget* widget) const override
+    {
+        if (icon == SP_MessageBoxQuestion) {
+            return QIcon(new QuestionMarkIcon);
+        }
+        return QProxyStyle::standardIcon(icon, option, widget);
+    }
+};
 
 }  // namespace
 
@@ -150,7 +188,7 @@ void applyTheme(QApplication& app)
     if (!g_systemWindow.isValid()) {
         g_systemWindow = app.palette().color(QPalette::Window);
     }
-    app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    app.setStyle(new AppStyle(QStyleFactory::create(QStringLiteral("Fusion"))));
 
     QPalette colors;
     colors.setColor(QPalette::Window, palette::window);
@@ -175,6 +213,10 @@ void applyTheme(QApplication& app)
     colors.setColor(QPalette::Disabled, QPalette::ButtonText, palette::disabledText);
     colors.setColor(QPalette::Disabled, QPalette::WindowText, palette::disabledText);
     app.setPalette(colors);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    // The title bar follows this. Qt 6.4 has no such call; the sheet still paints the client area.
+    QGuiApplication::styleHints()->setColorScheme(g_dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
+#endif
 
     QFont font = app.font();
     if (font.pointSizeF() > 0 && font.pointSizeF() < 10.0) {
@@ -290,6 +332,13 @@ QScrollBar::handle:vertical { background: %17; border-radius: 4px; min-height: 3
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
 QScrollBar::handle:horizontal { background: %17; border-radius: 4px; min-width: 30px; }
+
+/* Confirmations and alerts: the card surface, ink text, and the accent button for the default choice. */
+QMessageBox { background: %2; }
+QMessageBox QLabel { color: %3; background: transparent; }
+QMessageBox QPushButton:default { background: %6; border-color: %6; color: white; font-weight: 600; }
+QMessageBox QPushButton:default:hover { background: %14; border-color: %14; }
+QMessageBox QPushButton:default:pressed { background: %6; border-color: %6; color: white; }
 )")
                               .arg(hex(palette::window), hex(palette::surface), hex(palette::ink),
                                    hex(palette::muted), hex(palette::line), hex(palette::accent),

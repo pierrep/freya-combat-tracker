@@ -34,6 +34,15 @@ std::filesystem::path encountersFilePath();
 //   <executable folder>/srd                                  (a copied folder)
 std::filesystem::path srdDirectory();
 
+// The dice's recordings (dice_samples.h), the first of these with a WAV in it:
+//   $FREYA_SOUNDS_DIR
+//   <appDataFolder()>/sounds                                  (your own)
+//   the source tree's data/sounds                             (this build)
+//   <executable folder>/../share/freya-combat-tracker/sounds  (cmake --install)
+//   <executable folder>/sounds
+// With none, your own folder (where new recordings would go).
+std::filesystem::path soundsDirectory();
+
 // Packaged SRD files inside srdDirectory().
 std::filesystem::path srdMonstersFilePath();
 std::filesystem::path srdSpellsFilePath();

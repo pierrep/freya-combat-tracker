@@ -1,0 +1,3 @@
+Credits for the recordings in this folder (CC-BY needs one; CC0 is optional).
+One line per source: "Title" by author, link (licence), then the files cut from it.
+

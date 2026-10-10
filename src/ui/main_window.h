@@ -5,6 +5,7 @@
 #include <QMainWindow>
 #include <QString>
 
+#include <memory>
 #include <vector>
 
 class QToolButton;
@@ -24,6 +25,7 @@ class CombatPage;
 class EncounterBuilderPage;
 class MonstersPage;
 class OptionsPage;
+class DiceSampleBank;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -66,6 +68,10 @@ private:
     MonstersPage* m_monsters = nullptr;
     OptionsPage* m_options = nullptr;
     QString m_themeChoice;
+    // The dice's recordings, read from soundsDirectory() at the start and
+    // again when the Options page asks.
+    std::shared_ptr<DiceSampleBank> m_diceSamples;
+    void loadDiceSamples();
     bool m_reportedLoadError = false;
 };
 

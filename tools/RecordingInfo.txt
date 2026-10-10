@@ -1,0 +1,12 @@
+Getting recordings in:
+
+data/sounds/README.md explains the file names (for example wood/d20_face_hard_2.wav), which clip a hit falls back to, and how to record your own.
+
+tools/split_dice_hits.py cuts a long recording into one clip per hit. 
+It sorts them into soft, medium and hard by loudness and names them. 
+Use --list to see what it finds before writing anything, and --credit to add a credit line for CC-BY recordings. 
+It reads WAV directly; MP3, FLAC and M4A need ffmpeg. 
+
+Run it as python3 tools/split_dice_hits.py …, since it may not be marked executable on your machine.
+
+Recordings at the right level play about as loud as the synthesiser does for the same hit.

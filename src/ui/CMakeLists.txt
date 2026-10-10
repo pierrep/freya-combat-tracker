@@ -1,4 +1,7 @@
 find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets)
+# The dice's sound plays through Qt Multimedia when it is installed; without
+# it the app builds and runs as before, silent.
+find_package(Qt6 6.4 QUIET OPTIONAL_COMPONENTS Multimedia)
 
 # The pages are a library so the offscreen UI tests can drive them.
 add_library(combat_ui STATIC
@@ -13,7 +16,17 @@ add_library(combat_ui STATIC
     effects_dialog.cpp
     flow_layout.cpp
     dice_overlay.cpp
+    dice_sound.cpp
+    dice_samples.cpp
 )
+if(TARGET Qt6::Multimedia)
+    target_sources(combat_ui PRIVATE dice_audio.cpp)
+    target_link_libraries(combat_ui PUBLIC Qt6::Multimedia)
+    target_compile_definitions(combat_ui PUBLIC FREYA_HAVE_AUDIO=1)
+    message(STATUS "Dice sounds: on (Qt Multimedia ${Qt6Multimedia_VERSION})")
+else()
+    message(STATUS "Dice sounds: off (Qt Multimedia not found)")
+endif()
 set_target_properties(combat_ui PROPERTIES AUTOMOC ON)
 target_include_directories(combat_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(combat_ui PUBLIC combat_core combat_data Qt6::Widgets)
@@ -21,6 +34,7 @@ target_link_libraries(combat_ui PUBLIC combat_core combat_data Qt6::Widgets)
 # edit is what a build-tree run loads (see app_paths.h).
 target_compile_definitions(combat_ui PRIVATE
     "COMBAT_TRACKER_SRD_DIR=\"${CMAKE_SOURCE_DIR}/data/srd\""
+    "COMBAT_TRACKER_SOUNDS_DIR=\"${CMAKE_SOURCE_DIR}/data/sounds\""
 )
 combat_tracker_set_warnings(combat_ui)
 
@@ -68,3 +82,9 @@ install(FILES
     ${CMAKE_SOURCE_DIR}/data/srd/species.json
     ${CMAKE_SOURCE_DIR}/data/srd/ATTRIBUTION.txt
     DESTINATION ${CMAKE_INSTALL_DATADIR}/freya-combat-tracker/srd)
+# The dice's recordings, whatever is in data/sounds (see its README).
+if(EXISTS ${CMAKE_SOURCE_DIR}/data/sounds)
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/data/sounds/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/freya-combat-tracker/sounds
+        FILES_MATCHING PATTERN "*.wav" PATTERN "*.WAV" PATTERN "*.txt" PATTERN "*.md")
+endif()

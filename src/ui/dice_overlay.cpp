@@ -1,6 +1,10 @@
 #include "ui/dice_overlay.h"
 
+#include "ui/dice_samples.h"
 #include "ui/theme.h"
+#ifdef FREYA_HAVE_AUDIO
+#include "ui/dice_audio.h"
+#endif
 
 #include <QEvent>
 #include <QApplication>
@@ -379,8 +383,63 @@ bool DiceOverlay::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
+void DiceOverlay::setSound(bool on, int volume, TableSurface surface)
+{
+    m_soundOn = on;
+    m_volume = static_cast<float>(std::clamp(volume, 0, 100)) / 100.0f;
+    m_surface = surface;
+#ifdef FREYA_HAVE_AUDIO
+    if (on && m_audio == nullptr) {
+        m_audio = new DiceAudio(this);
+    }
+#endif
+#ifdef FREYA_HAVE_AUDIO
+    if (!on && m_audio != nullptr) {
+        m_audio->stop();
+    }
+#endif
+}
+
+void DiceOverlay::sound(const std::vector<DiceImpact>& impacts)
+{
+    m_lastImpacts = impacts;
+    m_lastSound.clear();
+    if (!m_soundOn || m_samples == nullptr || m_samples->empty()) {
+        return;  // nothing to play
+    }
+    // Each die, with a little detuning of its own.
+    std::vector<DieVoice> voices;
+    for (const Body& body : m_bodies) {
+        DieVoice voice;
+        voice.sides = body.sides;
+        voice.detune = random(0.97f, 1.03f);
+        voices.push_back(voice);
+    }
+    DiceSoundSettings settings;
+    settings.surface = m_surface;
+    settings.volume = m_volume;
+#ifdef FREYA_HAVE_AUDIO
+    const bool output = m_audio != nullptr && m_audio->prepare();
+    if (output) {
+        settings.sampleRate = m_audio->sampleRate();
+    }
+#endif
+    m_lastSoundRate = settings.sampleRate;
+    m_lastSound = renderDiceSound(impacts, voices, settings, QRandomGenerator::global()->generate(), m_samples);
+#ifdef FREYA_HAVE_AUDIO
+    if (output) {
+        m_audio->play(m_lastSound);
+    }
+#endif
+}
+
 void DiceOverlay::dismiss()
 {
+#ifdef FREYA_HAVE_AUDIO
+    if (m_audio != nullptr) {
+        m_audio->stop();
+    }
+#endif
     m_dismissed = true;
     m_timer.stop();
     m_bodies.clear();
@@ -404,6 +463,11 @@ void DiceOverlay::dismiss()
 
 void DiceOverlay::hideEvent(QHideEvent* event)
 {
+#ifdef FREYA_HAVE_AUDIO
+    if (m_audio != nullptr) {
+        m_audio->stop();
+    }
+#endif
     qApp->removeEventFilter(this);
     m_timer.stop();
     m_dismissed = true;
@@ -566,17 +630,29 @@ void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
     // Run the throw ahead to see which face of each die is nearest the
     // viewer as it starts to settle, and number that die so the face shows
     // what was rolled. It then only tips onto that face, never flips over.
+    // Every contact on the way is noted for the throw's sound.
+    std::vector<DiceImpact> impacts;
     {
         std::vector<Body> rehearsal = m_bodies;
         double time = 0.0;
         while (std::any_of(rehearsal.begin(), rehearsal.end(), [](const Body& b) { return !b.settling; })) {
             time += static_cast<double>(kStep);
-            step(rehearsal, time, kStep, width, height);
+            step(rehearsal, time, kStep, width, height, m_soundOn ? &impacts : nullptr);
         }
         for (std::size_t i = 0; i < m_bodies.size(); ++i) {
             numberForResult(m_bodies[i], rehearsal[i].settleOn);
         }
+        // On to the last die at rest: knocks while settling, and each one
+        // tipping onto its face.
+        if (m_soundOn) {
+            const double end = m_lastThrowAt + kSettleAt + kSettleTime + 2.0 * static_cast<double>(kStep);
+            while (time < end) {
+                time += static_cast<double>(kStep);
+                step(rehearsal, time, kStep, width, height, &impacts);
+            }
+        }
     }
+    sound(impacts);
     m_age = 0.0;
     m_clock.start();
     setGeometry(parentWidget() != nullptr ? parentWidget()->rect() : geometry());
@@ -672,18 +748,32 @@ void DiceOverlay::startSettling(Body& body)
     body.settling = true;
 }
 
-void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float width, float height)
+void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float width, float height,
+                       std::vector<DiceImpact>* impacts)
 {
     // A die not thrown yet isn't on the table; one that has settled stays put.
     const auto local = [time](const Body& body) { return time - body.thrownAt; };
     const auto still = [&local](const Body& body) { return local(body) >= kSettleAt + kSettleTime; };
-    for (Body& body : bodies) {
+    const auto pan = [width](float x) { return std::clamp(x / std::max(1.0f, width) * 2.0f - 1.0f, -1.0f, 1.0f); };
+    for (std::size_t index = 0; index < bodies.size(); ++index) {
+        Body& body = bodies[index];
         const Shape& shape = shapeFor(body.sides);
         const double age = local(body);
         if (age < 0.0) {
             continue;
         }
         if (still(body)) {
+            if (impacts != nullptr && age - static_cast<double>(dt) < kSettleAt + kSettleTime) {
+                // It has tipped onto its face: a soft, flat tock.
+                DiceImpact impact;
+                impact.kind = DiceImpact::Kind::Settle;
+                impact.time = time;
+                impact.die = static_cast<int>(index);
+                impact.speed = 4.0f;
+                impact.contacts = 3;
+                impact.pan = pan(body.position.x());
+                impacts->push_back(impact);
+            }
             body.orientation = body.settleTo;
             body.velocity = QVector3D();
             continue;
@@ -719,6 +809,25 @@ void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float w
             const float floor = -lowest * body.radius;
             if (body.position.z() < floor) {
                 body.position.setZ(floor);
+                if (impacts != nullptr && body.velocity.z() < 0.0f) {
+                    const float speed = -body.velocity.z() / body.radius;
+                    if (speed >= kQuietestImpact) {
+                        // How much of it meets the table: a corner, an edge, or a face.
+                        int touching = 0;
+                        for (const QVector3D& corner : shape.corners) {
+                            if (body.orientation.rotatedVector(corner).z() - lowest < 0.06f) {
+                                ++touching;
+                            }
+                        }
+                        DiceImpact impact;
+                        impact.time = time;
+                        impact.die = static_cast<int>(index);
+                        impact.speed = speed;
+                        impact.contacts = std::max(1, touching);
+                        impact.pan = pan(body.position.x());
+                        impacts->push_back(impact);
+                    }
+                }
                 if (body.velocity.z() < 0.0f) {
                     body.velocity.setZ(-body.velocity.z() * 0.42f);
                     body.velocity.setX(body.velocity.x() * 0.8f);
@@ -727,6 +836,37 @@ void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float w
                     // The table kicks it round, rolling the way it travels.
                     body.spin += QVector3D(-body.velocity.y(), body.velocity.x(), 0.0f) * (0.6f / body.radius);
                 }
+            }
+            if (impacts != nullptr) {
+                // Tumbling: each corner that comes down onto the table knocks,
+                // as hard as it swings into it.
+                unsigned now = 0;
+                float hardest = 0.0f;
+                int touching = 0;
+                if (body.position.z() <= floor + 0.5f) {
+                    for (std::size_t c = 0; c < shape.corners.size() && c < 32; ++c) {
+                        const QVector3D corner = body.orientation.rotatedVector(shape.corners[c]);
+                        if (corner.z() - lowest < 0.06f) {
+                            now |= 1u << c;
+                            ++touching;
+                            if ((body.touching & (1u << c)) == 0) {
+                                const float down = -(body.velocity.z() / body.radius +
+                                                     QVector3D::crossProduct(body.spin, corner).z());
+                                hardest = std::max(hardest, down);
+                            }
+                        }
+                    }
+                }
+                if (body.touching != 0 && hardest >= kQuietestImpact) {
+                    DiceImpact impact;
+                    impact.time = time;
+                    impact.die = static_cast<int>(index);
+                    impact.speed = hardest;
+                    impact.contacts = std::max(1, touching);
+                    impact.pan = pan(body.position.x());
+                    impacts->push_back(impact);
+                }
+                body.touching = now;
             }
             if (body.position.z() <= floor + 1.0f) {
                 const float rub = std::exp(-2.2f * dt);
@@ -779,6 +919,19 @@ void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float w
                 b.position += normal * (overlap / 2.0f);
             }
             const float closing = QVector3D::dotProduct(a.velocity - b.velocity, normal);
+            if (impacts != nullptr && closing > 0.0f) {
+                const float speed = closing / ((a.radius + b.radius) * 0.5f);
+                if (speed >= kQuietestImpact) {
+                    DiceImpact impact;
+                    impact.kind = DiceImpact::Kind::Dice;
+                    impact.time = time;
+                    impact.die = static_cast<int>(i);
+                    impact.other = static_cast<int>(j);
+                    impact.speed = speed;
+                    impact.pan = pan((a.position.x() + b.position.x()) * 0.5f);
+                    impacts->push_back(impact);
+                }
+            }
             if (closing > 0.0f) {
                 const QVector3D impulse = normal * (closing * 0.85f);
                 if (aStill) {

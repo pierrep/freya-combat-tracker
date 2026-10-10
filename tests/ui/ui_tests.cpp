@@ -9,6 +9,8 @@
 #include "test_harness.h"
 #include "ui/combat_page.h"
 #include "ui/dice_overlay.h"
+#include "ui/dice_samples.h"
+#include "ui/dice_sound.h"
 #include "ui/main_window.h"
 #include "ui/monsters_page.h"
 #include "ui/options_page.h"
@@ -21,6 +23,7 @@
 #include <QEvent>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSlider>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QThread>
@@ -43,11 +46,18 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStyle>
 #include <QToolButton>
 #include <QTreeWidget>
 
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
+#include <cmath>
+#include <optional>
+#include <tuple>
+#include <fstream>
+#include <cstring>
 #include <iostream>
 #include <random>
 
@@ -3234,6 +3244,38 @@ TEST_CASE("The saved-data folder is chosen on the Options page, kept, and reset 
     CHECK(page.dataFolder().isEmpty());
 }
 
+TEST_CASE("A confirmation's question mark is drawn in the accent")
+{
+    const QString oldSheet = qApp->styleSheet();
+    const QPalette oldPalette = QApplication::palette();
+    auto markUsesAccent = [] {
+        const QImage image =
+            QApplication::style()->standardIcon(QStyle::SP_MessageBoxQuestion).pixmap(32, 32).toImage();
+        bool accent = false;
+        bool white = false;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor pixel = image.pixelColor(x, y);
+                accent = accent || pixel == ui::palette::accent;
+                white = white || pixel == QColor(Qt::white);
+            }
+        }
+        CHECK(accent);
+        CHECK(white);
+    };
+    ui::setDarkMode(false);
+    ui::applyTheme(*qApp);
+    markUsesAccent();
+    const QColor light = ui::palette::accent;
+    ui::setDarkMode(true);
+    ui::applyTheme(*qApp);
+    markUsesAccent();
+    CHECK(ui::palette::accent != light);
+    ui::setDarkMode(false);
+    qApp->setStyleSheet(oldSheet);
+    QApplication::setPalette(oldPalette);
+}
+
 TEST_CASE("The theme on the Options page restyles the app and is kept for next time")
 {
     // The other tests run unstyled; put that back at the end.
@@ -4151,4 +4193,517 @@ TEST_CASE("a failed repeat save that hurts again deals its damage, and a success
     fight = app.saved();
     CHECK_EQ(App::in(fight, "aria").hp, after);
     CHECK(!hasCondition(App::in(fight, "aria"), kPhantasmalFear));
+}
+
+TEST_CASE("legendary actions can be used several times between the monster's turns")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Lair";
+    encounter.started = true;
+    encounter.turnIndex = 1;  // Aria's turn
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "adult-black-dragon"), "dragon"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("dragon");
+    CHECK_EQ(App::in(app.saved(), "dragon").economy.legendaryRemaining, 3);
+    for (int use = 1; use <= 3; ++use) {
+        QPushButton* cloud = featureButton(app, QStringLiteral("Cloud of Insects"));
+        CHECK(cloud != nullptr);
+        if (cloud == nullptr) {
+            return;
+        }
+        CHECK(cloud->isEnabled());  // the same one again too
+        cloud->click();
+        QApplication::processEvents();
+        app.clickTarget("aria");
+        app.answer("promptPassed");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        app.select("dragon");
+        CHECK_EQ(App::in(app.saved(), "dragon").economy.legendaryRemaining, 3 - use);
+    }
+    QPushButton* spent = featureButton(app, QStringLiteral("None left"));
+    (void)spent;
+}
+
+
+namespace {
+
+// The loudest sample.
+float peakOf(const std::vector<float>& samples)
+{
+    float peak = 0.0f;
+    for (const float x : samples) {
+        peak = std::max(peak, std::abs(x));
+    }
+    return peak;
+}
+
+ui::DiceImpact landing(double time, float speed, int contacts = 1, float pan = 0.0f)
+{
+    ui::DiceImpact impact;
+    impact.time = time;
+    impact.speed = speed;
+    impact.contacts = contacts;
+    impact.pan = pan;
+    return impact;
+}
+
+ui::DieVoice voiceFor(int sides)
+{
+    ui::DieVoice voice;
+    voice.sides = sides;
+    return voice;
+}
+
+// Bytes of a WAV file holding these samples (-1 to 1), as 16-bit, 24-bit or
+// 32-bit float, with this many channels (each frame repeats the sample).
+std::vector<std::uint8_t> wavBytes(const std::vector<float>& samples, int rate, int bits, int channels, bool floating)
+{
+    std::vector<std::uint8_t> b;
+    const auto u32 = [&b](std::uint32_t v) {
+        for (int i = 0; i < 4; ++i) {
+            b.push_back(static_cast<std::uint8_t>((v >> (8 * i)) & 0xFFU));
+        }
+    };
+    const auto u16 = [&b](std::uint32_t v) {
+        b.push_back(static_cast<std::uint8_t>(v & 0xFFU));
+        b.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFU));
+    };
+    const std::uint32_t frameBytes = static_cast<std::uint32_t>(bits / 8 * channels);
+    const std::uint32_t data = frameBytes * static_cast<std::uint32_t>(samples.size());
+    b.insert(b.end(), {'R', 'I', 'F', 'F'});
+    u32(36 + data);
+    b.insert(b.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+    u32(16);
+    u16(floating ? 3 : 1);
+    u16(static_cast<std::uint32_t>(channels));
+    u32(static_cast<std::uint32_t>(rate));
+    u32(static_cast<std::uint32_t>(rate) * frameBytes);
+    u16(frameBytes);
+    u16(static_cast<std::uint32_t>(bits));
+    b.insert(b.end(), {'d', 'a', 't', 'a'});
+    u32(data);
+    for (const float s : samples) {
+        for (int c = 0; c < channels; ++c) {
+            if (floating) {
+                std::uint32_t raw = 0;
+                std::memcpy(&raw, &s, sizeof raw);
+                u32(raw);
+            } else if (bits == 16) {
+                u16(static_cast<std::uint32_t>(static_cast<std::uint16_t>(static_cast<std::int16_t>(std::lround(s * 32767.0f)))));
+            } else {
+                const auto v = static_cast<std::uint32_t>(static_cast<std::int32_t>(std::lround(s * 8388607.0f)));
+                b.push_back(static_cast<std::uint8_t>(v & 0xFFU));
+                b.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFU));
+                b.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFU));
+            }
+        }
+    }
+    return b;
+}
+
+// A short knock: silence, then a decaying tone.
+std::vector<float> knockSamples(int rate, float frequency, double seconds, std::size_t silence = 0)
+{
+    std::vector<float> s(silence, 0.0f);
+    const auto frames = static_cast<std::size_t>(seconds * rate);
+    for (std::size_t i = 0; i < frames; ++i) {
+        const double t = static_cast<double>(i) / rate;
+        s.push_back(static_cast<float>(0.5 * std::exp(-t * 30.0) * std::sin(6.283185307 * frequency * t)));
+    }
+    return s;
+}
+
+ui::AudioClip clipOf(float frequency)
+{
+    ui::AudioClip clip;
+    clip.rate = 48000;
+    clip.samples = knockSamples(48000, frequency, 0.2);
+    return clip;
+}
+
+ui::DiceSampleName nameOf(ui::TableSurface surface, ui::DiceHit hit, int sides, ui::DiceForce force, int take = 1)
+{
+    ui::DiceSampleName name;
+    name.surface = surface;
+    name.hit = hit;
+    name.sides = sides;
+    name.force = force;
+    name.take = take;
+    return name;
+}
+
+// A few recordings: a face landing on each table, a settle on wood, and two
+// dice knocking.
+ui::DiceSampleBank smallBank()
+{
+    ui::DiceSampleBank bank;
+    bank.add(nameOf(ui::TableSurface::Wood, ui::DiceHit::Face, 0, ui::DiceForce::Medium), clipOf(700.0f));
+    bank.add(nameOf(ui::TableSurface::Felt, ui::DiceHit::Face, 0, ui::DiceForce::Medium), clipOf(400.0f));
+    bank.add(nameOf(ui::TableSurface::Wood, ui::DiceHit::Settle, 0, ui::DiceForce::Soft), clipOf(900.0f));
+    ui::DiceSampleName pair;
+    pair.anySurface = true;
+    pair.hit = ui::DiceHit::Dice;
+    bank.add(pair, clipOf(2500.0f));
+    return bank;
+}
+
+}  // namespace
+
+TEST_CASE("a throw plays the closest recording of each hit, silent with none, and stays in range")
+{
+    const std::vector<ui::DieVoice> d6{voiceFor(6)};
+    ui::DiceSoundSettings settings;
+    const std::vector<ui::DiceImpact> throwOf{landing(0.0, 20.0f, 3), landing(0.2, 10.0f, 1), landing(0.4, 4.0f, 2)};
+    // No recordings, or none yet: present, but silent.
+    CHECK_EQ(peakOf(ui::renderDiceSound(throwOf, d6, settings, 3, nullptr)), 0.0f);
+    ui::DiceSampleBank empty;
+    const std::vector<float> nothing = ui::renderDiceSound(throwOf, d6, settings, 3, &empty);
+    CHECK(!nothing.empty());
+    CHECK_EQ(peakOf(nothing), 0.0f);
+    // Only dice knocking recorded: a throw that never knocks is silent.
+    ui::DiceSampleBank knocks;
+    ui::DiceSampleName pair;
+    pair.anySurface = true;
+    pair.hit = ui::DiceHit::Dice;
+    knocks.add(pair, clipOf(2500.0f));
+    CHECK_EQ(peakOf(ui::renderDiceSound(throwOf, d6, settings, 3, &knocks)), 0.0f);
+
+    const ui::DiceSampleBank bank = smallBank();
+    // A touch too soft to hear makes nothing.
+    CHECK_EQ(peakOf(ui::renderDiceSound({landing(0.1, 0.5f)}, d6, settings, 1, &bank)), 0.0f);
+    // Silent before the hit, heard from it.
+    const std::vector<float> one = ui::renderDiceSound({landing(0.25, 12.0f, 3)}, d6, settings, 1, &bank);
+    const std::size_t at = static_cast<std::size_t>(0.25 * settings.sampleRate) * 2;
+    CHECK_EQ(peakOf(std::vector<float>(one.begin(), one.begin() + static_cast<std::ptrdiff_t>(at))), 0.0f);
+    CHECK(peakOf(one) > 0.01f);
+    // The same seed, the same sound.
+    CHECK(one == ui::renderDiceSound({landing(0.25, 12.0f, 3)}, d6, settings, 1, &bank));
+    // Harder is louder.
+    CHECK(peakOf(ui::renderDiceSound({landing(0.0, 22.0f, 3)}, d6, settings, 4, &bank)) >
+          2.0f * peakOf(ui::renderDiceSound({landing(0.0, 5.0f, 3)}, d6, settings, 4, &bank)));
+    // Louder with the volume up, silent at 0.
+    ui::DiceSoundSettings full;
+    full.volume = 1.0f;
+    CHECK(peakOf(ui::renderDiceSound({landing(0.0, 12.0f, 3)}, d6, full, 2, &bank)) >
+          peakOf(ui::renderDiceSound({landing(0.0, 12.0f, 3)}, d6, settings, 2, &bank)));
+    ui::DiceSoundSettings off;
+    off.volume = 0.0f;
+    CHECK_EQ(peakOf(ui::renderDiceSound({landing(0.0, 12.0f, 3)}, d6, off, 2, &bank)), 0.0f);
+    // Felt plays the felt recording, not the wooden one.
+    ui::DiceSoundSettings felt;
+    felt.surface = ui::TableSurface::Felt;
+    CHECK(ui::renderDiceSound({landing(0.0, 12.0f, 3)}, d6, felt, 2, &bank) !=
+          ui::renderDiceSound({landing(0.0, 12.0f, 3)}, d6, settings, 2, &bank));
+    // Two dice knocking, heard.
+    ui::DiceImpact knock;
+    knock.kind = ui::DiceImpact::Kind::Dice;
+    knock.die = 0;
+    knock.other = 1;
+    knock.speed = 15.0f;
+    CHECK(peakOf(ui::renderDiceSound({knock}, {voiceFor(6), voiceFor(20)}, settings, 7, &bank)) > 0.01f);
+    // Panned: a hit at the left is louder on the left.
+    const std::vector<float> left = ui::renderDiceSound({landing(0.0, 12.0f, 3, -1.0f)}, d6, settings, 5, &bank);
+    float leftPeak = 0.0f;
+    float rightPeak = 0.0f;
+    for (std::size_t i = 0; i + 1 < left.size(); i += 2) {
+        leftPeak = std::max(leftPeak, std::abs(left[i]));
+        rightPeak = std::max(rightPeak, std::abs(left[i + 1]));
+    }
+    CHECK(leftPeak > 3.0f * rightPeak);
+    // A pile of forty of the hardest hits at once never clips.
+    std::vector<ui::DieVoice> pile;
+    std::vector<ui::DiceImpact> hits;
+    for (int i = 0; i < 40; ++i) {
+        pile.push_back(voiceFor(6));
+        ui::DiceImpact hit = landing(0.01 + 0.001 * i, 60.0f, 3);
+        hit.die = i;
+        hits.push_back(hit);
+    }
+    const std::vector<float> loud = ui::renderDiceSound(hits, pile, full, 9, &bank);
+    CHECK(peakOf(loud) > 0.5f);
+    CHECK(peakOf(loud) < 1.0f);
+    CHECK(std::all_of(loud.begin(), loud.end(), [](float v) { return std::isfinite(v); }));
+    // A folder of them, read from disk.
+    QTemporaryDir folder;
+    const std::filesystem::path root(folder.path().toStdString());
+    std::filesystem::create_directories(root / "wood");
+    {
+        const std::vector<std::uint8_t> bytes = wavBytes(knockSamples(44100, 600.0f, 0.2), 44100, 16, 1, false);
+        std::ofstream(root / "wood" / "d6_face_hard_1.wav", std::ios::binary)
+            .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        std::ofstream(root / "wood" / "broken_face.wav") << "not a wav";
+        std::ofstream(root / "nothing.wav") << "x";
+    }
+    ui::DiceSampleBank disk;
+    CHECK_EQ(disk.load(root), 1);
+    CHECK_EQ(static_cast<int>(disk.problems().size()), 2);
+}
+
+TEST_CASE("a throw with sound notes every die's landings and settling, and makes its sound from them")
+{
+    QWidget page;
+    page.resize(900, 640);
+    page.show();
+    ui::DiceOverlay overlay(&page);
+    std::vector<ui::ThrownDie> dice;
+    for (const int sides : {4, 6, 8, 10, 12, 20}) {
+        dice.push_back(ui::ThrownDie{sides, 1});
+    }
+    // Off: nothing heard.
+    overlay.throwDice(dice, QString());
+    CHECK(overlay.lastSound().empty());
+    overlay.dismiss();
+
+    // On, but nothing recorded: the throw is noted, and silent.
+    overlay.setSound(true, 60, ui::TableSurface::Wood);
+    overlay.throwDice(dice, QString());
+    CHECK(!overlay.lastImpacts().empty());
+    CHECK(overlay.lastSound().empty());
+    overlay.dismiss();
+
+    const ui::DiceSampleBank bank = smallBank();
+    overlay.setSamples(&bank);
+    overlay.throwDice(dice, QString());
+    const std::vector<ui::DiceImpact>& impacts = overlay.lastImpacts();
+    for (int die = 0; die < static_cast<int>(dice.size()); ++die) {
+        const auto count = [&impacts, die](ui::DiceImpact::Kind kind) {
+            return std::count_if(impacts.begin(), impacts.end(), [die, kind](const ui::DiceImpact& impact) {
+                return impact.die == die && impact.kind == kind;
+            });
+        };
+        CHECK(count(ui::DiceImpact::Kind::Table) >= 1);  // it landed
+        CHECK_EQ(count(ui::DiceImpact::Kind::Settle), 1);  // and tipped onto its face once
+    }
+    CHECK(std::is_sorted(impacts.begin(), impacts.end(),
+                         [](const ui::DiceImpact& a, const ui::DiceImpact& b) { return a.time < b.time; }));
+    for (const ui::DiceImpact& impact : impacts) {
+        CHECK(impact.speed >= ui::kQuietestImpact);
+        CHECK(impact.pan >= -1.0f && impact.pan <= 1.0f);
+    }
+    // The first landing is the hardest a die hits the table.
+    for (int die = 0; die < static_cast<int>(dice.size()); ++die) {
+        float first = -1.0f;
+        float later = 0.0f;
+        for (const ui::DiceImpact& impact : impacts) {
+            if (impact.die != die || impact.kind != ui::DiceImpact::Kind::Table) {
+                continue;
+            }
+            if (first < 0.0f) {
+                first = impact.speed;
+            } else {
+                later = std::max(later, impact.speed);
+            }
+        }
+        CHECK(first > later);
+    }
+    CHECK(!overlay.lastSound().empty());
+    CHECK(peakOf(overlay.lastSound()) > 0.01f);
+    // As long as the throw, and a little more for the last recording.
+    const double seconds = static_cast<double>(overlay.lastSound().size()) / 2.0 / overlay.lastSoundRate();
+    CHECK(seconds > impacts.back().time);
+    CHECK(seconds < impacts.back().time + 1.0);
+    overlay.dismiss();
+
+    overlay.setSound(false, 60, ui::TableSurface::Wood);
+    overlay.throwDice(dice, QString());
+    CHECK(overlay.lastSound().empty());
+}
+
+
+TEST_CASE("the dice's sound, its volume and the table are chosen on the Options page and kept")
+{
+    QTemporaryDir folder;
+    const QString options = folder.filePath(QStringLiteral("options.ini"));
+    {
+        ui::OptionsPage page;
+        page.setFile(options);
+        auto* sound = page.findChild<QCheckBox*>(QStringLiteral("diceSound"));
+        auto* volume = page.findChild<QSlider*>(QStringLiteral("diceVolume"));
+        auto* table = page.findChild<QComboBox*>(QStringLiteral("tableSurface"));
+        CHECK(sound != nullptr && volume != nullptr && table != nullptr);
+        if (sound == nullptr || volume == nullptr || table == nullptr) {
+            return;
+        }
+        CHECK_EQ(page.diceVolume(), 60);
+        CHECK(page.tableSurface() == QStringLiteral("wood"));
+        CHECK_EQ(sound->isEnabled(), ui::OptionsPage::soundAvailable());
+        CHECK_EQ(page.diceSound(), ui::OptionsPage::soundAvailable());  // on where it can be
+        int heard = 0;
+        QString surface;
+        QObject::connect(&page, &ui::OptionsPage::diceSoundChanged, [&](bool, int level, const QString& kind) {
+            heard = level;
+            surface = kind;
+        });
+        volume->setValue(35);
+        table->setCurrentIndex(table->findData(QStringLiteral("felt")));
+        CHECK_EQ(heard, 35);
+        CHECK(surface == QStringLiteral("felt"));
+        // No dice thrown, no sound to choose.
+        page.findChild<QCheckBox*>(QStringLiteral("showDice"))->setChecked(false);
+        CHECK(!sound->isEnabled());
+        CHECK(!volume->isEnabled());
+        page.findChild<QCheckBox*>(QStringLiteral("showDice"))->setChecked(true);
+    }
+    ui::OptionsPage page;  // the next run
+    page.setFile(options);
+    CHECK_EQ(page.diceVolume(), 35);
+    CHECK(page.tableSurface() == QStringLiteral("felt"));
+}
+
+
+TEST_CASE("dice recordings are read from WAV files in any common encoding, their start trimmed to the hit")
+{
+    const int rate = 44100;
+    const std::vector<float> knock = knockSamples(rate, 900.0f, 0.25, 4410);  // 0.1 s of silence first
+    for (const auto& [bits, channels, floating] :
+         std::vector<std::tuple<int, int, bool>>{{16, 1, false}, {16, 2, false}, {24, 1, false}, {32, 2, true}}) {
+        std::string why;
+        const std::optional<ui::AudioClip> clip = ui::parseWav(wavBytes(knock, rate, bits, channels, floating), &why);
+        CHECK(clip.has_value());
+        if (!clip) {
+            continue;
+        }
+        CHECK_EQ(clip->rate, rate);
+        // The silence is gone (but for a millisecond), the hit kept.
+        CHECK(clip->samples.size() < knock.size() - 4000);
+        CHECK(clip->samples.size() > static_cast<std::size_t>(rate / 10));
+        CHECK(std::abs(peakOf(clip->samples) - 0.9f) < 0.02f);  // as loud as every other clip
+        CHECK(std::abs(clip->samples.back()) < 0.01f);  // and faded out at the end
+    }
+    std::string why;
+    CHECK(!ui::parseWav(std::vector<std::uint8_t>{'n', 'o', 'p', 'e'}, &why).has_value());
+    CHECK(!why.empty());
+    CHECK(!ui::parseWav(wavBytes(std::vector<float>(1000, 0.0f), rate, 16, 1, false), &why).has_value());
+}
+
+
+TEST_CASE("a recording's name says what it is: the table, the die, the hit, the force and the take")
+{
+    using ui::DiceForce;
+    using ui::DiceHit;
+    const auto parsed = [](const char* path) { return ui::parseSampleName(std::filesystem::path(path)); };
+    const auto name = parsed("wood/d20_face_hard_2.wav");
+    CHECK(name.has_value());
+    if (name) {
+        CHECK(name->surface == ui::TableSurface::Wood);
+        CHECK_EQ(name->sides, 20);
+        CHECK(name->hit == DiceHit::Face);
+        CHECK(name->force == DiceForce::Hard);
+        CHECK_EQ(name->take, 2);
+    }
+    const auto felt = parsed("felt/D6-Corner soft.wav");
+    CHECK(felt.has_value() && felt->surface == ui::TableSurface::Felt && felt->sides == 6 &&
+          felt->hit == DiceHit::Corner && felt->force == DiceForce::Soft);
+    // Medium and any die when left out.
+    const auto plain = parsed("wood/settle_3.wav");
+    CHECK(plain.has_value() && plain->hit == DiceHit::Settle && plain->sides == 0 && plain->force == DiceForce::Medium &&
+          plain->take == 3);
+    // Two dice knocking: the pair either way round.
+    const auto pair = parsed("dice/d20_d6_1.wav");
+    CHECK(pair.has_value() && pair->anySurface && pair->hit == DiceHit::Dice && pair->sides == 6 &&
+          pair->otherSides == 20);
+    // A source's own name still works when it says the table.
+    const auto source = parsed("2BACH Dice (3) slam on felt 185977.wav");
+    CHECK(source.has_value() && source->surface == ui::TableSurface::Felt && source->hit != DiceHit::Dice);
+    CHECK(!parsed("misc/clap.wav").has_value());
+    CHECK(ui::forceOf(DiceHit::Face, 2.0f) == DiceForce::Soft);
+    CHECK(ui::forceOf(DiceHit::Face, 12.0f) == DiceForce::Medium);
+    CHECK(ui::forceOf(DiceHit::Face, 22.0f) == DiceForce::Hard);
+}
+
+
+TEST_CASE("a hit plays the closest recording there is, and a different take each time")
+{
+    using ui::DiceForce;
+    using ui::DiceHit;
+    using ui::TableSurface;
+    ui::DiceSampleBank bank;
+    std::mt19937 random(1);
+    CHECK(bank.pick(TableSurface::Wood, DiceHit::Face, 6, 0, DiceForce::Hard, random).clip == nullptr);
+    bank.add(nameOf(TableSurface::Wood, DiceHit::Face, 6, DiceForce::Hard, 1), clipOf(800.0f));   // 0
+    bank.add(nameOf(TableSurface::Wood, DiceHit::Face, 6, DiceForce::Hard, 2), clipOf(810.0f));   // 1
+    bank.add(nameOf(TableSurface::Wood, DiceHit::Face, 6, DiceForce::Soft, 1), clipOf(820.0f));   // 2
+    bank.add(nameOf(TableSurface::Wood, DiceHit::Corner, 20, DiceForce::Medium), clipOf(900.0f)); // 3
+    bank.add(nameOf(TableSurface::Wood, DiceHit::Face, 0, DiceForce::Medium), clipOf(700.0f));    // 4: any die
+    const auto id = [&](TableSurface surface, DiceHit hit, int sides, DiceForce force, int avoid = -1) {
+        return bank.pick(surface, hit, sides, 0, force, random, avoid).id;
+    };
+    // The same die, hit and force: one of its two takes, never the last again.
+    for (int i = 0; i < 10; ++i) {
+        const int first = id(TableSurface::Wood, DiceHit::Face, 6, DiceForce::Hard);
+        CHECK((first == 0 || first == 1));
+        CHECK_EQ(id(TableSurface::Wood, DiceHit::Face, 6, DiceForce::Hard, first), 1 - first);
+    }
+    CHECK_EQ(id(TableSurface::Wood, DiceHit::Face, 6, DiceForce::Soft), 2);
+    // No medium d6 face: the next force before another die.
+    const int medium = id(TableSurface::Wood, DiceHit::Face, 6, DiceForce::Medium);
+    CHECK((medium == 0 || medium == 1 || medium == 2));
+    // A d8 face: the d6 (a size away) before "any".
+    const int d8 = id(TableSurface::Wood, DiceHit::Face, 8, DiceForce::Hard);
+    CHECK((d8 == 0 || d8 == 1));
+    // A d20 corner has its own.
+    CHECK_EQ(id(TableSurface::Wood, DiceHit::Corner, 20, DiceForce::Medium), 3);
+    // A d20 face: its corner is a different hit and the d6 far smaller, so
+    // the any-die face is nearer.
+    CHECK_EQ(id(TableSurface::Wood, DiceHit::Face, 20, DiceForce::Medium), 4);
+    // Felt with only wood recorded: wood, marked to be dulled.
+    const ui::DiceSampleBank::Choice felt =
+        bank.pick(TableSurface::Felt, DiceHit::Face, 6, 0, DiceForce::Soft, random);
+    CHECK(felt.clip != nullptr && felt.otherSurface);
+    // No dice-on-dice recording: that hit is silent.
+    CHECK(bank.pick(TableSurface::Wood, DiceHit::Dice, 6, 20, DiceForce::Medium, random).clip == nullptr);
+    ui::DiceSampleName pair;
+    pair.anySurface = true;
+    pair.hit = DiceHit::Dice;
+    pair.sides = 6;
+    pair.otherSides = 20;
+    bank.add(pair, clipOf(2000.0f));
+    CHECK_EQ(bank.pick(TableSurface::Felt, DiceHit::Dice, 20, 6, DiceForce::Medium, random).id, 5);
+}
+
+
+TEST_CASE("the Options page says what recordings there are, and plays the test throw with them")
+{
+    const ui::DiceTestThrow test = ui::diceTestThrow();
+    CHECK(test.voices.size() == 3);
+    CHECK(test.impacts.size() > 8);
+    const ui::DiceSampleBank bank = smallBank();
+    CHECK(peakOf(ui::renderDiceSound(test.impacts, test.voices, ui::DiceSoundSettings{}, 1, &bank)) > 0.05f);
+    ui::OptionsPage page;
+    auto* note = page.findChild<QLabel*>(QStringLiteral("diceSamplesNote"));
+    CHECK(note != nullptr && page.findChild<QPushButton*>(QStringLiteral("playTestSound")) != nullptr &&
+          page.findChild<QPushButton*>(QStringLiteral("reloadSamples")) != nullptr &&
+          page.findChild<QCheckBox*>(QStringLiteral("testSoundLoop")) != nullptr);
+    if (note == nullptr) {
+        return;
+    }
+    ui::DiceSampleBank empty;
+    page.setSamples(&empty);
+    CHECK(note->text().contains(QStringLiteral("silent")));
+    page.playTestSound();
+    CHECK_EQ(peakOf(page.lastTestSound()), 0.0f);
+    page.setSamples(&bank);
+    CHECK(note->text().contains(QStringLiteral("4 recording")));
+    page.playTestSound();
+    CHECK(peakOf(page.lastTestSound()) > 0.01f);
+    page.stopTestSound();
+    bool asked = false;
+    QObject::connect(&page, &ui::OptionsPage::reloadSamplesRequested, [&asked] { asked = true; });
+    auto* reload = page.findChild<QPushButton*>(QStringLiteral("reloadSamples"));
+    if (reload->isEnabled()) {
+        reload->click();
+    } else {
+        emit page.reloadSamplesRequested();  // a build without sound: the button is off
+    }
+    CHECK(asked);
 }
