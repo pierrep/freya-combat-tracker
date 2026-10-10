@@ -2986,7 +2986,7 @@ TEST_CASE("Roll save asks for a condition's repeat save on demand")
     CHECK(hasCondition(App::in(app.saved(), "aria"), "prone"));
 }
 
-TEST_CASE("Defenses are capitalised, flush left, and say Exhausted only under Cannot be")
+TEST_CASE("Defenses sit at the top of Conditions, with the four defence labels")
 {
     App app;
     Encounter encounter;
@@ -2997,25 +2997,24 @@ TEST_CASE("Defenses are capitalised, flush left, and say Exhausted only under Ca
     app.encounters.saveAll({encounter});
     app.open();
     app.select("air");
-    app.find<QTabWidget>("combatantTabs")->setCurrentIndex(2);
+    auto* tabs = app.find<QTabWidget>("combatantTabs");
+    tabs->setCurrentIndex(1);
     QApplication::processEvents();
     auto* host = app.find<QWidget>("combatantDefenses");
+    CHECK(tabs->widget(1)->isAncestorOf(host));
+    CHECK(host->mapTo(tabs, QPoint()).y() < app.find<QPushButton>("addCondition")->mapTo(tabs, QPoint()).y());
     QStringList texts;
     for (QLabel* label : host->findChildren<QLabel*>()) {
         texts << label->text();
     }
+    CHECK(texts.contains(QStringLiteral("Resistances:")));
+    CHECK(texts.contains(QStringLiteral("Damage Immunities:")));
+    CHECK(texts.contains(QStringLiteral("Condition Immunities:")));
     CHECK(texts.contains(QStringLiteral("Poison, Thunder")));
-    bool cannotBe = false;
-    for (const QString& text : texts) {
-        if (text.startsWith(QStringLiteral("Exhausted, "))) {
-            cannotBe = true;
-        }
-        CHECK(!text.startsWith(QStringLiteral("Exhaustion")));
-    }
-    CHECK(cannotBe);
-    // The first column starts at the left edge of the block (no layout margin).
+    CHECK(texts.contains(QStringLiteral("Exhaustion, Grappled, Paralyzed, Petrified, Poisoned, Prone, Restrained, "
+                                        "Unconscious")));
     for (QLabel* label : host->findChildren<QLabel*>()) {
-        if (label->text() == QStringLiteral("Immune")) {
+        if (label->text() == QStringLiteral("Damage Immunities:")) {
             CHECK_EQ(label->x(), 0);
         }
     }

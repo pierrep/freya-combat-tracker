@@ -1576,6 +1576,13 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     auto* conditionsLayout = new QVBoxLayout(conditionsPage);
     conditionsLayout->setContentsMargins(0, 12, 10, 4);
     conditionsLayout->setSpacing(8);
+    // Defenses, above the condition's rules. Filled when the combatant changes.
+    auto* defensesHost = new QWidget;
+    m_defensesLayout = new QVBoxLayout(defensesHost);
+    m_defensesLayout->setContentsMargins(0, 0, 0, 0);
+    m_defensesLayout->setSpacing(8);
+    conditionsLayout->addWidget(defensesHost);
+    conditionsLayout->addWidget(sectionRule());
     // The condition tags sit on the card, under the HP and above the tabs.
     m_conditionChips = new QWidget;
     m_conditionChips->setObjectName(QStringLiteral("combatantConditions"));
@@ -1714,7 +1721,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     conditionsLayout->addStretch(1);
     m_detailTabs->addTab(scrollingTab(conditionsPage), tr("Conditions"));
 
-    // Details tab: ability scores, quick facts, defenses, and spell slots,
+    // Details tab: ability scores, quick facts, and spell slots,
     // rebuilt for each combatant (rebuildDetails).
     // The Initiative section stays put; everything under it is rebuilt.
     auto* detailsPage = new QWidget;
@@ -4470,6 +4477,44 @@ void CombatPage::rebuildDetails(const Combatant& combatant)
     m_detailsLayout->removeWidget(m_turnControls);
     m_turnControls->setParent(nullptr);
     clearLayout(m_detailsLayout);
+    // Defenses live at the top of the Conditions tab.
+    clearLayout(m_defensesLayout);
+    m_defensesLayout->addWidget(makeHeading(tr("Defenses")));
+    auto* defenses = new QGridLayout;
+    defenses->setContentsMargins(0, 0, 0, 0);  // flush with the heading
+    defenses->setHorizontalSpacing(16);
+    defenses->setVerticalSpacing(6);
+    int defenseRow = 0;
+    auto addDefense = [&](const QString& label, const QString& value) {
+        if (value.isEmpty()) {
+            return;
+        }
+        auto* caption = makeMuted(label);
+        caption->setWordWrap(false);
+        auto* text = new QLabel(value);
+        text->setWordWrap(true);
+        text->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        defenses->addWidget(caption, defenseRow, 0, Qt::AlignTop);
+        defenses->addWidget(text, defenseRow, 1);
+        ++defenseRow;
+    };
+    addDefense(tr("Resistances:"), joinNames(combatant.defenses.resistances));
+    addDefense(tr("Damage Immunities:"), joinNames(combatant.defenses.immunities));
+    QStringList conditionNames;
+    for (const std::string& id : combatant.conditionImmunities) {
+        conditionNames << conditionName(id);
+    }
+    addDefense(tr("Condition Immunities:"), conditionNames.join(QStringLiteral(", ")));
+    addDefense(tr("Vulnerabilities:"), joinNames(combatant.defenses.vulnerabilities));
+    defenses->setColumnStretch(1, 1);
+    auto* defenseLines = new QWidget;
+    defenseLines->setObjectName(QStringLiteral("combatantDefenses"));
+    defenseLines->setLayout(defenses);
+    m_defensesLayout->addWidget(defenseLines);
+    defenseLines->setVisible(defenseRow > 0);
+    if (defenseRow == 0) {
+        m_defensesLayout->addWidget(makeMuted(tr("No resistances, immunities, or vulnerabilities.")));
+    }
     const bool monster = isMonsterCombatant(combatant);
     const Monster* block = monster && combatant.statBlock.has_value() ? &*combatant.statBlock : nullptr;
     Character* character = monster ? nullptr : characterFor(combatant);
@@ -4562,47 +4607,6 @@ void CombatPage::rebuildDetails(const Combatant& combatant)
     }
     facts->addStretch(1);
     m_detailsLayout->addLayout(facts);
-
-    // Defenses: one row per kind that applies.
-    m_detailsLayout->addWidget(sectionRule());
-    m_detailsLayout->addWidget(makeHeading(tr("Defenses")));
-    auto* defenses = new QGridLayout;
-    defenses->setContentsMargins(0, 0, 0, 0);  // flush with the headings and rows above
-    defenses->setHorizontalSpacing(16);
-    defenses->setVerticalSpacing(6);
-    int row = 0;
-    auto addDefense = [&](const QString& label, const QString& value) {
-        if (value.isEmpty()) {
-            return;
-        }
-        auto* caption = makeMuted(label);
-        caption->setWordWrap(false);
-        auto* text = new QLabel(value);
-        text->setWordWrap(true);
-        text->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        defenses->addWidget(caption, row, 0, Qt::AlignTop);
-        defenses->addWidget(text, row, 1);
-        ++row;
-    };
-    addDefense(tr("Resistant"), joinNames(combatant.defenses.resistances));
-    addDefense(tr("Immune"), joinNames(combatant.defenses.immunities));
-    addDefense(tr("Vulnerable"), joinNames(combatant.defenses.vulnerabilities));
-    QStringList conditionNames;
-    for (const std::string& id : combatant.conditionImmunities) {
-        // "Cannot be Exhausted" reads right; "Cannot be Exhaustion" does not.
-        // Only here: the condition is Exhaustion everywhere else.
-        conditionNames << (id == "exhaustion" ? tr("Exhausted") : conditionName(id));
-    }
-    addDefense(tr("Cannot be"), conditionNames.join(QStringLiteral(", ")));
-    defenses->setColumnStretch(1, 1);
-    auto* defenseHost = new QWidget;
-    defenseHost->setObjectName(QStringLiteral("combatantDefenses"));
-    defenseHost->setLayout(defenses);
-    m_detailsLayout->addWidget(defenseHost);
-    defenseHost->setVisible(row > 0);
-    if (row == 0) {
-        m_detailsLayout->addWidget(makeMuted(tr("No resistances, immunities, or vulnerabilities.")));
-    }
 
     // Spell slots, as pips.
     if (character != nullptr && !character->spellSlots.empty()) {

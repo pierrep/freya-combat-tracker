@@ -480,6 +480,8 @@ private:
     QWidget* m_actionsSection = nullptr;
     QVBoxLayout* m_actionRows = nullptr;
     QVBoxLayout* m_detailsLayout = nullptr;
+    // Defenses, at the top of the Conditions tab. Filled in rebuildDetails.
+    QVBoxLayout* m_defensesLayout = nullptr;
     QWidget* m_economyHost = nullptr;
     // The attack-roll choice and the used-action checkboxes: kept apart so the
     // Details tab can take them in and out when it is rebuilt.
