@@ -69,8 +69,9 @@ inline int runAll()
 
 #define CHECK_EQ(actual, expected)                                                                   \
     do {                                                                                             \
-        const auto& test_actual_ = (actual);                                                         \
-        const auto& test_expected_ = (expected);                                                     \
+        /* Copies: a reference into a temporary (in(saved(), "x").hp) would dangle. */             \
+        const auto test_actual_ = (actual);                                                          \
+        const auto test_expected_ = (expected);                                                      \
         if (!(test_actual_ == test_expected_)) {                                                     \
             throw test::Failure(std::string(__FILE__) + ":" + std::to_string(__LINE__) +            \
                                 ": CHECK_EQ(" #actual ", " #expected ")");                           \

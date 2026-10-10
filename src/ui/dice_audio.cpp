@@ -5,7 +5,6 @@
 #include <QAudioSink>
 #include <QIODevice>
 #include <QMediaDevices>
-#include <QTimer>
 
 #include <algorithm>
 #include <cstring>
@@ -140,12 +139,8 @@ DiceAudio::DiceAudio(QObject* parent) : QObject(parent) {}
 
 DiceAudio::~DiceAudio()
 {
-    release();
-}
-
-void DiceAudio::release()
-{
     if (m_sink != nullptr) {
+        m_sink->disconnect(this);
         m_sink->stop();
         delete m_sink;
         m_sink = nullptr;
@@ -166,7 +161,6 @@ bool DiceAudio::prepare()
 
 void DiceAudio::play(std::vector<float> stereo, bool loop)
 {
-    release();
     const QAudioDevice device = QMediaDevices::defaultAudioOutput();
     if (device.isNull() || stereo.empty()) {
         return;
@@ -181,33 +175,54 @@ void DiceAudio::play(std::vector<float> stereo, bool loop)
     if (!device.isFormatSupported(format)) {
         format = device.preferredFormat();  // its rate is the one rendered at
     }
+    // One output, kept from throw to throw: PulseAudio's (Qt 6.4) can crash
+    // when an output is deleted soon after it played, so a new one is made
+    // only when the computer's output or its format changes.
+    if (m_sink != nullptr && (device.id() != m_deviceId || format != m_format)) {
+        m_sink->disconnect(this);
+        m_sink->stop();
+        m_sink->deleteLater();
+        m_sink = nullptr;
+    }
+    if (m_sink == nullptr) {
+        m_sink = new QAudioSink(device, format, this);
+        // Small enough that the clatter keeps up with the dice on the page,
+        // big enough that PipeWire and PulseAudio don't run dry at the start.
+        m_sink->setBufferSize(format.bytesForDuration(100000));
+        m_deviceId = device.id();
+        m_format = format;
+        connect(m_sink, &QAudioSink::stateChanged, this, &DiceAudio::onState);
+    } else {
+        m_sink->stop();  // whatever the last throw still had to play
+    }
+    if (m_stream != nullptr) {
+        // Read no more; let go of it once this event is done.
+        m_stream->close();
+        m_stream->deleteLater();
+    }
     m_stream = new DiceAudioStream(std::move(stereo), format, loop, nullptr);
     m_stream->open(QIODevice::ReadOnly);
-    m_sink = new QAudioSink(device, format, this);
-    // Small enough that the clatter keeps up with the dice on the page, big
-    // enough that PipeWire and PulseAudio don't run dry at the start.
-    m_sink->setBufferSize(format.bytesForDuration(100000));
-    QAudioSink* sink = m_sink;
-    DiceAudioStream* stream = m_stream;
-    connect(m_sink, &QAudioSink::stateChanged, this, [this, sink, stream](QAudio::State state) {
-        if (sink != m_sink) {
-            return;
-        }
-        if (state == QAudio::StoppedState && sink->error() != QAudio::NoError) {
-            qWarning("Dice sound: the audio output stopped (error %d)", static_cast<int>(sink->error()));
-        }
-        // Idle also means the output ran dry for a moment (an underrun, common
-        // as a stream starts); only a stream played to its end is finished.
-        if (state == QAudio::IdleState && stream->atEnd()) {
-            // Played out: let it go once this signal has returned.
-            QTimer::singleShot(0, this, [this, sink] {
-                if (sink == m_sink) {
-                    release();
-                }
-            });
-        }
-    });
+    m_playing = true;
     m_sink->start(m_stream);
+}
+
+void DiceAudio::onState(QAudio::State state)
+{
+    if (m_sink == nullptr) {
+        return;
+    }
+    if (state == QAudio::StoppedState && m_sink->error() != QAudio::NoError && m_sink->error() != QAudio::UnderrunError) {
+        qWarning("Dice sound: the audio output stopped (error %d)", static_cast<int>(m_sink->error()));
+    }
+    // Idle also means the output ran dry for a moment (an underrun, common as
+    // a stream starts); only a stream played to its end is finished. The
+    // output stays, idle, for the next throw.
+    if (state == QAudio::IdleState && m_stream != nullptr && m_stream->atEnd()) {
+        m_playing = false;
+    }
+    if (state == QAudio::StoppedState) {
+        m_playing = false;
+    }
 }
 
 void DiceAudio::stop()

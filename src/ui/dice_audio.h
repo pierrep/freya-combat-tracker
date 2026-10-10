@@ -4,6 +4,9 @@
 // Built only with Qt Multimedia (FREYA_HAVE_AUDIO); without it the dice are
 // silent.
 
+#include <qaudio.h>
+#include <QAudioFormat>
+#include <QByteArray>
 #include <QObject>
 
 #include <memory>
@@ -31,15 +34,18 @@ public:
     // replacing anything still playing; over and over until stopped when
     // looping.
     void play(std::vector<float> stereo, bool loop = false);
-    bool playing() const { return m_sink != nullptr; }
+    bool playing() const { return m_playing; }
     // Fades out over a few milliseconds and stops (no click).
     void stop();
 
 private:
-    void release();
+    void onState(QAudio::State state);
 
     QAudioSink* m_sink = nullptr;
     DiceAudioStream* m_stream = nullptr;
+    QByteArray m_deviceId;
+    QAudioFormat m_format;
+    bool m_playing = false;
     int m_rate = 48000;
 };
 
