@@ -3262,10 +3262,29 @@ TEST_CASE("A confirmation's question mark is drawn in the accent")
         }
         CHECK(accent);
         CHECK(white);
+        const QColor corner = image.pixelColor(0, 0);
+        CHECK(corner.alpha() == 0);
     };
     ui::setDarkMode(false);
     ui::applyTheme(*qApp);
     markUsesAccent();
+    auto buttonMark = [](QMessageBox::StandardButton which, const QColor& ink) {
+        QMessageBox box(QMessageBox::Question, QStringLiteral("Confirm"), QStringLiteral("Go on?"),
+                        QMessageBox::Yes | QMessageBox::No);
+        const QImage image = box.button(which)->icon().pixmap(32, 32).toImage();
+        bool found = false;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                found = found || image.pixelColor(x, y) == ink;
+            }
+        }
+        CHECK(found);
+        CHECK(image.pixelColor(0, 0).alpha() == 0);
+    };
+    buttonMark(QMessageBox::Yes, ui::palette::accent);
+    buttonMark(QMessageBox::No, ui::palette::ink);
+    QMessageBox alert(QMessageBox::Warning, QStringLiteral("Alert"), QStringLiteral("Failed."), QMessageBox::Ok);
+    CHECK(alert.button(QMessageBox::Ok)->icon().isNull());
     const QColor light = ui::palette::accent;
     ui::setDarkMode(true);
     ui::applyTheme(*qApp);

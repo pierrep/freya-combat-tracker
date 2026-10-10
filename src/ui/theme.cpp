@@ -9,6 +9,7 @@
 #include <QIcon>
 #include <QIconEngine>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPalette>
 #include <QPen>
@@ -81,25 +82,74 @@ bool g_dark = false;
 // The desktop's own window colour, read before the app's palette replaces it.
 QColor g_systemWindow;
 
-// The confirmation's question mark: an accent circle, like the default button, with a white "?".
-class QuestionMarkIcon : public QIconEngine
+// Confirmation marks. The pixmap is cleared first: QIconEngine::pixmap paints onto
+// memory it never wipes, and the corners outside a circle would show that leftover.
+enum class Mark { Question, Yes, No };
+
+class MarkIcon : public QIconEngine
 {
 public:
-    QIconEngine* clone() const override { return new QuestionMarkIcon; }
+    explicit MarkIcon(Mark mark) : m_mark(mark) {}
+
+    QIconEngine* clone() const override { return new MarkIcon(m_mark); }
 
     void paint(QPainter* painter, const QRect& rect, QIcon::Mode, QIcon::State) override
     {
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(palette::accent);
-        painter->drawEllipse(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5));
-        painter->setPen(Qt::white);
-        QFont font = QApplication::font();
-        font.setBold(true);
-        font.setPixelSize(qMax(1, rect.height() * 62 / 100));
-        painter->setFont(font);
-        painter->drawText(rect, Qt::AlignCenter, QStringLiteral("?"));
+        switch (m_mark) {
+        case Mark::Question:
+            fillCircle(painter, rect, palette::accent);
+            painter->setPen(Qt::white);
+            {
+                QFont font = QApplication::font();
+                font.setBold(true);
+                font.setPixelSize(qMax(1, rect.height() * 62 / 100));
+                painter->setFont(font);
+            }
+            painter->drawText(rect, Qt::AlignCenter, QStringLiteral("?"));
+            break;
+        case Mark::Yes:
+            fillCircle(painter, rect, palette::accent);
+            painter->setPen(QPen(Qt::white, qMax(1.0, rect.height() * 5.0 / 40.0), Qt::SolidLine, Qt::RoundCap,
+                                 Qt::RoundJoin));
+            painter->drawPolyline(QPolygonF({point(rect, 9, 21), point(rect, 17, 29), point(rect, 31, 12)}));
+            break;
+        case Mark::No:
+            painter->setBrush(Qt::NoBrush);
+            painter->setPen(QPen(palette::muted, qMax(1.0, rect.height() * 0.12)));
+            painter->drawEllipse(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5));
+            painter->setPen(QPen(palette::ink, qMax(1.0, rect.height() * 0.12), Qt::SolidLine, Qt::RoundCap,
+                                 Qt::RoundJoin));
+            painter->drawLine(point(rect, 13, 13), point(rect, 27, 27));
+            painter->drawLine(point(rect, 27, 13), point(rect, 13, 27));
+            break;
+        }
     }
+
+    QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override
+    {
+        QPixmap image(size);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        paint(&painter, QRect(QPoint(0, 0), size), mode, state);
+        return image;
+    }
+
+private:
+    static void fillCircle(QPainter* painter, const QRect& rect, const QColor& color)
+    {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(color);
+        painter->drawEllipse(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5));
+    }
+
+    // Positions on the 40px tick drawing, scaled into this icon.
+    static QPointF point(const QRect& rect, qreal x, qreal y)
+    {
+        return QPointF(rect.left() + rect.width() * x / 40.0, rect.top() + rect.height() * y / 40.0);
+    }
+
+    Mark m_mark;
 };
 
 class AppStyle : public QProxyStyle
@@ -109,10 +159,67 @@ public:
 
     QIcon standardIcon(StandardPixmap icon, const QStyleOption* option, const QWidget* widget) const override
     {
-        if (icon == SP_MessageBoxQuestion) {
-            return QIcon(new QuestionMarkIcon);
+        switch (icon) {
+        case SP_MessageBoxQuestion:
+            return QIcon(new MarkIcon(Mark::Question));
+        case SP_DialogYesButton:
+            return QIcon(new MarkIcon(Mark::Yes));
+        case SP_DialogNoButton:
+            return QIcon(new MarkIcon(Mark::No));
+        default:
+            // The hint below is on for every message box, because Yes is created before the box
+            // records its buttons. Other buttons stay without a picture.
+            if (inMessageBox(widget) && isDialogButton(icon)) {
+                return {};
+            }
+            return QProxyStyle::standardIcon(icon, option, widget);
         }
-        return QProxyStyle::standardIcon(icon, option, widget);
+    }
+
+    int styleHint(StyleHint hint, const QStyleOption* option, const QWidget* widget,
+                  QStyleHintReturn* returnData) const override
+    {
+        // Fusion leaves button icons off. Confirmations ask for them.
+        if (hint == SH_DialogButtonBox_ButtonsHaveIcons && inMessageBox(widget)) {
+            return 1;
+        }
+        return QProxyStyle::styleHint(hint, option, widget, returnData);
+    }
+
+private:
+    static bool inMessageBox(const QWidget* widget)
+    {
+        for (const QWidget* owner = widget; owner != nullptr; owner = owner->parentWidget()) {
+            if (qobject_cast<const QMessageBox*>(owner) != nullptr) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool isDialogButton(StandardPixmap icon)
+    {
+        switch (icon) {
+        case SP_DialogOkButton:
+        case SP_DialogCancelButton:
+        case SP_DialogHelpButton:
+        case SP_DialogOpenButton:
+        case SP_DialogSaveButton:
+        case SP_DialogCloseButton:
+        case SP_DialogApplyButton:
+        case SP_DialogResetButton:
+        case SP_DialogDiscardButton:
+        case SP_DialogYesToAllButton:
+        case SP_DialogNoToAllButton:
+        case SP_DialogSaveAllButton:
+        case SP_DialogAbortButton:
+        case SP_DialogRetryButton:
+        case SP_DialogIgnoreButton:
+        case SP_RestoreDefaultsButton:
+            return true;
+        default:
+            return false;
+        }
     }
 };
 
