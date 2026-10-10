@@ -63,6 +63,7 @@ A local desktop combat tracker for fifth edition (2024 rules, SRD 5.2.1), built 
 | `tests/core`, `tests/data` | `core_tests`, `data_tests` | No Qt; run without a display |
 | `tests/ui` | `ui_tests` | Drives the real pages offscreen |
 | `tools/build_srd_monsters.py` | Rebuilds `data/srd/monsters.json` | Python 3 and a 5e-srd-api checkout |
+| `tools/convert_monsters.py` | Converts a monster list in the dnd-data format into a `custom-monsters.json` | Python 3 (uses `build_srd_monsters.py`) |
 
 ## Build
 
@@ -98,6 +99,24 @@ Files live in the per-user app data folder:
 | `custom-monsters.json` | 2 | Version 1 opens. A row that clashes with an SRD id is skipped, reported, and written back unchanged on the next save. |
 
 Edits are saved by writing a temporary file and renaming it over the old one; typing is saved after a short pause and always before you switch pages or close the window. A file that cannot be read is reported and left untouched. Negative hit points written by older builds load as 0.
+
+## Importing monsters
+
+`tools/convert_monsters.py` turns a monster list in the [dnd-data](https://github.com/nick-aschenbach/dnd-data) format (a JSON array of `name`, `description`, `properties`, `publisher`, `book`) into a custom monster file. Only convert material you have the right to use: your own homebrew, openly licensed content, or books you own for your own table.
+
+```sh
+python3 tools/convert_monsters.py monsters.json --list-books                  # what is in the file
+python3 tools/convert_monsters.py monsters.json -o converted.json --book "My Homebrew" --report notes.txt
+python3 tools/convert_monsters.py monsters.json --merge-into ~/.local/share/combat-tracker/custom-monsters.json --book "My Homebrew"
+```
+
+Close the app before merging; `--merge-into` keeps the old file as `.bak`, and converting a monster again updates the copy made last time. Stats come from `properties` or, failing that, the stat-block prose; traits, actions, bonus actions, reactions, and legendary actions are split out of the prose (or taken from the `data-Traits` / `data-Actions` / `data-Legendary Actions` lists). Their attack bonuses, saves, damage, recharge, X/Day, Multiattack counts, conditions, and attack-roll modifiers are read with `build_srd_monsters.py`'s readers; 2014 wording ("Melee Weapon Attack: +5 to hit", "must succeed on a DC 13 Constitution saving throw or be poisoned for 1 minute") is reworded to 2024 wording for reading, and kept as written unless `--modern-text` is given. Ids never clash with the SRD catalog (a same-named monster gets the book added: `goblin-warrior-my-homebrew`). Entries without AC, Hit Points, or ability scores are skipped, and lair actions and regional effects are left out. Wording the readers cannot follow (second failures, swallowing, conditional resistances such as "from nonmagical attacks") is listed by `--report`; fix those in the app with **Effects…**. Other options: `--publisher`, `--exclude-book`, `--name REGEX`, and `--skip-srd-names`.
+
+Many entries in the dnd-data file have no stats at all, only their text. `--fill-from-open5e` looks those up in [Open5e](https://open5e.com), which serves only openly licensed monsters (the SRD, Kobold Press's Tome of Beasts 1–3, Creature Codex and Deep Magic, Level Up's Monstrous Menagerie, and a few more): an entry is filled when Open5e has a monster of the same name from the same book (`--open5e-any-source` drops the book check), and then Open5e's traits and actions are used too. The list is downloaded once to `~/.cache/freya-combat-tracker/open5e-monsters.json` (`--open5e-cache`, `--refresh-open5e`). `--allow-incomplete` keeps the rest: AC and Hit Points estimated from the CR (the middle of the DMG's monster-creation table), ability scores of 10, and a **Missing Stats** trait listing what to replace.
+
+```sh
+python3 tools/convert_monsters.py monsters.json -o converted.json --fill-from-open5e --allow-incomplete --report notes.txt
+```
 
 ## SRD data
 
