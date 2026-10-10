@@ -6165,10 +6165,10 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
             options.advantage = mode == RollMode::Advantage;
             const std::vector<TypedDamage> damage = rollDamageParts(parts, options, dieRoller());
             // The calculation, not the dice (they are on the table): "1d6+2 piercing".
-            // A hit's card stays a second longer before its damage is thrown.
+            // The hit card waits for a click before the damage is thrown.
             setDiceCaption((critical ? tr("Damage (critical): %1") : tr("Damage: %1"))
                                .arg(QString::fromStdString(describeDamage(damage))),
-                           QString::fromStdString(damageFormula(parts, options)), 1.0);
+                           QString::fromStdString(damageFormula(parts, options)));
             addLog(tr("%1 %2 %3: %4 rolled, %5 against AC %6, for %7.")
                        .arg(source, critical ? tr("critically hits") : tr("hits"), QString::fromStdString(target->name),
                             rolled)

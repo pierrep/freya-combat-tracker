@@ -32,7 +32,7 @@ struct DiceStage {
     // No second line at all (the dice are on the table to see).
     bool noDetail = false;
     // Extra seconds after the stage before has settled, before this one is
-    // thrown (a hit's card is read before its damage comes).
+    // thrown.
     double extraPause = 0.0;
     // No card at all (initiative).
     bool noCard = false;
@@ -40,10 +40,10 @@ struct DiceStage {
 
 // 3D dice thrown across the page they cover, over a dimmed page: they tumble,
 // bounce off each other and the edges, and settle with the rolled number on
-// top, then a card shows what the roll was for. They stay until dismissed: a
-// click anywhere in the window (or Escape, Space, or Enter) takes them away at
-// once, whatever they are doing, and goes no further. Drawn with QPainter (no
-// 3D library).
+// top, then a card shows what the roll was for. A click (or Escape, Space, or
+// Enter) while that card is up and another throw is waiting starts the next
+// throw. Otherwise the click takes the dice away at once, whatever they are
+// doing, and goes no further. Drawn with QPainter (no 3D library).
 class DiceOverlay : public QWidget {
     Q_OBJECT
 
@@ -54,10 +54,10 @@ public:
     // Throws these dice (up to kMaxDice of them), replacing any still on the
     // page. caption says what they were for ("Goblin's Scimitar hits Aria").
     void throwDice(const std::vector<ThrownDie>& dice, const QString& caption);
-    // Throws these in turn: each once the one before has settled (and a
-    // short pause), onto the table beside the dice already there. The card
-    // before leaves as the next throw starts, and the next card comes up
-    // when that throw settles.
+    // Throws these in turn. Each waits, once its card is up, for a click
+    // before the next is thrown onto the table beside the dice already
+    // there. The card before leaves as the next throw starts, and the next
+    // card comes up when that throw settles.
     void throwStages(const std::vector<DiceStage>& stages);
     // True from the throw until it is dismissed.
     bool active() const { return isVisible() && !m_dismissed; }
@@ -140,6 +140,13 @@ private:
 
     // The stage whose card shows now, or -1.
     int cardStage() const;
+    // The card is up and a later throw is waiting on a click.
+    bool waitsForClick() const;
+    // Starts that later throw.
+    void proceed();
+    // Plays one stage's sound (impacts timed from that throw).
+    void playStage(int stage);
+    double clockNow() const;
 
     std::vector<Body> m_bodies;
     std::vector<QString> m_captions;  // each stage's
@@ -147,9 +154,13 @@ private:
     std::vector<bool> m_noDetail;
     std::vector<bool> m_noCard;
     std::vector<double> m_stageAt;    // when each stage is thrown
+    // How many stages may run. The rest wait until proceed().
+    int m_openStages = 1;
+    std::vector<std::vector<DiceImpact>> m_stageImpacts;
     double m_lastThrowAt = 0.0;
     QTimer m_timer;
     QElapsedTimer m_clock;
+    double m_timeBase = 0.0;  // seconds already played, before the clock restarted
     double m_age = 0.0;  // seconds since the throw, in whole steps
     // The dimming fades in once, when the overlay comes up (not again when a
     // later throw replaces the dice on it).

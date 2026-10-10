@@ -355,6 +355,11 @@ bool DiceOverlay::eventFilter(QObject* watched, QEvent* event)
     auto* widget = qobject_cast<QWidget*>(watched);
     const bool ours = widget != nullptr && widget->window() == window();
     if (ours && (type == QEvent::MouseButtonPress || type == QEvent::MouseButtonDblClick)) {
+        if (!m_dismissed && waitsForClick()) {
+            proceed();
+            m_swallowRelease = true;  // the release is not a click on the page
+            return true;
+        }
         if (!m_dismissed) {
             dismiss();
         }
@@ -365,7 +370,9 @@ bool DiceOverlay::eventFilter(QObject* watched, QEvent* event)
     }
     if (ours && type == QEvent::MouseButtonRelease && m_swallowRelease) {
         m_swallowRelease = false;
-        hide();
+        if (m_dismissed) {
+            hide();
+        }
         return true;
     }
     if (ours && !m_dismissed && (type == QEvent::KeyPress || type == QEvent::ShortcutOverride)) {
@@ -373,6 +380,8 @@ bool DiceOverlay::eventFilter(QObject* watched, QEvent* event)
         if (key == Qt::Key_Escape || key == Qt::Key_Space || key == Qt::Key_Return || key == Qt::Key_Enter) {
             if (type == QEvent::ShortcutOverride) {
                 event->accept();  // no shortcut (Escape cancelling targets) takes it
+            } else if (waitsForClick()) {
+                proceed();
             } else {
                 dismiss();
                 hide();
@@ -448,6 +457,7 @@ void DiceOverlay::dismiss()
     m_noDetail.clear();
     m_noCard.clear();
     m_stageAt.clear();
+    m_stageImpacts.clear();
     update();
     if (!m_swallowRelease) {
         // A click hides it on the release; anything else hides it now.
@@ -552,6 +562,53 @@ QString DiceOverlay::shownCaption() const
                                                                                : QString();
 }
 
+bool DiceOverlay::waitsForClick() const
+{
+    const int stage = cardStage();
+    if (stage < 0 || stage + 1 >= static_cast<int>(m_stageAt.size())) {
+        return false;
+    }
+    return !m_noCard[static_cast<std::size_t>(stage)];
+}
+
+void DiceOverlay::playStage(int stage)
+{
+    if (stage < 0 || stage >= static_cast<int>(m_stageImpacts.size())) {
+        return;
+    }
+    sound(m_stageImpacts[static_cast<std::size_t>(stage)]);
+}
+
+double DiceOverlay::clockNow() const
+{
+    return m_timeBase + static_cast<double>(m_clock.elapsed()) / 1000.0;
+}
+
+void DiceOverlay::proceed()
+{
+    if (m_openStages >= static_cast<int>(m_stageAt.size())) {
+        return;
+    }
+    const double target = m_stageAt[static_cast<std::size_t>(m_openStages)];
+    const float width = static_cast<float>(std::max(200, this->width()));
+    const float height = static_cast<float>(std::max(200, this->height()));
+    int guard = 0;
+    while (m_age + static_cast<double>(kStep) < target && guard < 20000) {
+        m_age += static_cast<double>(kStep);
+        step(m_bodies, m_age, kStep, width, height);
+        ++guard;
+    }
+    const int starting = m_openStages;
+    ++m_openStages;
+    playStage(starting);
+    m_timeBase = m_age;
+    m_clock.restart();
+    if (!m_timer.isActive()) {
+        m_timer.start();
+    }
+    update();
+}
+
 QString DiceOverlay::shownDetail() const
 {
     const int stage = cardStage();
@@ -570,6 +627,9 @@ void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
     m_noDetail.clear();
     m_noCard.clear();
     m_stageAt.clear();
+    m_stageImpacts.clear();
+    m_openStages = 1;
+    m_timeBase = 0.0;
     const float width = static_cast<float>(std::max(200, this->width()));
     const float height = static_cast<float>(std::max(200, this->height()));
     const float base = std::clamp(std::min(width, height) / 15.0f, 22.0f, 40.0f);
@@ -652,8 +712,21 @@ void DiceOverlay::throwStages(const std::vector<DiceStage>& stages)
             }
         }
     }
-    sound(impacts);
+    m_stageImpacts.assign(m_stageAt.size(), {});
+    for (const DiceImpact& impact : impacts) {
+        std::size_t stage = 0;
+        for (std::size_t k = 0; k < m_stageAt.size(); ++k) {
+            if (impact.time + 1e-9 >= m_stageAt[k]) {
+                stage = k;
+            }
+        }
+        DiceImpact shifted = impact;
+        shifted.time -= m_stageAt[stage];
+        m_stageImpacts[stage].push_back(shifted);
+    }
+    playStage(0);
     m_age = 0.0;
+    m_timeBase = 0.0;
     m_clock.start();
     setGeometry(parentWidget() != nullptr ? parentWidget()->rect() : geometry());
     if (!isVisible() || m_dismissed) {
@@ -950,11 +1023,19 @@ void DiceOverlay::step(std::vector<Body>& bodies, double time, float dt, float w
 void DiceOverlay::tick()
 {
     // Catch up with the clock in fixed steps (the same ones the run-ahead took).
-    const double now = static_cast<double>(m_clock.elapsed()) / 1000.0;
+    // A later throw does not start until its card has been clicked on.
+    const double now = clockNow();
     const float width = static_cast<float>(std::max(200, this->width()));  // as the throw had it
     const float height = static_cast<float>(std::max(200, this->height()));
+    const bool gated = m_openStages < static_cast<int>(m_stageAt.size()) &&
+                       !m_noCard[static_cast<std::size_t>(m_openStages - 1)];
+    const double gate = gated ? m_stageAt[static_cast<std::size_t>(m_openStages)] : 1.0e9;
     int steps = 0;
     while (m_age + static_cast<double>(kStep) <= now && steps < 40) {
+        if (m_age + static_cast<double>(kStep) >= gate) {
+            m_timer.stop();  // the card stays until a click starts the next throw
+            break;
+        }
         m_age += static_cast<double>(kStep);
         step(m_bodies, m_age, kStep, width, height);
         ++steps;
@@ -1128,35 +1209,37 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     const QString detail = m_noDetail[at] ? QString() : m_details[at];
     QFont captionFont = font();
     captionFont.setBold(true);
-    captionFont.setPixelSize(13);
+    captionFont.setPixelSize(26);
     QFont detailFont = font();
-    detailFont.setPixelSize(11);
-    const double maxWidth = std::min(520.0, width() - 32.0);
+    detailFont.setPixelSize(22);
+    QFont hintFont = detailFont;
+    hintFont.setPixelSize(14);  // 35% smaller than the detail line
+    const double maxWidth = std::min(1040.0, width() - 64.0);
     const QFontMetricsF captionMetrics(captionFont);
     const QFontMetricsF detailMetrics(detailFont);
+    const QFontMetricsF hintMetrics(hintFont);
     const QRectF captionBounds =
-        captionMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0), Qt::TextWordWrap, caption);
+        captionMetrics.boundingRect(QRectF(0, 0, maxWidth - 56.0, 400.0), Qt::TextWordWrap, caption);
     const QRectF detailBounds =
         detail.isEmpty() ? QRectF()
-                         : detailMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0), Qt::TextWordWrap, detail);
-    // On the last card: how to get back to the page.
-    const bool last = stage + 1 == static_cast<int>(m_stageAt.size());
-    const QString hint = last ? tr("Click anywhere to continue") : QString();
+                         : detailMetrics.boundingRect(QRectF(0, 0, maxWidth - 56.0, 400.0), Qt::TextWordWrap, detail);
+    // On every card: a click continues, to the next throw or back to the page.
+    const QString hint = tr("Click anywhere to continue");
     const QRectF hintBounds = hint.isEmpty() ? QRectF()
-                                             : detailMetrics.boundingRect(QRectF(0, 0, maxWidth - 28.0, 200.0),
-                                                                          Qt::TextWordWrap, hint);
-    const double cardWidth = std::max({captionBounds.width(), detailBounds.width(), hintBounds.width()}) + 28.0;
-    const double cardHeight = (caption.isEmpty() ? 0.0 : captionBounds.height() + 3.0) + detailBounds.height() +
-                              (hint.isEmpty() ? 0.0 : hintBounds.height() + (detail.isEmpty() ? 0.0 : 4.0)) + 18.0;
+                                             : hintMetrics.boundingRect(QRectF(0, 0, maxWidth - 56.0, 400.0),
+                                                                        Qt::TextWordWrap, hint);
+    const double cardWidth = std::max({captionBounds.width(), detailBounds.width(), hintBounds.width()}) + 56.0;
+    const double cardHeight = (caption.isEmpty() ? 0.0 : captionBounds.height() + 6.0) + detailBounds.height() +
+                              (hint.isEmpty() ? 0.0 : hintBounds.height() + (detail.isEmpty() ? 0.0 : 8.0)) + 36.0;
     // Under the dice (the controls that threw them are usually above), or
     // over them when there is no room below.
     double x = cluster.center().x() - cardWidth / 2.0;
-    double y = cluster.bottom() + 14.0;
-    if (y + cardHeight > height() - 8.0) {
-        y = cluster.top() - cardHeight - 14.0;
+    double y = cluster.bottom() + 28.0;
+    if (y + cardHeight > height() - 16.0) {
+        y = cluster.top() - cardHeight - 28.0;
     }
-    x = std::clamp(x, 8.0, std::max(8.0, width() - cardWidth - 8.0));
-    y = std::clamp(y, 8.0, std::max(8.0, height() - cardHeight - 8.0));
+    x = std::clamp(x, 16.0, std::max(16.0, width() - cardWidth - 16.0));
+    y = std::clamp(y, 16.0, std::max(16.0, height() - cardHeight - 16.0));
     const QRectF card(x, y, cardWidth, cardHeight);
     const double appear =
         ease((m_age - (m_stageAt[static_cast<std::size_t>(stage)] + kSettleAt + kSettleTime * 0.6)) / 0.25);
@@ -1164,26 +1247,27 @@ void DiceOverlay::paintEvent(QPaintEvent* /*event*/)
     // Filled with the accent, white text: the Next turn button's look.
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(20, 18, 50, 50));
-    painter.drawRoundedRect(card.translated(0, 3), 12, 12);
+    painter.drawRoundedRect(card.translated(0, 6), 24, 24);
     painter.setBrush(palette::accent);
-    painter.setPen(QPen(palette::accent.darker(120), 1.0));
-    painter.drawRoundedRect(card, 12, 12);
-    double textTop = card.top() + 9.0;
+    painter.setPen(QPen(palette::accent.darker(120), 2.0));
+    painter.drawRoundedRect(card, 24, 24);
+    double textTop = card.top() + 18.0;
     if (!caption.isEmpty()) {
         painter.setFont(captionFont);
         painter.setPen(Qt::white);
-        painter.drawText(QRectF(card.left() + 14, textTop, card.width() - 24, captionBounds.height() + 2),
+        painter.drawText(QRectF(card.left() + 28, textTop, card.width() - 48, captionBounds.height() + 4),
                          Qt::TextWordWrap, caption);
-        textTop += captionBounds.height() + 3.0;
+        textTop += captionBounds.height() + 6.0;
     }
     painter.setFont(detailFont);
     painter.setPen(QColor(255, 255, 255, 215));
-    painter.drawText(QRectF(card.left() + 14, textTop, card.width() - 24, detailBounds.height() + 2), Qt::TextWordWrap,
+    painter.drawText(QRectF(card.left() + 28, textTop, card.width() - 48, detailBounds.height() + 4), Qt::TextWordWrap,
                      detail);
     if (!hint.isEmpty()) {
-        textTop += detail.isEmpty() ? 0.0 : detailBounds.height() + 4.0;
+        textTop += detail.isEmpty() ? 0.0 : detailBounds.height() + 8.0;
+        painter.setFont(hintFont);
         painter.setPen(QColor(255, 255, 255, 150));
-        painter.drawText(QRectF(card.left() + 14, textTop, card.width() - 24, hintBounds.height() + 2),
+        painter.drawText(QRectF(card.left() + 28, textTop, card.width() - 48, hintBounds.height() + 4),
                          Qt::TextWordWrap, hint);
     }
 }

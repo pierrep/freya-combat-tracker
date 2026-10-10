@@ -2421,10 +2421,20 @@ TEST_CASE("an attack throws its d20 first with a hit or miss card, then on a hit
     CHECK(overlay->shownDetail().contains(QStringLiteral(" + 4 = ")));
     CHECK(overlay->shownDetail().contains(QStringLiteral(" vs AC ")));
     CHECK((overlay->thrownSides() == std::vector<int>{20}));
-    wait(800);
-    // A hit's card is read for a second longer before the damage is thrown.
+    wait(1500);  // the damage does not throw itself
     CHECK((overlay->thrownSides() == std::vector<int>{20}));
-    wait(1000);
+    {
+        QWidget* window = app.window.get();
+        const QPointF at(12, 12);
+        QMouseEvent press(QEvent::MouseButtonPress, at, window->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(window, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, window->mapToGlobal(at), Qt::LeftButton, Qt::NoButton,
+                            Qt::NoModifier);
+        QApplication::sendEvent(window, &release);
+        QApplication::processEvents();
+    }
+    wait(200);
     CHECK((overlay->thrownSides() == std::vector<int>{20, 6}));  // the d20 stays on the table
     // The hit card does not come back while the damage dice are in the air.
     CHECK(!overlay->shownCaption().startsWith(QStringLiteral("Hits")));
