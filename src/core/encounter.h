@@ -154,6 +154,9 @@ struct Combatant {
     // An SRD spell id or a monster ability name ("Vanish"), or empty when the
     // combatant is not concentrating.
     std::string concentration;
+    // The spell has put a condition on someone (not kept in the saved file).
+    // Sleep ends with its last one (releaseConditions).
+    bool concentrationLanded = false;
     DeathSaves deathSaves;
     // A character at 0 HP with three successes, or stabilized by someone.
     bool stable = false;

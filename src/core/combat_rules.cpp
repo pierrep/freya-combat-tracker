@@ -552,6 +552,12 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
     if (target.dead || (isMonsterCombatant(target) && target.hp <= 0)) {
         return outcome;
     }
+    // Sleep: creatures with Immunity to the Exhaustion condition (undead,
+    // constructs, and the like) automatically succeed on its saves.
+    if (rider.concentration == "sleep" && contains(target.conditionImmunities, "exhaustion")) {
+        outcome.immune = rider.conditions;
+        return outcome;
+    }
     // "Swallowed, and no longer Grappled."
     for (const std::string& id : rider.removes) {
         for (auto it = target.conditions.begin(); it != target.conditions.end();) {
@@ -600,6 +606,13 @@ RiderOutcome applyRider(Encounter& encounter, const Combatant& attacker, Combata
         }
         condition.endsOn = rider.endsOn;
         condition.concentration = rider.concentration;
+        if (!rider.concentration.empty()) {
+            for (Combatant& caster : encounter.combatants) {
+                if (caster.id == attacker.id && caster.concentration == rider.concentration) {
+                    caster.concentrationLanded = true;
+                }
+            }
+        }
         if (rider.until == kUntilSourceStart) {
             condition.duration = makeDuration(encounter, attacker.id, TurnBoundary::Start, 1);
         } else if (rider.until == kUntilSourceEnd) {
@@ -760,6 +773,24 @@ std::vector<ReleasedCondition> releaseConditions(Encounter& encounter)
                     break;
                 }
             }
+        }
+    }
+    // Sleep lasts only while someone is under it: once the last creature it
+    // put to sleep is free of it, the caster stops concentrating.
+    for (Combatant& caster : encounter.combatants) {
+        if (!caster.concentrationLanded || caster.concentration != "sleep") {
+            continue;
+        }
+        const bool anyone = std::any_of(encounter.combatants.begin(), encounter.combatants.end(),
+                                        [&caster](const Combatant& other) {
+                                            return std::any_of(other.conditions.begin(), other.conditions.end(),
+                                                               [&caster](const ActiveCondition& condition) {
+                                                                   return condition.concentration == "sleep" &&
+                                                                          condition.byId == caster.id;
+                                                               });
+                                        });
+        if (!anyone) {
+            endConcentration(caster);
         }
     }
     return released;
@@ -1289,6 +1320,7 @@ std::vector<ActiveCondition> endConcentration(Combatant& combatant)
     }
     const std::string ending = combatant.concentration;
     combatant.concentration.clear();
+    combatant.concentrationLanded = false;
     combatant.sustained.reset();
     for (auto it = combatant.conditions.begin(); it != combatant.conditions.end();) {
         if (!it->concentration.empty() && it->concentration == ending) {

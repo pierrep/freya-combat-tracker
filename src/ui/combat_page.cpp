@@ -7117,7 +7117,21 @@ void CombatPage::releaseEndedConditions()
     if (encounter == nullptr) {
         return;
     }
-    for (const ReleasedCondition& row : releaseConditions(*encounter)) {
+    std::vector<std::pair<std::string, std::string>> concentrating;
+    for (const Combatant& creature : encounter->combatants) {
+        if (!creature.concentration.empty()) {
+            concentrating.emplace_back(creature.id, creature.concentration);
+        }
+    }
+    const std::vector<ReleasedCondition> released = releaseConditions(*encounter);
+    for (const auto& [creatureId, spell] : concentrating) {
+        for (const Combatant& creature : encounter->combatants) {
+            if (creature.id == creatureId && creature.concentration != spell) {
+                addLog(tr("%1's concentration ends.").arg(QString::fromStdString(creature.name)));
+            }
+        }
+    }
+    for (const ReleasedCondition& row : released) {
         const QString name = nameOf(row.combatantId);
         addLog(row.condition.source.empty()
                    ? tr("%1 is no longer %2.").arg(name, conditionName(row.condition.id))

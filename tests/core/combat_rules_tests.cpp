@@ -2482,3 +2482,69 @@ TEST_CASE("Searing Smite burns at the start of each turn and saves after; Phanta
         return event.kind == TurnEvent::Kind::SaveToEnd && event.conditionId == kPhantasmalFear;
     }));
 }
+
+TEST_CASE("a Sleep (1/Day) action is limited to once a day and ends with the last sleeper")
+{
+    Monster mephit;
+    mephit.name = "Dust Mephit";
+    MonsterAttack sleep;
+    sleep.name = "Sleep (1/Day)";
+    sleep.perDay = 1;
+    sleep.effect = "The mephit casts the Sleep spell, requiring no spell components and using Charisma as the "
+                   "spellcasting ability (spell save DC 10).";
+    mephit.attacks = {sleep};
+    const std::vector<MonsterAttack> spells = actionableSpells(mephit, mephit.attacks[0]);
+    CHECK(!spells.empty());
+    if (spells.empty()) {
+        return;
+    }
+    CHECK_EQ(spells[0].name, std::string("Sleep"));
+    CHECK(spells[0].perDay.has_value());
+    CHECK_EQ(*spells[0].perDay, 1);
+
+    Combatant caster;
+    caster.id = "mephit";
+    caster.name = "Dust Mephit";
+    caster.concentration = "sleep";
+    caster.concentrationLanded = true;
+    Combatant victim;
+    victim.id = "pc";
+    victim.name = "Pc";
+    ActiveCondition asleep;
+    asleep.id = "incapacitated";
+    asleep.byId = "mephit";
+    asleep.concentration = "sleep";
+    victim.conditions.push_back(asleep);
+    Encounter encounter;
+    encounter.combatants = {caster, victim};
+    releaseConditions(encounter);
+    CHECK_EQ(encounter.combatants[0].concentration, std::string("sleep"));
+    encounter.combatants[1].conditions.clear();
+    releaseConditions(encounter);
+    CHECK(encounter.combatants[0].concentration.empty());
+}
+
+TEST_CASE("Sleep does not affect a creature immune to Exhaustion")
+{
+    Combatant caster;
+    caster.id = "mephit";
+    Combatant zombie;
+    zombie.id = "zombie";
+    zombie.conditionImmunities = {"exhaustion"};
+    Combatant guard;
+    guard.id = "guard";
+    Encounter encounter;
+    encounter.combatants = {caster, zombie, guard};
+    MonsterAttack spell;
+    spell.name = "Sleep";
+    ConditionRider rider;
+    rider.conditions = {"incapacitated"};
+    rider.on = kRiderOnFailure;
+    rider.concentration = "sleep";
+    const RiderOutcome safe = applyRider(encounter, encounter.combatants[0], encounter.combatants[1], spell, rider);
+    CHECK(safe.added.empty());
+    CHECK_EQ(safe.immune.size(), std::size_t{1});
+    CHECK(!hasCondition(encounter.combatants[1], "incapacitated"));
+    const RiderOutcome hit = applyRider(encounter, encounter.combatants[0], encounter.combatants[2], spell, rider);
+    CHECK_EQ(hit.added.size(), std::size_t{1});
+}

@@ -753,6 +753,14 @@ std::vector<MonsterAttack> actionableSpells(const Monster& monster, const Monste
         return {};
     }
     std::vector<MonsterAttack> spells = spellsFrom(action.effect, monster, action.inMultiattack, action.name, false);
+    // "Sleep (1/Day)": the action's own limit holds for the spell it casts.
+    if (action.perDay.has_value()) {
+        for (MonsterAttack& spell : spells) {
+            if (!spell.perDay.has_value()) {
+                spell.perDay = action.perDay;
+            }
+        }
+    }
     if (!action.inMultiattack) {
         return spells;
     }
