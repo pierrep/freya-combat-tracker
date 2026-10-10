@@ -1,6 +1,7 @@
 add_library(combat_core STATIC
     attack_damage.cpp
     character.cpp
+    campaign.cpp
     combat_rules.cpp
     dice.cpp
     encounter.cpp

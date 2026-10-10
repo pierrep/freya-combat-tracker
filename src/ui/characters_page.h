@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/campaign.h"
 #include "core/character.h"
 #include "core/sheet.h"
 
@@ -26,6 +27,7 @@ class QWidget;
 
 namespace combat {
 class CharacterStore;
+class EncounterStore;
 }
 
 namespace combat::ui {
@@ -44,6 +46,9 @@ public:
     void flushPendingSave();
 
     int count() const;
+    // The parties (kept by the caller), edited in the Parties panel. A change
+    // reaches the encounters that hold the party and have not started.
+    void setCampaign(CampaignStore* campaign, EncounterStore* encounters);
     bool hasLoadError() const { return !m_loadError.isEmpty(); }
     QString loadError() const { return m_loadError; }
 
@@ -56,6 +61,15 @@ signals:
 
 private:
     void addCharacter();
+    void refreshParties();
+    void showPartyMembers();
+    void addParty();
+    void deleteParty();
+    void onPartyNameEdited(const QString& text);
+    void onPartyMemberToggled();
+    // Saves the parties, and brings the encounters that hold one in line.
+    void saveParties();
+    Party* chosenParty();
     void importPdf();
     void deleteSelected();
     void showSelected();
@@ -106,6 +120,16 @@ private:
     QSpinBox* makeNumberBox(int minimum, int maximum);
 
     CharacterStore& m_store;
+    CampaignStore* m_campaignStore = nullptr;
+    EncounterStore* m_encounterStore = nullptr;
+    Campaign m_campaign;
+    QWidget* m_partyCard = nullptr;
+    QComboBox* m_partyChoice = nullptr;
+    QLineEdit* m_partyName = nullptr;
+    QListWidget* m_partyMembers = nullptr;
+    QPushButton* m_newPartyButton = nullptr;
+    QPushButton* m_deletePartyButton = nullptr;
+    QLabel* m_partyHint = nullptr;
     std::vector<Character> m_characters;
     std::vector<Spell> m_spells;
     std::vector<std::string> m_speciesNames;

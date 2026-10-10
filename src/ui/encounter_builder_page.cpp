@@ -78,7 +78,53 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     columns->setSpacing(14);
     outer->addLayout(columns, 1);
 
-    // Left: the saved encounters.
+    // Left: the adventure chosen, then its encounters.
+    auto* leftColumn = new QVBoxLayout;
+    leftColumn->setContentsMargins(0, 0, 0, 0);
+    leftColumn->setSpacing(14);
+    auto* adventureCard = makeCard();
+    adventureCard->setObjectName(QStringLiteral("adventureCard"));
+    adventureCard->setFixedWidth(260);
+    auto* adventureLayout = static_cast<QVBoxLayout*>(adventureCard->layout());
+    adventureLayout->setContentsMargins(16, 12, 16, 12);
+    adventureLayout->setSpacing(8);
+    auto* adventureHeader = new QHBoxLayout;
+    adventureHeader->addWidget(makeHeading(tr("Adventure")));
+    adventureHeader->addStretch(1);
+    m_newAdventureButton = new QPushButton(tr("New"));
+    m_newAdventureButton->setObjectName(QStringLiteral("newAdventure"));
+    m_newAdventureButton->setToolTip(tr("Make an adventure: a group of encounters, and the party they start with."));
+    makeQuiet(m_newAdventureButton);
+    adventureHeader->addWidget(m_newAdventureButton);
+    adventureLayout->addLayout(adventureHeader);
+    m_adventureFilter = new QComboBox;
+    m_adventureFilter->setObjectName(QStringLiteral("builderAdventure"));
+    m_adventureFilter->setToolTip(tr("List the encounters of one adventure."));
+    adventureLayout->addWidget(m_adventureFilter);
+    m_adventureDetails = new QWidget;
+    auto* details = new QVBoxLayout(m_adventureDetails);
+    details->setContentsMargins(0, 0, 0, 0);
+    details->setSpacing(6);
+    m_adventureName = new QLineEdit;
+    m_adventureName->setObjectName(QStringLiteral("adventureName"));
+    m_adventureName->setPlaceholderText(tr("Adventure name"));
+    details->addWidget(m_adventureName);
+    auto* partyRow = new QHBoxLayout;
+    partyRow->setSpacing(6);
+    auto* partyLabel = makeMuted(tr("New encounters start with"));
+    m_adventureParty = new QComboBox;
+    m_adventureParty->setObjectName(QStringLiteral("adventureParty"));
+    details->addWidget(partyLabel);
+    partyRow->addWidget(m_adventureParty, 1);
+    m_deleteAdventureButton = new QPushButton(tr("Delete"));
+    m_deleteAdventureButton->setObjectName(QStringLiteral("deleteAdventure"));
+    m_deleteAdventureButton->setToolTip(tr("Delete the adventure. Its encounters stay, with no adventure."));
+    makeQuiet(m_deleteAdventureButton);
+    partyRow->addWidget(m_deleteAdventureButton);
+    details->addLayout(partyRow);
+    adventureLayout->addWidget(m_adventureDetails);
+    leftColumn->addWidget(adventureCard);
+
     auto* listCard = makeCard();
     listCard->setFixedWidth(260);
     listCard->layout()->setContentsMargins(8, 12, 8, 8);
@@ -88,7 +134,8 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     m_encounterList = new QListWidget;
     m_encounterList->setObjectName(QStringLiteral("encounterList"));
     static_cast<QVBoxLayout*>(listCard->layout())->addWidget(m_encounterList, 1);
-    columns->addWidget(listCard);
+    leftColumn->addWidget(listCard, 1);
+    columns->addLayout(leftColumn);
 
     auto* right = new QVBoxLayout;
     right->setContentsMargins(0, 0, 0, 0);
@@ -139,6 +186,15 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     m_difficulty = makeMuted(QString());
     m_difficulty->setObjectName(QStringLiteral("encounterDifficulty"));
     editorLayout->addWidget(m_difficulty);
+    auto* adventureRow = new QHBoxLayout;
+    adventureRow->setSpacing(8);
+    adventureRow->addWidget(makeMuted(tr("Adventure")));
+    m_encounterAdventure = new QComboBox;
+    m_encounterAdventure->setObjectName(QStringLiteral("encounterAdventure"));
+    m_encounterAdventure->setMinimumWidth(200);
+    adventureRow->addWidget(m_encounterAdventure);
+    adventureRow->addStretch(1);
+    editorLayout->addLayout(adventureRow);
     editorLayout->addSpacing(6);
 
     // Who is in it, and what can be added, side by side.
@@ -173,11 +229,34 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     auto* addPane = new QVBoxLayout;
     addPane->setSpacing(8);
     addPane->addWidget(makeHeading(tr("Add to encounter")));
+    auto* addPartyRow = new QHBoxLayout;
+    m_partyCombo = new QComboBox;
+    m_partyCombo->setObjectName(QStringLiteral("partyCombo"));
+    m_addPartyButton = new QPushButton(tr("Add party"));
+    m_addPartyButton->setObjectName(QStringLiteral("addParty"));
+    m_addPartyButton->setToolTip(tr("Every member of the party. Until the fight starts, the encounter follows the "
+                                    "party: who joins it is added, who leaves it goes."));
+    makePrimary(m_addPartyButton);
+    addPartyRow->addWidget(m_partyCombo, 1);
+    addPartyRow->addWidget(m_addPartyButton);
+    addPane->addLayout(addPartyRow);
+    auto* partyNoteRow = new QHBoxLayout;
+    m_partyNote = makeMuted(QString());
+    m_partyNote->setObjectName(QStringLiteral("encounterPartyNote"));
+    m_partyNote->setWordWrap(true);
+    m_removePartyButton = new QPushButton(tr("Remove party"));
+    m_removePartyButton->setObjectName(QStringLiteral("removeParty"));
+    m_removePartyButton->setToolTip(tr("Take the party's members out. Characters added on their own stay."));
+    makeQuiet(m_removePartyButton);
+    partyNoteRow->addWidget(m_partyNote, 1);
+    partyNoteRow->addWidget(m_removePartyButton);
+    addPane->addLayout(partyNoteRow);
     auto* addCharacterRow = new QHBoxLayout;
     m_characterCombo = new QComboBox;
     m_characterCombo->setObjectName(QStringLiteral("characterCombo"));
     m_addCharacterButton = new QPushButton(tr("Add character"));
     m_addCharacterButton->setObjectName(QStringLiteral("addCharacter"));
+    m_addCharacterButton->setToolTip(tr("One character on their own, not with a party (a guest)."));
     addCharacterRow->addWidget(m_characterCombo, 1);
     addCharacterRow->addWidget(m_addCharacterButton);
     addPane->addLayout(addCharacterRow);
@@ -206,7 +285,8 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     addMonsterRow->addWidget(m_monsterQuantity);
     addMonsterRow->addWidget(m_addMonsterButton);
     addPane->addLayout(addMonsterRow);
-    auto* note = makeMuted(tr("Characters come from the Characters page and custom monsters from the Monsters page."));
+    auto* note = makeMuted(tr("Characters and parties come from the Characters page and custom monsters from the "
+                              "Monsters page."));
     addPane->addWidget(note);
     panes->addLayout(addPane, 1);
 
@@ -217,6 +297,17 @@ EncounterBuilderPage::EncounterBuilderPage(CharacterStore& characters, MonsterCa
     connect(m_encounterName, &QLineEdit::textEdited, this, &EncounterBuilderPage::onEncounterNameEdited);
     connect(m_encounterName, &QLineEdit::editingFinished, this, &EncounterBuilderPage::onEncounterNameEditingFinished);
     connect(m_addCharacterButton, &QPushButton::clicked, this, &EncounterBuilderPage::addCharacter);
+    connect(m_addPartyButton, &QPushButton::clicked, this, &EncounterBuilderPage::addParty);
+    connect(m_removePartyButton, &QPushButton::clicked, this, &EncounterBuilderPage::removeParty);
+    connect(m_adventureFilter, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &EncounterBuilderPage::onAdventureFilterChanged);
+    connect(m_newAdventureButton, &QPushButton::clicked, this, &EncounterBuilderPage::addAdventure);
+    connect(m_deleteAdventureButton, &QPushButton::clicked, this, &EncounterBuilderPage::deleteAdventure);
+    connect(m_adventureName, &QLineEdit::textEdited, this, &EncounterBuilderPage::onAdventureNameEdited);
+    connect(m_adventureParty, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &EncounterBuilderPage::onAdventurePartyChosen);
+    connect(m_encounterAdventure, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &EncounterBuilderPage::onEncounterAdventureChosen);
     connect(m_addMonsterButton, &QPushButton::clicked, this, &EncounterBuilderPage::addSelectedMonster);
     connect(m_removeCombatantButton, &QPushButton::clicked, this, &EncounterBuilderPage::removeSelectedCombatant);
     connect(m_roster, &QListWidget::currentRowChanged, this,
@@ -277,25 +368,22 @@ void EncounterBuilderPage::reloadFromDisk()
         return;
     }
 
-    int select = -1;
-    {
-        const QSignalBlocker blocker(m_encounterList);
-        m_encounterList->clear();
-        for (int i = 0; i < static_cast<int>(m_encounters.size()); ++i) {
-            const Encounter& encounter = m_encounters[static_cast<std::size_t>(i)];
-            m_encounterList->addItem(QString::fromStdString(encounter.name));
-            if (!selectedId.isEmpty() && QString::fromStdString(encounter.id) == selectedId) {
-                select = i;
-            }
+    reloadCharacters();
+    if (m_campaignStore != nullptr) {
+        try {
+            m_campaign = m_campaignStore->load();
+        } catch (const CampaignStoreError& error) {
+            QMessageBox::warning(this, tr("Could not read parties and adventures"), QString::fromStdString(error.what()));
         }
-        if (select < 0 && !m_encounters.empty()) {
-            select = 0;
-        }
-        if (select >= 0) {
-            m_encounterList->setCurrentRow(select);
+        // An encounter not started yet follows its party.
+        if (m_characterLoadError.isEmpty() &&
+            syncPartyRows(m_encounters, m_campaign, m_characters, [this] { return newId(); })) {
+            persist();
         }
     }
-    reloadCharacters();
+    fillPartyChoices();
+    fillAdventureChoices();
+    fillEncounterList(selectedId);
     refreshMonsterChoices();
     showEncounter();
 }
@@ -356,11 +444,17 @@ Encounter* EncounterBuilderPage::selectedEncounter()
     if (m_encounterList == nullptr) {
         return nullptr;
     }
-    const int row = m_encounterList->currentRow();
-    if (row < 0 || row >= static_cast<int>(m_encounters.size())) {
+    const QListWidgetItem* item = m_encounterList->currentItem();
+    if (item == nullptr) {
         return nullptr;
     }
-    return &m_encounters[static_cast<std::size_t>(row)];
+    const std::string id = item->data(Qt::UserRole).toString().toStdString();
+    for (Encounter& encounter : m_encounters) {
+        if (encounter.id == id) {
+            return &encounter;
+        }
+    }
+    return nullptr;
 }
 
 void EncounterBuilderPage::persist()
@@ -381,10 +475,19 @@ void EncounterBuilderPage::addEncounter()
     encounter.id = generateUuidV4([this] { return m_ids(); });
     encounter.name = tr("New encounter").toStdString();
     encounter.started = false;  // initiative first, then Start combat
+    // In the adventure chosen, with its party.
+    if (const Adventure* adventure = chosenAdventure()) {
+        encounter.adventureId = adventure->id;
+        if (const Party* party = findParty(m_campaign, adventure->partyId)) {
+            applyParty(encounter, *party, m_characters, [this] { return newId(); });
+        }
+    }
     m_encounters.push_back(encounter);
-    m_encounterList->addItem(QString::fromStdString(encounter.name));
+    auto* item = new QListWidgetItem(QString::fromStdString(encounter.name));
+    item->setData(Qt::UserRole, QString::fromStdString(encounter.id));
+    m_encounterList->addItem(item);
     persist();
-    m_encounterList->setCurrentRow(static_cast<int>(m_encounters.size()) - 1);
+    m_encounterList->setCurrentItem(item);
     m_encounterName->setFocus();
     m_encounterName->selectAll();
 }
@@ -401,9 +504,9 @@ void EncounterBuilderPage::deleteEncounter()
     if (answer != QMessageBox::Yes) {
         return;
     }
-    const int row = m_encounterList->currentRow();
-    m_encounters.erase(m_encounters.begin() + row);
-    delete m_encounterList->takeItem(row);
+    const std::string id = encounter->id;
+    std::erase_if(m_encounters, [&id](const Encounter& candidate) { return candidate.id == id; });
+    delete m_encounterList->takeItem(m_encounterList->currentRow());
     persist();
     showEncounter();
 }
@@ -432,8 +535,15 @@ void EncounterBuilderPage::setStateFile(const QString& path)
 {
     m_stateFile = path;
     const QString id = readLastEncounter(path);
-    for (int i = 0; i < static_cast<int>(m_encounters.size()); ++i) {
-        if (QString::fromStdString(m_encounters[static_cast<std::size_t>(i)].id) == id) {
+    if (const int adventure = m_adventureFilter->findData(readLastAdventure(path)); adventure >= 0) {
+        const QSignalBlocker blocker(m_adventureFilter);
+        m_adventureFilter->setCurrentIndex(adventure);
+        fillAdventureChoices();
+        fillEncounterList(id);
+        showEncounter();
+    }
+    for (int i = 0; i < m_encounterList->count(); ++i) {
+        if (m_encounterList->item(i)->data(Qt::UserRole).toString() == id) {
             m_encounterList->setCurrentRow(i);
         }
     }
@@ -453,6 +563,36 @@ void EncounterBuilderPage::showEncounter()
     const bool canAddCharacter = canEdit && m_characterLoadError.isEmpty() && !m_characters.empty();
     m_addCharacterButton->setEnabled(canAddCharacter);
     m_characterCombo->setEnabled(canAddCharacter);
+    const bool canAddParty = canAddCharacter && !m_campaign.parties.empty();
+    m_addPartyButton->setEnabled(canAddParty);
+    m_partyCombo->setEnabled(canAddParty);
+    m_encounterAdventure->setEnabled(canEdit);
+    if (encounter != nullptr) {
+        const QSignalBlocker blocker(m_encounterAdventure);
+        m_encounterAdventure->clear();
+        m_encounterAdventure->addItem(tr("No adventure"), QString());
+        for (const Adventure& adventure : m_campaign.adventures) {
+            m_encounterAdventure->addItem(QString::fromStdString(adventure.name), QString::fromStdString(adventure.id));
+        }
+        const int row = m_encounterAdventure->findData(QString::fromStdString(encounter->adventureId));
+        m_encounterAdventure->setCurrentIndex(row >= 0 ? row : 0);
+        const Party* party = findParty(m_campaign, encounter->partyId);
+        m_partyNote->setText(party == nullptr ? QString()
+                             : encounter->started
+                                 ? tr("Party: %1 (the fight has started, so its characters stay as they are).")
+                                       .arg(QString::fromStdString(party->name))
+                                 : tr("Party: %1. Who joins or leaves it joins or leaves this encounter, until the "
+                                      "fight starts.")
+                                       .arg(QString::fromStdString(party->name)));
+        m_partyNote->setVisible(party != nullptr);
+        m_removePartyButton->setVisible(party != nullptr);
+        m_removePartyButton->setEnabled(canEdit);
+        if (party != nullptr) {
+            if (const int at = m_partyCombo->findData(QString::fromStdString(party->id)); at >= 0) {
+                m_partyCombo->setCurrentIndex(at);
+            }
+        }
+    }
     m_monsterSearch->setEnabled(canEdit);
     m_monsterChoices->setEnabled(canEdit);
     m_addMonsterButton->setEnabled(canEdit && m_monsterChoices->currentRow() >= 0);
@@ -523,6 +663,9 @@ void EncounterBuilderPage::rebuildRoster()
     for (const Combatant& combatant : encounter->combatants) {
         QString label = QString::fromStdString(combatant.name) + QStringLiteral("    ") +
                         QString::fromStdString(formatHitPoints(combatant.hp, combatant.maxHp));
+        if (isCharacterCombatant(combatant) && !encounter->partyId.empty() && !combatant.partyMember) {
+            label += tr("    guest");
+        }
         if (combatant.statBlock.has_value()) {
             label += tr("    CR %1, %2 XP")
                          .arg(QString::fromStdString(combatant.statBlock->challengeRating))
@@ -591,7 +734,12 @@ void EncounterBuilderPage::removeSelectedCombatant()
     }
     const std::string id = item->data(Qt::UserRole).toString().toStdString();
     for (int i = 0; i < static_cast<int>(encounter->combatants.size()); ++i) {
-        if (encounter->combatants[static_cast<std::size_t>(i)].id == id) {
+        const Combatant& row = encounter->combatants[static_cast<std::size_t>(i)];
+        if (row.id == id) {
+            if (row.partyMember) {
+                // The party would bring them back: left out of this one.
+                encounter->partyLeftOut.push_back(row.sourceId);
+            }
             encounter->turnIndex = removeCombatant(encounter->combatants, i, encounter->turnIndex);
             break;
         }
@@ -625,7 +773,14 @@ void EncounterBuilderPage::addCharacter()
                                      .arg(QString::fromStdString(character->name)));
         return;
     }
-    encounter->combatants.push_back(makeCharacterCombatant(*character, generateUuidV4([this] { return m_ids(); })));
+    Combatant row = makeCharacterCombatant(*character, newId());
+    if (const Party* party = findParty(m_campaign, encounter->partyId);
+        party != nullptr && std::find(party->characterIds.begin(), party->characterIds.end(), character->id) !=
+                                party->characterIds.end()) {
+        row.partyMember = true;  // back in, with the party
+        std::erase(encounter->partyLeftOut, character->id);
+    }
+    encounter->combatants.push_back(std::move(row));
     encounter->turnIndex = sortByInitiative(encounter->combatants, encounter->turnIndex);
     persist();
     rebuildRoster();
@@ -649,6 +804,239 @@ void EncounterBuilderPage::addSelectedMonster()
     encounter->turnIndex = sortByInitiative(encounter->combatants, encounter->turnIndex);
     persist();
     rebuildRoster();
+}
+
+std::string EncounterBuilderPage::newId()
+{
+    return generateUuidV4([this] { return m_ids(); });
+}
+
+void EncounterBuilderPage::setCampaign(CampaignStore* campaign)
+{
+    m_campaignStore = campaign;
+    if (!hasLoadError()) {
+        reloadFromDisk();
+    }
+}
+
+void EncounterBuilderPage::saveCampaign()
+{
+    if (m_campaignStore == nullptr) {
+        return;
+    }
+    try {
+        m_campaignStore->save(m_campaign);
+    } catch (const CampaignStoreError& error) {
+        QMessageBox::warning(this, tr("Could not save adventures"), QString::fromStdString(error.what()));
+    }
+}
+
+Adventure* EncounterBuilderPage::chosenAdventure()
+{
+    return findAdventure(m_campaign, m_adventureFilter->currentData().toString().toStdString());
+}
+
+void EncounterBuilderPage::fillPartyChoices()
+{
+    const QString previous = m_partyCombo->currentData().toString();
+    {
+        const QSignalBlocker blocker(m_partyCombo);
+        m_partyCombo->clear();
+        for (const Party& party : m_campaign.parties) {
+            const int size = static_cast<int>(party.characterIds.size());
+            const QString name = QString::fromStdString(party.name);
+            m_partyCombo->addItem(size == 1 ? tr("%1 (1 character)").arg(name)
+                                            : tr("%1 (%2 characters)").arg(name).arg(size),
+                                  QString::fromStdString(party.id));
+        }
+        if (const int row = m_partyCombo->findData(previous); row >= 0) {
+            m_partyCombo->setCurrentIndex(row);
+        }
+    }
+    if (m_partyCombo->count() == 0) {
+        m_partyCombo->addItem(tr("No parties yet (Characters page)"), QString());
+    }
+}
+
+void EncounterBuilderPage::fillAdventureChoices()
+{
+    QString choice = m_adventureFilter->count() > 0 ? m_adventureFilter->currentData().toString()
+                                                    : readLastAdventure(m_stateFile);
+    {
+        const QSignalBlocker blocker(m_adventureFilter);
+        m_adventureFilter->clear();
+        m_adventureFilter->addItem(tr("All encounters"), QString::fromLatin1(kAllAdventures));
+        for (const Adventure& adventure : m_campaign.adventures) {
+            m_adventureFilter->addItem(QString::fromStdString(adventure.name), QString::fromStdString(adventure.id));
+        }
+        if (!m_campaign.adventures.empty()) {
+            m_adventureFilter->addItem(tr("No adventure"), QString::fromLatin1(kNoAdventure));
+        }
+        const int row = m_adventureFilter->findData(choice);
+        m_adventureFilter->setCurrentIndex(row >= 0 ? row : 0);
+    }
+    const Adventure* adventure = chosenAdventure();
+    m_adventureDetails->setVisible(adventure != nullptr);
+    if (adventure == nullptr) {
+        return;
+    }
+    const QSignalBlocker nameBlocker(m_adventureName);
+    if (m_adventureName->text() != QString::fromStdString(adventure->name)) {
+        m_adventureName->setText(QString::fromStdString(adventure->name));
+    }
+    const QSignalBlocker partyBlocker(m_adventureParty);
+    m_adventureParty->clear();
+    m_adventureParty->addItem(tr("No party"), QString());
+    for (const Party& party : m_campaign.parties) {
+        m_adventureParty->addItem(QString::fromStdString(party.name), QString::fromStdString(party.id));
+    }
+    const int row = m_adventureParty->findData(QString::fromStdString(adventure->partyId));
+    m_adventureParty->setCurrentIndex(row >= 0 ? row : 0);
+}
+
+void EncounterBuilderPage::fillEncounterList(const QString& selectedId)
+{
+    const std::string choice = m_adventureFilter->currentData().toString().toStdString();
+    const QSignalBlocker blocker(m_encounterList);
+    m_encounterList->clear();
+    int select = -1;
+    for (const Encounter& encounter : m_encounters) {
+        if (!inAdventureChoice(encounter, choice)) {
+            continue;
+        }
+        auto* item = new QListWidgetItem(QString::fromStdString(encounter.name));
+        item->setData(Qt::UserRole, QString::fromStdString(encounter.id));
+        m_encounterList->addItem(item);
+        if (!selectedId.isEmpty() && QString::fromStdString(encounter.id) == selectedId) {
+            select = m_encounterList->count() - 1;
+        }
+    }
+    if (select < 0 && m_encounterList->count() > 0) {
+        select = 0;
+    }
+    if (select >= 0) {
+        m_encounterList->setCurrentRow(select);
+    }
+    m_emptyHint->setText(m_encounters.empty() || choice == kAllAdventures
+                             ? tr("No encounters yet. Choose New encounter, then add characters and monsters.")
+                             : tr("No encounters in this adventure yet. New encounter makes one here."));
+}
+
+void EncounterBuilderPage::onAdventureFilterChanged()
+{
+    writeLastAdventure(m_stateFile, m_adventureFilter->currentData().toString());
+    const QListWidgetItem* item = m_encounterList->currentItem();
+    const QString selected = item != nullptr ? item->data(Qt::UserRole).toString() : QString();
+    fillAdventureChoices();
+    fillEncounterList(selected);
+    showEncounter();
+}
+
+void EncounterBuilderPage::addAdventure()
+{
+    Adventure adventure;
+    adventure.id = newId();
+    adventure.name = tr("New adventure").toStdString();
+    m_campaign.adventures.push_back(adventure);
+    saveCampaign();
+    fillAdventureChoices();
+    m_adventureFilter->setCurrentIndex(m_adventureFilter->findData(QString::fromStdString(adventure.id)));
+    m_adventureName->setFocus();
+    m_adventureName->selectAll();
+}
+
+void EncounterBuilderPage::deleteAdventure()
+{
+    const Adventure* adventure = chosenAdventure();
+    if (adventure == nullptr) {
+        return;
+    }
+    const std::string id = adventure->id;
+    const int count = static_cast<int>(std::count_if(m_encounters.begin(), m_encounters.end(),
+                                                     [&id](const Encounter& encounter) { return encounter.adventureId == id; }));
+    const auto answer = QMessageBox::question(
+        this, tr("Delete adventure"),
+        count == 0 ? tr("Delete %1?").arg(QString::fromStdString(adventure->name))
+                   : tr("Delete %1? Its %n encounter(s) stay, with no adventure.", nullptr, count)
+                         .arg(QString::fromStdString(adventure->name)));
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    std::erase_if(m_campaign.adventures, [&id](const Adventure& candidate) { return candidate.id == id; });
+    saveCampaign();
+    if (forgetAdventure(m_encounters, id) > 0) {
+        persist();
+    }
+    m_adventureFilter->setCurrentIndex(0);  // all encounters
+    fillAdventureChoices();
+    fillEncounterList(QString());
+    showEncounter();
+}
+
+void EncounterBuilderPage::onAdventureNameEdited(const QString& text)
+{
+    Adventure* adventure = chosenAdventure();
+    if (adventure == nullptr || isBlank(text)) {
+        return;
+    }
+    adventure->name = text.trimmed().toStdString();
+    saveCampaign();
+    m_adventureFilter->setItemText(m_adventureFilter->currentIndex(), text.trimmed());
+}
+
+void EncounterBuilderPage::onAdventurePartyChosen()
+{
+    Adventure* adventure = chosenAdventure();
+    if (adventure == nullptr) {
+        return;
+    }
+    adventure->partyId = m_adventureParty->currentData().toString().toStdString();
+    saveCampaign();
+}
+
+void EncounterBuilderPage::onEncounterAdventureChosen()
+{
+    Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr || hasLoadError()) {
+        return;
+    }
+    encounter->adventureId = m_encounterAdventure->currentData().toString().toStdString();
+    persist();
+    // Moved out of the adventure listed: it stays selected under All.
+    const QString id = QString::fromStdString(encounter->id);
+    if (!inAdventureChoice(*encounter, m_adventureFilter->currentData().toString().toStdString())) {
+        const QSignalBlocker blocker(m_adventureFilter);
+        m_adventureFilter->setCurrentIndex(m_adventureFilter->findData(QString::fromStdString(encounter->adventureId)) >= 0
+                                               ? m_adventureFilter->findData(QString::fromStdString(encounter->adventureId))
+                                               : 0);
+        writeLastAdventure(m_stateFile, m_adventureFilter->currentData().toString());
+        fillAdventureChoices();
+        fillEncounterList(id);
+        showEncounter();
+    }
+}
+
+void EncounterBuilderPage::addParty()
+{
+    Encounter* encounter = selectedEncounter();
+    const Party* party = findParty(m_campaign, m_partyCombo->currentData().toString().toStdString());
+    if (encounter == nullptr || party == nullptr || hasLoadError()) {
+        return;
+    }
+    applyParty(*encounter, *party, m_characters, [this] { return newId(); });
+    persist();
+    showEncounter();
+}
+
+void EncounterBuilderPage::removeParty()
+{
+    Encounter* encounter = selectedEncounter();
+    if (encounter == nullptr || hasLoadError()) {
+        return;
+    }
+    removePartyRows(*encounter);
+    persist();
+    showEncounter();
 }
 
 }  // namespace combat::ui

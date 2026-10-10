@@ -8,6 +8,7 @@ if(qpdf_includes)
 endif()
 
 add_library(combat_data STATIC
+    json_campaign.cpp
     json_character_store.cpp
     json_encounters.cpp
     json_history.cpp

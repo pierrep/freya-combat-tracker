@@ -2,6 +2,7 @@
 
 #include "core/combat_rules.h"
 #include "core/monster_catalog.h"
+#include "data/json_campaign.h"
 #include "data/json_character_store.h"
 #include "data/json_encounters.h"
 #include "data/json_monsters.h"
@@ -5005,4 +5006,263 @@ TEST_CASE("the Priest's Divine Aid is a row for each spell: Healing Word heals, 
     fight = app.saved();
     CHECK_EQ(App::in(fight, "priest").concentration, std::string("bless"));
     CHECK(logHas(app, QStringLiteral("casts Bless (Divine Aid")));
+}
+
+namespace {
+
+Character member(const std::string& id, const std::string& name)
+{
+    Character character = fighter();
+    character.id = id;
+    character.name = name;
+    return character;
+}
+
+// The character rows of an encounter on disk, by sheet id.
+std::vector<std::string> sheetRows(App& app, const std::string& encounterId)
+{
+    std::vector<std::string> ids;
+    for (const Encounter& encounter : app.encounters.loadAll()) {
+        if (encounter.id != encounterId) {
+            continue;
+        }
+        for (const Combatant& combatant : encounter.combatants) {
+            if (isCharacterCombatant(combatant)) {
+                ids.push_back(combatant.sourceId);
+            }
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+void tick(App& app, const std::string& characterId, bool on)
+{
+    auto* members = app.find<QListWidget>("partyMembers");
+    for (int i = 0; i < members->count(); ++i) {
+        if (members->item(i)->data(Qt::UserRole).toString().toStdString() == characterId) {
+            members->item(i)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+        }
+    }
+    QApplication::processEvents();
+}
+
+void typeInto(App& app, const char* name, const QString& text)
+{
+    auto* field = app.find<QLineEdit>(name);
+    field->setText(text);
+    emit field->textEdited(text);
+    QApplication::processEvents();
+}
+
+void choose(App& app, const char* comboName, const QString& data)
+{
+    auto* combo = app.find<QComboBox>(comboName);
+    const int row = combo->findData(data);
+    if (row < 0) {
+        throw test::Failure(std::string("no choice ") + data.toStdString() + " in " + comboName);
+    }
+    combo->setCurrentIndex(row);
+    QApplication::processEvents();
+}
+
+}  // namespace
+
+TEST_CASE("a party made on the Characters page goes into an encounter whole, and the encounter follows it until the fight starts")
+{
+    App app;
+    app.characters.saveAll({member("a", "Aria"), member("b", "Bryn"), member("c", "Cael")});
+    Encounter ambush;
+    ambush.id = "ambush";
+    ambush.name = "Ambush";
+    ambush.started = false;
+    Encounter running = ambush;
+    running.id = "running";
+    running.name = "Running";
+    app.encounters.saveAll({ambush, running});
+    app.open();
+
+    app.window->showPage(ui::MainWindow::CharactersIndex);
+    QApplication::processEvents();
+    app.find<QPushButton>("newParty")->click();
+    QApplication::processEvents();
+    typeInto(app, "partyName", QStringLiteral("The Lanterns"));
+    tick(app, "a", true);
+    tick(app, "b", true);
+    const Campaign campaign = JsonCampaignStore(app.dir.path() / "campaign.json").load();
+    CHECK(campaign.parties.size() == 1);
+    if (campaign.parties.empty()) {
+        return;
+    }
+    const Party party = campaign.parties.front();
+    CHECK_EQ(party.name, std::string("The Lanterns"));
+    CHECK(party.characterIds == (std::vector<std::string>{"a", "b"}));
+
+    // Into both encounters, whole.
+    app.window->showPage(ui::MainWindow::EncounterBuilderIndex);
+    QApplication::processEvents();
+    for (const char* id : {"ambush", "running"}) {
+        auto* list = app.find<QListWidget>("encounterList");
+        for (int i = 0; i < list->count(); ++i) {
+            if (list->item(i)->data(Qt::UserRole).toString() == QString::fromLatin1(id)) {
+                list->setCurrentRow(i);
+            }
+        }
+        QApplication::processEvents();
+        choose(app, "partyCombo", QString::fromStdString(party.id));
+        app.find<QPushButton>("addParty")->click();
+        QApplication::processEvents();
+        CHECK(sheetRows(app, id) == (std::vector<std::string>{"a", "b"}));
+    }
+    // A guest on their own.
+    choose(app, "characterCombo", QStringLiteral("c"));
+    app.find<QPushButton>("addCharacter")->click();
+    QApplication::processEvents();
+    CHECK(sheetRows(app, "running") == (std::vector<std::string>{"a", "b", "c"}));
+    // The second fight starts.
+    std::vector<Encounter> saved = app.encounters.loadAll();
+    for (Encounter& encounter : saved) {
+        if (encounter.id == "running") {
+            encounter.started = true;
+        }
+    }
+    app.encounters.saveAll(saved);
+
+    // Bryn leaves the party: out of the one not started, still in the one under way.
+    app.window->showPage(ui::MainWindow::CharactersIndex);
+    QApplication::processEvents();
+    tick(app, "b", false);
+    CHECK(sheetRows(app, "ambush") == std::vector<std::string>{"a"});
+    CHECK(sheetRows(app, "running") == (std::vector<std::string>{"a", "b", "c"}));
+    // Cael joins: into the one not started.
+    tick(app, "c", true);
+    CHECK(sheetRows(app, "ambush") == (std::vector<std::string>{"a", "c"}));
+
+    // Taken out by hand, Aria stays out though still in the party.
+    app.window->showPage(ui::MainWindow::EncounterBuilderIndex);
+    QApplication::processEvents();
+    auto* list = app.find<QListWidget>("encounterList");
+    for (int i = 0; i < list->count(); ++i) {
+        if (list->item(i)->data(Qt::UserRole).toString() == QStringLiteral("ambush")) {
+            list->setCurrentRow(i);
+        }
+    }
+    QApplication::processEvents();
+    auto* roster = app.find<QListWidget>("encounterRoster");
+    for (int i = 0; i < roster->count(); ++i) {
+        if (roster->item(i)->text().startsWith(QStringLiteral("Aria"))) {
+            roster->setCurrentRow(i);
+        }
+    }
+    app.find<QPushButton>("removeCombatant")->click();
+    QApplication::processEvents();
+    app.window->showPage(ui::MainWindow::CharactersIndex);
+    QApplication::processEvents();
+    app.window->showPage(ui::MainWindow::EncounterBuilderIndex);
+    QApplication::processEvents();
+    CHECK(sheetRows(app, "ambush") == std::vector<std::string>{"c"});
+
+    // The party deleted: encounters keep its characters.
+    app.window->showPage(ui::MainWindow::CharactersIndex);
+    QApplication::processEvents();
+    answerNextBox(QMessageBox::Yes);
+    app.find<QPushButton>("deleteParty")->click();
+    QApplication::processEvents();
+    CHECK(JsonCampaignStore(app.dir.path() / "campaign.json").load().parties.empty());
+    CHECK(sheetRows(app, "ambush") == std::vector<std::string>{"c"});
+    for (const Encounter& encounter : app.encounters.loadAll()) {
+        CHECK(encounter.partyId.empty());
+    }
+}
+
+TEST_CASE("an adventure holds encounters: new ones start with its party, and the Dashboard lists only its own")
+{
+    App app;
+    app.characters.saveAll({member("a", "Aria"), member("b", "Bryn")});
+    Campaign campaign;
+    campaign.parties.push_back(Party{"p", "Pair", {"a", "b"}});
+    JsonCampaignStore(app.dir.path() / "campaign.json").save(campaign);
+    Encounter loose;
+    loose.id = "loose";
+    loose.name = "Loose";
+    loose.started = false;
+    app.encounters.saveAll({loose});
+    app.open();
+    // No adventures: the Dashboard has no adventure choice.
+    CHECK(app.find<QComboBox>("adventureCombo")->isHidden());
+
+    app.window->showPage(ui::MainWindow::EncounterBuilderIndex);
+    QApplication::processEvents();
+    app.find<QPushButton>("newAdventure")->click();
+    QApplication::processEvents();
+    typeInto(app, "adventureName", QStringLiteral("Lost Mine"));
+    choose(app, "adventureParty", QStringLiteral("p"));
+    Campaign stored = JsonCampaignStore(app.dir.path() / "campaign.json").load();
+    CHECK(stored.adventures.size() == 1);
+    if (stored.adventures.empty()) {
+        return;
+    }
+    const Adventure adventure = stored.adventures.front();
+    CHECK_EQ(adventure.name, std::string("Lost Mine"));
+    CHECK_EQ(adventure.partyId, std::string("p"));
+    // Its list is empty; a new encounter goes in it, with its party.
+    CHECK_EQ(app.find<QListWidget>("encounterList")->count(), 0);
+    app.find<QPushButton>("newEncounter")->click();
+    QApplication::processEvents();
+    std::string made;
+    for (const Encounter& encounter : app.encounters.loadAll()) {
+        if (encounter.id != "loose") {
+            made = encounter.id;
+            CHECK_EQ(encounter.adventureId, adventure.id);
+            CHECK_EQ(encounter.partyId, std::string("p"));
+        }
+    }
+    CHECK(!made.empty());
+    CHECK(sheetRows(app, made) == (std::vector<std::string>{"a", "b"}));
+    CHECK_EQ(app.find<QListWidget>("encounterList")->count(), 1);
+    // All encounters, and none.
+    choose(app, "builderAdventure", QString::fromLatin1(kAllAdventures));
+    CHECK_EQ(app.find<QListWidget>("encounterList")->count(), 2);
+    choose(app, "builderAdventure", QString::fromLatin1(kNoAdventure));
+    CHECK_EQ(app.find<QListWidget>("encounterList")->count(), 1);
+
+    // The Dashboard: the adventure's encounters only.
+    app.window->showPage(ui::MainWindow::DashboardIndex);
+    QApplication::processEvents();
+    auto* adventures = app.find<QComboBox>("adventureCombo");
+    CHECK(!adventures->isHidden());
+    choose(app, "adventureCombo", QString::fromStdString(adventure.id));
+    auto* encounters = app.find<QComboBox>("encounterCombo");
+    CHECK_EQ(encounters->count(), 1);
+    CHECK(encounters->currentData().toString().toStdString() == made);
+    choose(app, "adventureCombo", QString::fromLatin1(kAllAdventures));
+    CHECK_EQ(encounters->count(), 2);
+
+    // Moving the loose one into the adventure, then deleting the adventure:
+    // both encounters stay, with none.
+    app.window->showPage(ui::MainWindow::EncounterBuilderIndex);
+    QApplication::processEvents();
+    choose(app, "builderAdventure", QString::fromLatin1(kAllAdventures));
+    auto* list = app.find<QListWidget>("encounterList");
+    for (int i = 0; i < list->count(); ++i) {
+        if (list->item(i)->data(Qt::UserRole).toString() == QStringLiteral("loose")) {
+            list->setCurrentRow(i);
+        }
+    }
+    QApplication::processEvents();
+    choose(app, "encounterAdventure", QString::fromStdString(adventure.id));
+    for (const Encounter& encounter : app.encounters.loadAll()) {
+        CHECK_EQ(encounter.adventureId, adventure.id);
+    }
+    choose(app, "builderAdventure", QString::fromStdString(adventure.id));
+    CHECK_EQ(app.find<QListWidget>("encounterList")->count(), 2);
+    answerNextBox(QMessageBox::Yes);
+    app.find<QPushButton>("deleteAdventure")->click();
+    QApplication::processEvents();
+    CHECK(JsonCampaignStore(app.dir.path() / "campaign.json").load().adventures.empty());
+    const std::vector<Encounter> left = app.encounters.loadAll();
+    CHECK(left.size() == 2);
+    for (const Encounter& encounter : left) {
+        CHECK(encounter.adventureId.empty());
+    }
 }

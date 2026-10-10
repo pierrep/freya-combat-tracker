@@ -21,6 +21,10 @@ public:
     }
 
     bool isSequential() const override { return true; }
+    // Qt's PulseAudio output (6.8) rewinds its source when it stops, and the
+    // base class would warn that a stream can't seek. There is nothing to
+    // rewind: the next throw brings a new stream.
+    bool reset() override { return true; }
     bool atEnd() const override { return !m_loop && m_frame * 2 >= m_samples.size(); }
     qint64 bytesAvailable() const override
     {

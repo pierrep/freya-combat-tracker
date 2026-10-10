@@ -1,6 +1,9 @@
 #include "ui/main_window.h"
 
 #include "ui/app_paths.h"
+#include "core/campaign.h"
+#include "data/json_campaign.h"
+#include "data/json_encounters.h"
 #include "ui/characters_page.h"
 #include "ui/dice_samples.h"
 #include "ui/combat_page.h"
@@ -99,6 +102,16 @@ MainWindow::MainWindow(CharacterStore& store, MergedMonsterCatalog& catalog, Cus
     m_pages->insertWidget(MonstersIndex, m_monsters);
     m_builder = new EncounterBuilderPage(store, catalog, encounters);
     m_pages->insertWidget(EncounterBuilderIndex, m_builder);
+    // Parties and adventures live beside the encounters (a test's temporary
+    // folder, or the data folder).
+    if (const auto* file = dynamic_cast<const JsonEncounterStore*>(&encounters)) {
+        m_campaign = std::make_unique<JsonCampaignStore>(file->path().parent_path() / "campaign.json");
+    } else {
+        m_campaign = std::make_unique<MemoryCampaignStore>();
+    }
+    m_characters->setCampaign(m_campaign.get(), &encounters);
+    m_builder->setCampaign(m_campaign.get());
+    m_combat->setCampaign(m_campaign.get());
     m_options = new OptionsPage;
     m_pages->insertWidget(OptionsIndex, m_options);
     m_combat->setGroupInitiative(m_options->groupInitiative());

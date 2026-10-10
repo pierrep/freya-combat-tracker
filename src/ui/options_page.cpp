@@ -366,7 +366,8 @@ bool OptionsPage::setDataFolder(const QString& folder)
         // Bring the data along, but never replace what the folder already has.
         const QString from = QString::fromStdU16String(appDataFolder().u16string());
         if (QDir(from).absolutePath() != target) {
-            for (const char* name : {"characters.json", "custom-monsters.json", "encounters.json", "history.json"}) {
+            for (const char* name :
+                 {"characters.json", "custom-monsters.json", "encounters.json", "campaign.json", "history.json"}) {
                 const QString source = QDir(from).filePath(QString::fromLatin1(name));
                 const QString copy = QDir(target).filePath(QString::fromLatin1(name));
                 if (QFile::exists(source) && !QFile::exists(copy)) {

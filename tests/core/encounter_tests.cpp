@@ -1,7 +1,11 @@
+#include "core/campaign.h"
 #include "core/combat_rules.h"
 #include "core/encounter.h"
 #include "test_harness.h"
 
+#include <algorithm>
+#include <functional>
+#include <memory>
 #include <climits>
 #include <optional>
 #include <string>
@@ -492,4 +496,119 @@ TEST_CASE("rolling for the players adds each sheet's bonus and sorts the order")
     CHECK_EQ(fight.combatants[1].id, std::string("g"));  // untouched at 12
     CHECK_EQ(fight.combatants[1].initiative, 12);
     CHECK_EQ(fight.combatants[2].initiative, 8);  // 5 + 3
+}
+
+namespace {
+
+Character partyCharacter(const std::string& id, const std::string& name)
+{
+    Character character;
+    character.id = id;
+    character.name = name;
+    character.hp = {20, 20};
+    character.ac = 14;
+    return character;
+}
+
+std::function<std::string()> counterIds()
+{
+    auto next = std::make_shared<int>(0);
+    return [next] { return "row-" + std::to_string(++*next); };
+}
+
+std::vector<std::string> characterRows(const Encounter& encounter)
+{
+    std::vector<std::string> ids;
+    for (const Combatant& combatant : encounter.combatants) {
+        if (isCharacterCombatant(combatant)) {
+            ids.push_back(combatant.sourceId + (combatant.partyMember ? "*" : ""));
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+}  // namespace
+
+TEST_CASE("a party in an encounter not started follows its members; once started, its characters stay")
+{
+    const std::vector<Character> roster{partyCharacter("a", "Aria"), partyCharacter("b", "Bryn"),
+                                        partyCharacter("c", "Cael")};
+    Campaign campaign;
+    campaign.parties.push_back(Party{"p", "Lanterns", {"a", "b"}});
+    const auto ids = counterIds();
+    Encounter encounter;
+    encounter.id = "e";
+    encounter.started = false;
+    // Cael came on their own, a guest.
+    encounter.combatants.push_back(makeCharacterCombatant(roster[2], ids()));
+    CHECK(applyParty(encounter, campaign.parties[0], roster, ids));
+    CHECK_EQ(encounter.partyId, std::string("p"));
+    CHECK(characterRows(encounter) == (std::vector<std::string>{"a*", "b*", "c"}));
+    CHECK(!applyParty(encounter, campaign.parties[0], roster, ids));  // nothing more to do
+
+    // Bryn leaves, Cael joins: Bryn's row goes, Cael's is the party's, no second one.
+    campaign.parties[0].characterIds = {"a", "c"};
+    CHECK(syncPartyRows(encounter, campaign, roster, ids));
+    CHECK(characterRows(encounter) == (std::vector<std::string>{"a*", "c*"}));
+
+    // Aria taken out of this encounter by hand stays out.
+    encounter.partyLeftOut.push_back("a");
+    for (int i = 0; i < static_cast<int>(encounter.combatants.size()); ++i) {
+        if (encounter.combatants[static_cast<std::size_t>(i)].sourceId == "a") {
+            encounter.turnIndex = removeCombatant(encounter.combatants, i, encounter.turnIndex);
+            break;
+        }
+    }
+    CHECK(!syncPartyRows(encounter, campaign, roster, ids));
+    CHECK(characterRows(encounter) == std::vector<std::string>{"c*"});
+
+    // Started: the fight's characters stay as they are.
+    encounter.started = true;
+    campaign.parties[0].characterIds = {"b"};
+    CHECK(!syncPartyRows(encounter, campaign, roster, ids));
+    CHECK(characterRows(encounter) == std::vector<std::string>{"c*"});
+
+    // Taking the party out leaves guests; a deleted party leaves everyone, as guests.
+    Encounter other;
+    other.started = false;
+    other.combatants.push_back(makeCharacterCombatant(roster[1], ids()));  // Bryn, a guest
+    applyParty(other, Party{"q", "Pair", {"a", "c"}}, roster, ids);
+    CHECK(characterRows(other) == (std::vector<std::string>{"a*", "b", "c*"}));
+    Encounter forgotten = other;
+    removePartyRows(other);
+    CHECK(characterRows(other) == std::vector<std::string>{"b"});
+    CHECK(other.partyId.empty());
+    std::vector<Encounter> list{forgotten};
+    CHECK_EQ(forgetParty(list, "q"), 1);
+    CHECK(characterRows(list[0]) == (std::vector<std::string>{"a", "b", "c"}));
+    CHECK(list[0].partyId.empty());
+    // A party that no longer exists does nothing.
+    Encounter orphan;
+    orphan.started = false;
+    orphan.partyId = "gone";
+    CHECK(!syncPartyRows(orphan, campaign, roster, ids));
+}
+
+TEST_CASE("an adventure lists its encounters, and deleting it leaves them with none")
+{
+    Encounter a;
+    a.id = "a";
+    a.adventureId = "lost-mine";
+    Encounter b;
+    b.id = "b";
+    CHECK(inAdventureChoice(a, kAllAdventures));
+    CHECK(inAdventureChoice(b, kAllAdventures));
+    CHECK(inAdventureChoice(a, "lost-mine"));
+    CHECK(!inAdventureChoice(b, "lost-mine"));
+    CHECK(inAdventureChoice(b, kNoAdventure));
+    CHECK(!inAdventureChoice(a, kNoAdventure));
+    std::vector<Encounter> list{a, b};
+    CHECK_EQ(forgetAdventure(list, "lost-mine"), 1);
+    CHECK(list[0].adventureId.empty());
+    Campaign campaign;
+    campaign.adventures.push_back(Adventure{"lost-mine", "Lost Mine", "p"});
+    CHECK(findAdventure(campaign, "lost-mine") != nullptr);
+    CHECK(findAdventure(campaign, "") == nullptr);
+    CHECK(findParty(campaign, "p") == nullptr);
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/campaign.h"
 #include "core/sheet.h"
 
 #include <QMainWindow>
@@ -71,6 +72,8 @@ private:
     // The dice's recordings, read from soundsDirectory() at the start and
     // again when the Options page asks.
     std::shared_ptr<DiceSampleBank> m_diceSamples;
+    // The parties and adventures: campaign.json beside encounters.json.
+    std::unique_ptr<CampaignStore> m_campaign;
     void loadDiceSamples();
     bool m_reportedLoadError = false;
 };

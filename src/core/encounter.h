@@ -186,6 +186,9 @@ struct Combatant {
     // The monster's stat block when it was added. Empty for characters and for
     // fights saved before stat blocks were kept.
     std::optional<Monster> statBlock;
+    // A character who came with the encounter's party (campaign.h), rather
+    // than one added on its own.
+    bool partyMember = false;
 
     bool operator==(const Combatant&) const = default;
 };
@@ -198,6 +201,13 @@ struct Encounter {
     // False during the initiative phase, before Start combat: nobody has a
     // turn yet. Fights saved before this was kept count as started.
     bool started = true;
+    // The adventure it belongs to and the party it holds (campaign.h); empty
+    // for none.
+    std::string adventureId;
+    std::string partyId;
+    // Party members taken out of this encounter by hand: the party does not
+    // bring them back.
+    std::vector<std::string> partyLeftOut;
     std::vector<Combatant> combatants;
 
     bool operator==(const Encounter&) const = default;

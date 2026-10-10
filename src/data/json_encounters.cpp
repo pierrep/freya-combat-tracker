@@ -304,6 +304,7 @@ void readVersion3(Combatant& combatant, const json& value, const std::string& co
             throw Error(error.what());
         }
     }
+    combatant.partyMember = json_util::readBoolOr<Error>(value, "partyMember", false, context);
 }
 
 void readBookkeeping(Combatant& combatant, const json& value, const std::string& context, int schemaVersion)
@@ -478,6 +479,9 @@ json combatantToJson(const Combatant& combatant)
     if (combatant.statBlock.has_value()) {
         value["statBlock"] = json_codec::monsterToJson(*combatant.statBlock);
     }
+    if (combatant.partyMember) {
+        value["partyMember"] = true;
+    }
     return value;
 }
 
@@ -492,6 +496,11 @@ Encounter encounterFromJson(const json& value, std::size_t index, int schemaVers
     encounter.round = json_util::readInt<Error>(value, "round", context);
     encounter.turnIndex = json_util::readInt<Error>(value, "turnIndex", context);
     encounter.started = json_util::readBoolOr<Error>(value, "started", true, context);
+    encounter.adventureId = json_util::readOptionalString<Error>(value, "adventureId", context);
+    encounter.partyId = json_util::readOptionalString<Error>(value, "partyId", context);
+    if (value.contains("partyLeftOut")) {
+        encounter.partyLeftOut = json_util::readStringList<Error>(value, "partyLeftOut", context);
+    }
 
     const json& list = json_util::requireArray<Error>(value, "combatants", context);
     encounter.combatants.reserve(list.size());
@@ -508,7 +517,7 @@ json encounterToJson(const Encounter& encounter)
     for (const Combatant& combatant : encounter.combatants) {
         list.push_back(combatantToJson(combatant));
     }
-    return json{
+    json value{
         {"id", encounter.id},
         {"name", encounter.name},
         {"round", encounter.round},
@@ -516,6 +525,16 @@ json encounterToJson(const Encounter& encounter)
         {"started", encounter.started},
         {"combatants", std::move(list)},
     };
+    if (!encounter.adventureId.empty()) {
+        value["adventureId"] = encounter.adventureId;
+    }
+    if (!encounter.partyId.empty()) {
+        value["partyId"] = encounter.partyId;
+    }
+    if (!encounter.partyLeftOut.empty()) {
+        value["partyLeftOut"] = encounter.partyLeftOut;
+    }
+    return value;
 }
 
 void rejectDuplicateEncounterIds(const std::vector<Encounter>& encounters)

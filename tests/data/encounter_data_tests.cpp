@@ -1,4 +1,5 @@
 #include "core/combat_rules.h"
+#include "data/json_campaign.h"
 #include "data/json_encounters.h"
 #include "data/json_history.h"
 #include "test_harness.h"
@@ -502,4 +503,60 @@ TEST_CASE("the undo history round-trips through history.json, and a bad file loa
     CHECK(*loadHistoryFile(file) == history);
     writeFile(file, "{ not json");
     CHECK(!loadHistoryFile(file).has_value());  // malformed: no history, no error
+}
+
+TEST_CASE("parties and adventures are kept in campaign.json, and an encounter keeps its adventure and party")
+{
+    TempDir dir;
+    JsonCampaignStore store(dir.path() / "campaign.json");
+    CHECK(store.load() == Campaign{});  // no file yet: none of either
+    Campaign campaign;
+    campaign.parties.push_back(Party{"p1", "The Lanterns", {"a", "b"}});
+    campaign.parties.push_back(Party{"p2", "Empty", {}});
+    campaign.adventures.push_back(Adventure{"adv1", "Lost Mine", "p1"});
+    campaign.adventures.push_back(Adventure{"adv2", "Tomb", ""});
+    store.save(campaign);
+    CHECK(store.load() == campaign);
+    CHECK(JsonCampaignStore(dir.path() / "campaign.json").load() == campaign);
+    // Two with one id are refused, and a broken file is left as it is.
+    Campaign twice = campaign;
+    twice.adventures.push_back(Adventure{"p1", "Clash", ""});
+    CHECK_THROWS(CampaignStoreError, store.save(twice));
+    writeFile(dir.path() / "broken.json", "{ not json");
+    CHECK_THROWS(CampaignStoreError, JsonCampaignStore(dir.path() / "broken.json").load());
+    writeFile(dir.path() / "future.json", R"({"schemaVersion": 99})");
+    CHECK_THROWS(CampaignStoreError, JsonCampaignStore(dir.path() / "future.json").load());
+
+    // The encounter side.
+    Encounter encounter;
+    encounter.id = "e1";
+    encounter.name = "Ambush";
+    encounter.started = false;
+    encounter.adventureId = "adv1";
+    encounter.partyId = "p1";
+    encounter.partyLeftOut = {"b"};
+    Combatant aria;
+    aria.id = "row-1";
+    aria.source = kCombatantSourceCharacter;
+    aria.sourceId = "a";
+    aria.name = "Aria";
+    aria.hp = 10;
+    aria.maxHp = 10;
+    aria.partyMember = true;
+    encounter.combatants.push_back(aria);
+    const std::vector<Encounter> back = parseEncountersDocument(serializeEncountersDocument({encounter}));
+    CHECK(back.size() == 1);
+    if (!back.empty()) {
+        CHECK(back[0] == encounter);
+    }
+    // One saved before: no adventure, no party, nobody a party's.
+    Encounter old = encounter;
+    old.adventureId.clear();
+    old.partyId.clear();
+    old.partyLeftOut.clear();
+    old.combatants[0].partyMember = false;
+    const std::string text = serializeEncountersDocument({old});
+    CHECK(text.find("adventureId") == std::string::npos);
+    CHECK(text.find("partyMember") == std::string::npos);
+    CHECK(parseEncountersDocument(text).at(0) == old);
 }

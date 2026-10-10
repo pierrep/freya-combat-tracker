@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/campaign.h"
 #include "core/character.h"
 #include "core/combat_rules.h"
 #include "core/encounter.h"
@@ -115,6 +116,10 @@ public:
     void setShowDice(bool on) { m_showDice = on; }
     // The dice's sound: on, volume 0 to 100, and "wood" or "felt".
     void setDiceSound(bool on, int volume, const QString& surface);
+    // The parties and adventures (kept by the caller): the adventure chosen
+    // here picks which encounters the dropdown lists, and an encounter that
+    // has not started follows its party.
+    void setCampaign(CampaignStore* campaign);
     // Recordings for the dice to play (null: silent). Kept by the caller.
     void setDiceSamples(const DiceSampleBank* samples);
     // Redraws what was drawn in the old colours after a switch to or from dark mode.
@@ -175,6 +180,13 @@ private:
     };
 
     void reloadEncounters();
+    // The encounter dropdown, from the adventure chosen: this one selected
+    // when it is there, else the first.
+    void fillEncounterCombo(const QString& selectedId);
+    void fillAdventureCombo();
+    void onAdventureChosen();
+    // The shown encounter's index in m_encounters, or -1.
+    int currentEncounterIndex() const;
     void reloadCharacters();
     bool syncSnapshots();
     void showEncounter();
@@ -386,6 +398,7 @@ private:
     std::vector<Condition> m_conditions;
     QString m_loadError;
     std::mt19937 m_dice;
+    std::mt19937_64 m_ids{std::random_device{}()};  // new rows' ids
 
     bool m_populating = false;
     bool m_reportedLoadError = false;
@@ -406,6 +419,9 @@ private:
     QTimer* m_saveTimer = nullptr;
 
     QComboBox* m_encounterCombo = nullptr;
+    QComboBox* m_adventureCombo = nullptr;
+    CampaignStore* m_campaignStore = nullptr;
+    Campaign m_campaign;
     QWidget* m_fight = nullptr;
     QLabel* m_emptyHint = nullptr;
     QLabel* m_roundLabel = nullptr;

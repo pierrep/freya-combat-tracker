@@ -5,6 +5,7 @@
 #include "core/spell_rules.h"
 #include "core/encounter_store.h"
 #include "core/monster_catalog.h"
+#include "core/uuid.h"
 #include "data/json_history.h"
 #include "ui/flow_layout.h"
 #include "ui/page_title.h"
@@ -1047,6 +1048,13 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
     header->setObjectName(QStringLiteral("pageHeader"));
     header->addWidget(makePageTitle(tr("Dashboard")));
     header->addSpacing(12);
+    // Which adventure's encounters the dropdown lists (hidden with none).
+    m_adventureCombo = new QComboBox;
+    m_adventureCombo->setObjectName(QStringLiteral("adventureCombo"));
+    m_adventureCombo->setMinimumWidth(160);
+    m_adventureCombo->setToolTip(tr("Show the encounters of one adventure."));
+    m_adventureCombo->hide();
+    header->addWidget(m_adventureCombo);
     m_encounterCombo = new QComboBox;
     m_encounterCombo->setObjectName(QStringLiteral("encounterCombo"));
     m_encounterCombo->setMinimumWidth(220);
@@ -1814,6 +1822,7 @@ CombatPage::CombatPage(CharacterStore& characters, MonsterCatalog& catalog, Enco
         m_invisibleCause->setVisible(m_conditionPicker->currentData().toString() == QStringLiteral("invisible"));
     });
     connect(m_encounterCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &CombatPage::showEncounter);
+    connect(m_adventureCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &CombatPage::onAdventureChosen);
     connect(m_spellMatches, &QListWidget::itemDoubleClicked, this, [this] { setSelectedConcentration(); });
     connect(m_initiativeList, &QTreeWidget::itemClicked, this, &CombatPage::onTargetClicked);
     // Ctrl-click or Shift-click selects several creatures (for Damage and
@@ -2185,28 +2194,23 @@ void CombatPage::reloadEncounters()
         m_undo.clear();
     }
     m_encounters = std::move(loaded);
-    if (syncSnapshots()) {
+    bool changed = syncSnapshots();
+    if (m_campaignStore != nullptr) {
+        try {
+            m_campaign = m_campaignStore->load();
+        } catch (const CampaignStoreError&) {
+            // The Characters page and Encounter Builder report it.
+        }
+        // An encounter not started yet follows its party.
+        changed = syncPartyRows(m_encounters, m_campaign, m_characters,
+                                [this] { return generateUuidV4([this] { return m_ids(); }); }) ||
+                  changed;
+    }
+    if (changed) {
         persistEncounters();
     }
-    int select = -1;
-    {
-        const QSignalBlocker blocker(m_encounterCombo);
-        m_encounterCombo->clear();
-        for (int i = 0; i < static_cast<int>(m_encounters.size()); ++i) {
-            const Encounter& encounter = m_encounters[static_cast<std::size_t>(i)];
-            const QString id = QString::fromStdString(encounter.id);
-            m_encounterCombo->addItem(QString::fromStdString(encounter.name), id);
-            if (!selectedId.isEmpty() && id == selectedId) {
-                select = i;
-            }
-        }
-        if (select < 0 && !m_encounters.empty()) {
-            select = 0;
-        }
-        if (select >= 0) {
-            m_encounterCombo->setCurrentIndex(select);
-        }
-    }
+    fillAdventureCombo();
+    fillEncounterCombo(selectedId);
     showEncounter();
     if (backToEntry) {
         showInitiativeEntry();
@@ -2300,8 +2304,8 @@ void CombatPage::carryToSheet(const Combatant& combatant)
 CombatPage::PageUndo CombatPage::capture() const
 {
     PageUndo undo;
-    const int row = m_encounterCombo->currentIndex();
-    if (row >= 0 && row < static_cast<int>(m_encounters.size())) {
+    const int row = currentEncounterIndex();
+    if (row >= 0) {
         undo.encounter = m_encounters[static_cast<std::size_t>(row)];
         undo.encounterId = undo.encounter.id;
     }
@@ -2390,7 +2394,12 @@ void CombatPage::undoLastChange()
     }
     persistEncounters();
     m_undoButton->setEnabled(!m_undo.empty());
-    const int row = m_encounterCombo->findData(QString::fromStdString(undo.encounterId));
+    int row = m_encounterCombo->findData(QString::fromStdString(undo.encounterId));
+    if (row < 0 && !undo.encounterId.empty() && m_adventureCombo->currentIndex() != 0) {
+        // Undoing in an encounter another adventure holds: all of them, then.
+        m_adventureCombo->setCurrentIndex(0);
+        row = m_encounterCombo->findData(QString::fromStdString(undo.encounterId));
+    }
     if (row >= 0 && row != m_encounterCombo->currentIndex()) {
         m_encounterCombo->setCurrentIndex(row);
     }
@@ -2556,14 +2565,91 @@ void CombatPage::rollTray()
 
 Encounter* CombatPage::selectedEncounter()
 {
+    const int row = currentEncounterIndex();
+    return row < 0 ? nullptr : &m_encounters[static_cast<std::size_t>(row)];
+}
+
+int CombatPage::currentEncounterIndex() const
+{
     if (m_encounterCombo == nullptr) {
-        return nullptr;
+        return -1;
     }
-    const int row = m_encounterCombo->currentIndex();
-    if (row < 0 || row >= static_cast<int>(m_encounters.size())) {
-        return nullptr;
+    const std::string id = m_encounterCombo->currentData().toString().toStdString();
+    if (id.empty()) {
+        return -1;
     }
-    return &m_encounters[static_cast<std::size_t>(row)];
+    for (int i = 0; i < static_cast<int>(m_encounters.size()); ++i) {
+        if (m_encounters[static_cast<std::size_t>(i)].id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void CombatPage::setCampaign(CampaignStore* campaign)
+{
+    m_campaignStore = campaign;
+    if (!hasLoadError()) {
+        reloadEncounters();
+    }
+}
+
+void CombatPage::fillAdventureCombo()
+{
+    if (m_adventureCombo == nullptr) {
+        return;
+    }
+    QString choice = m_adventureCombo->count() > 0 ? m_adventureCombo->currentData().toString()
+                                                   : readLastAdventure(m_stateFile);
+    const QSignalBlocker blocker(m_adventureCombo);
+    m_adventureCombo->clear();
+    m_adventureCombo->addItem(tr("All encounters"), QString::fromLatin1(kAllAdventures));
+    for (const Adventure& adventure : m_campaign.adventures) {
+        m_adventureCombo->addItem(QString::fromStdString(adventure.name), QString::fromStdString(adventure.id));
+    }
+    const bool loose = std::any_of(m_encounters.begin(), m_encounters.end(),
+                                   [](const Encounter& encounter) { return encounter.adventureId.empty(); });
+    if (loose && !m_campaign.adventures.empty()) {
+        m_adventureCombo->addItem(tr("No adventure"), QString::fromLatin1(kNoAdventure));
+    }
+    const int row = m_adventureCombo->findData(choice);
+    m_adventureCombo->setCurrentIndex(row >= 0 ? row : 0);
+    m_adventureCombo->setVisible(!m_campaign.adventures.empty());
+}
+
+void CombatPage::fillEncounterCombo(const QString& selectedId)
+{
+    // With no adventures the choice is hidden, and every encounter is listed.
+    const std::string choice = m_campaign.adventures.empty() || m_adventureCombo == nullptr
+                                   ? std::string(kAllAdventures)
+                                   : m_adventureCombo->currentData().toString().toStdString();
+    const QSignalBlocker blocker(m_encounterCombo);
+    m_encounterCombo->clear();
+    int select = -1;
+    for (const Encounter& encounter : m_encounters) {
+        if (!inAdventureChoice(encounter, choice)) {
+            continue;
+        }
+        const QString id = QString::fromStdString(encounter.id);
+        m_encounterCombo->addItem(QString::fromStdString(encounter.name), id);
+        if (!selectedId.isEmpty() && id == selectedId) {
+            select = m_encounterCombo->count() - 1;
+        }
+    }
+    if (select < 0 && m_encounterCombo->count() > 0) {
+        select = 0;
+    }
+    if (select >= 0) {
+        m_encounterCombo->setCurrentIndex(select);
+    }
+}
+
+void CombatPage::onAdventureChosen()
+{
+    flushPendingSave();
+    writeLastAdventure(m_stateFile, m_adventureCombo->currentData().toString());
+    fillEncounterCombo(m_encounterCombo->currentData().toString());
+    showEncounter();
 }
 
 Combatant* CombatPage::combatantById(const std::string& id)
@@ -2642,10 +2728,8 @@ QString CombatPage::conditionName(const std::string& id) const
 
 void CombatPage::addLog(const QString& line)
 {
-    const Encounter* encounter =
-        m_encounterCombo->currentIndex() >= 0 && m_encounterCombo->currentIndex() < static_cast<int>(m_encounters.size())
-            ? &m_encounters[static_cast<std::size_t>(m_encounterCombo->currentIndex())]
-            : nullptr;
+    const int index = currentEncounterIndex();
+    const Encounter* encounter = index >= 0 ? &m_encounters[static_cast<std::size_t>(index)] : nullptr;
     const QString stamped = encounter == nullptr ? line : tr("R%1  %2").arg(encounter->round).arg(line);
     m_log.prepend(stamped);
     while (m_log.size() > kLogLimit) {
@@ -2666,7 +2750,15 @@ void CombatPage::showLog()
 void CombatPage::setStateFile(const QString& path)
 {
     m_stateFile = path;
-    const int row = m_encounterCombo->findData(readLastEncounter(path));
+    const QString lastEncounter = readLastEncounter(path);
+    if (const int adventure = m_adventureCombo->findData(readLastAdventure(path));
+        adventure >= 0 && adventure != m_adventureCombo->currentIndex()) {
+        const QSignalBlocker blocker(m_adventureCombo);
+        m_adventureCombo->setCurrentIndex(adventure);
+        fillEncounterCombo(lastEncounter);
+        showEncounter();
+    }
+    const int row = m_encounterCombo->findData(lastEncounter);
     if (row >= 0 && row != m_encounterCombo->currentIndex()) {
         m_encounterCombo->setCurrentIndex(row);  // shows it
     }

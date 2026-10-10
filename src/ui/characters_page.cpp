@@ -1,6 +1,7 @@
 #include "ui/characters_page.h"
 
 #include "core/character_store.h"
+#include "core/encounter_store.h"
 #include "core/combat_rules.h"
 #include "core/uuid.h"
 #include "data/pdf_import.h"
@@ -176,17 +177,62 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
     columns->setSpacing(14);
     outer->addLayout(columns, 1);
 
-    // Left: the party.
+    // Left: the characters, and the parties they make up.
+    auto* leftColumn = new QVBoxLayout;
+    leftColumn->setContentsMargins(0, 0, 0, 0);
+    leftColumn->setSpacing(14);
     auto* listCard = makeCard();
     listCard->setFixedWidth(260);
     listCard->layout()->setContentsMargins(8, 12, 8, 8);
-    auto* listHeading = makeHeading(tr("Party"));
+    auto* listHeading = makeHeading(tr("Characters"));
     listHeading->setContentsMargins(8, 0, 0, 0);
     listCard->layout()->addWidget(listHeading);
     m_list = new QListWidget;
     m_list->setObjectName(QStringLiteral("characterList"));
     listCard->layout()->addWidget(m_list);
-    columns->addWidget(listCard);
+    leftColumn->addWidget(listCard, 3);
+
+    m_partyCard = makeCard();
+    m_partyCard->setObjectName(QStringLiteral("partyCard"));
+    m_partyCard->setFixedWidth(260);
+    auto* partyLayout = static_cast<QVBoxLayout*>(m_partyCard->layout());
+    partyLayout->setContentsMargins(16, 12, 16, 12);
+    partyLayout->setSpacing(8);
+    auto* partyHeader = new QHBoxLayout;
+    partyHeader->addWidget(makeHeading(tr("Parties")));
+    partyHeader->addStretch(1);
+    m_newPartyButton = new QPushButton(tr("New"));
+    m_newPartyButton->setObjectName(QStringLiteral("newParty"));
+    m_newPartyButton->setToolTip(tr("Make a party. Adding it to an encounter adds every member."));
+    makeQuiet(m_newPartyButton);
+    partyHeader->addWidget(m_newPartyButton);
+    partyLayout->addLayout(partyHeader);
+    m_partyChoice = new QComboBox;
+    m_partyChoice->setObjectName(QStringLiteral("partyChoice"));
+    partyLayout->addWidget(m_partyChoice);
+    auto* partyNameRow = new QHBoxLayout;
+    partyNameRow->setSpacing(6);
+    m_partyName = new QLineEdit;
+    m_partyName->setObjectName(QStringLiteral("partyName"));
+    m_partyName->setPlaceholderText(tr("Party name"));
+    m_deletePartyButton = new QPushButton(tr("Delete"));
+    m_deletePartyButton->setObjectName(QStringLiteral("deleteParty"));
+    m_deletePartyButton->setToolTip(tr("Delete the party. Encounters keep its characters."));
+    makeQuiet(m_deletePartyButton);
+    partyNameRow->addWidget(m_partyName, 1);
+    partyNameRow->addWidget(m_deletePartyButton);
+    partyLayout->addLayout(partyNameRow);
+    m_partyMembers = new QListWidget;
+    m_partyMembers->setObjectName(QStringLiteral("partyMembers"));
+    m_partyMembers->setToolTip(tr("Tick who is in the party."));
+    partyLayout->addWidget(m_partyMembers, 1);
+    m_partyHint = makeMuted(QString());
+    m_partyHint->setObjectName(QStringLiteral("partyHint"));
+    m_partyHint->setWordWrap(true);
+    partyLayout->addWidget(m_partyHint);
+    leftColumn->addWidget(m_partyCard, 2);
+    m_partyCard->hide();  // until there is somewhere to keep parties
+    columns->addLayout(leftColumn);
 
     // Right: the selected sheet. Name and rests stay put; the tabs hold the rest.
     m_form = makeCard();
@@ -547,6 +593,13 @@ CharactersPage::CharactersPage(CharacterStore& store, std::vector<Spell> spells,
 
     connect(m_list, &QListWidget::currentRowChanged, this, &CharactersPage::showSelected);
     connect(m_addButton, &QPushButton::clicked, this, &CharactersPage::addCharacter);
+    connect(m_newPartyButton, &QPushButton::clicked, this, &CharactersPage::addParty);
+    connect(m_deletePartyButton, &QPushButton::clicked, this, &CharactersPage::deleteParty);
+    connect(m_partyName, &QLineEdit::textEdited, this, &CharactersPage::onPartyNameEdited);
+    connect(m_partyChoice, qOverload<int>(&QComboBox::currentIndexChanged), this, &CharactersPage::showPartyMembers);
+    connect(m_partyMembers, &QListWidget::itemChanged, this, &CharactersPage::onPartyMemberToggled);
+    // Who can be ticked follows the roster.
+    connect(this, &CharactersPage::countChanged, this, &CharactersPage::showPartyMembers);
     connect(m_importButton, &QPushButton::clicked, this, &CharactersPage::importPdf);
     connect(m_deleteButton, &QPushButton::clicked, this, &CharactersPage::deleteSelected);
     connect(m_name, &QLineEdit::textEdited, this, &CharactersPage::onNameEdited);
@@ -658,6 +711,7 @@ void CharactersPage::reloadRoster()
     if (count() != previousCount) {
         emit countChanged(count());
     }
+    refreshParties();
 }
 
 QSpinBox* CharactersPage::makeNumberBox(int minimum, int maximum)
@@ -810,9 +864,18 @@ void CharactersPage::deleteSelected()
     }
 
     const int row = m_list->currentRow();
+    const std::string gone = character->id;
     m_characters.erase(m_characters.begin() + row);
     delete m_list->takeItem(row);
     persist();
+    // Out of every party too.
+    bool inParty = false;
+    for (Party& party : m_campaign.parties) {
+        inParty = std::erase(party.characterIds, gone) > 0 || inParty;
+    }
+    if (inParty) {
+        saveParties();
+    }
     emit countChanged(count());
     showSelected();
 }
@@ -893,6 +956,7 @@ void CharactersPage::onNameEdited(const QString& text)
     character->name = text.toStdString();
     m_list->currentItem()->setText(listLabel(*character));
     persist();
+    showPartyMembers();
 }
 
 void CharactersPage::onNameEditingFinished()
@@ -1686,6 +1750,197 @@ void CharactersPage::hideEvent(QHideEvent* event)
 {
     flushPendingSave();
     QWidget::hideEvent(event);
+}
+
+namespace {
+
+QString memberNote(int members)
+{
+    const QString count = members == 1 ? QObject::tr("1 member.") : QObject::tr("%1 members.").arg(members);
+    return count + QObject::tr(" Encounters that hold the party follow it until their fight starts.");
+}
+
+}  // namespace
+
+void CharactersPage::setCampaign(CampaignStore* campaign, EncounterStore* encounters)
+{
+    m_campaignStore = campaign;
+    m_encounterStore = encounters;
+    m_partyCard->setVisible(m_campaignStore != nullptr && !hasLoadError());
+    refreshParties();
+}
+
+Party* CharactersPage::chosenParty()
+{
+    return findParty(m_campaign, m_partyChoice->currentData().toString().toStdString());
+}
+
+void CharactersPage::refreshParties()
+{
+    if (m_campaignStore == nullptr || m_partyChoice == nullptr) {
+        return;
+    }
+    try {
+        m_campaign = m_campaignStore->load();
+    } catch (const CampaignStoreError& error) {
+        m_partyHint->setText(tr("The parties file could not be read, so it has not been changed.\n%1")
+                                 .arg(QString::fromStdString(error.what())));
+        m_partyCard->setEnabled(false);
+        return;
+    }
+    const QString previous = m_partyChoice->currentData().toString();
+    {
+        const QSignalBlocker blocker(m_partyChoice);
+        m_partyChoice->clear();
+        for (const Party& party : m_campaign.parties) {
+            m_partyChoice->addItem(QString::fromStdString(party.name), QString::fromStdString(party.id));
+        }
+        const int row = m_partyChoice->findData(previous);
+        m_partyChoice->setCurrentIndex(row >= 0 ? row : 0);
+    }
+    showPartyMembers();
+}
+
+void CharactersPage::showPartyMembers()
+{
+    if (m_partyMembers == nullptr) {
+        return;
+    }
+    const Party* party = chosenParty();
+    m_partyName->setVisible(party != nullptr);
+    m_deletePartyButton->setVisible(party != nullptr);
+    m_partyChoice->setVisible(!m_campaign.parties.empty());
+    const QSignalBlocker nameBlocker(m_partyName);
+    if (party != nullptr && m_partyName->text() != QString::fromStdString(party->name)) {
+        m_partyName->setText(QString::fromStdString(party->name));
+    }
+    const QSignalBlocker blocker(m_partyMembers);
+    m_partyMembers->clear();
+    m_partyMembers->setVisible(party != nullptr && !m_characters.empty());
+    if (party == nullptr) {
+        m_partyHint->setText(m_campaign.parties.empty()
+                                 ? tr("No parties yet. New makes one; tick its members, then add the whole party to "
+                                      "an encounter in Encounter Builder.")
+                                 : QString());
+        return;
+    }
+    for (const Character& character : m_characters) {
+        auto* item = new QListWidgetItem(QString::fromStdString(character.name));
+        item->setData(Qt::UserRole, QString::fromStdString(character.id));
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        const bool member = std::find(party->characterIds.begin(), party->characterIds.end(), character.id) !=
+                            party->characterIds.end();
+        item->setCheckState(member ? Qt::Checked : Qt::Unchecked);
+        m_partyMembers->addItem(item);
+    }
+    m_partyHint->setText(m_characters.empty()
+                             ? tr("Make characters first, then tick who is in the party.")
+                             : memberNote(static_cast<int>(party->characterIds.size())));
+}
+
+void CharactersPage::addParty()
+{
+    Party party;
+    party.id = generateUuidV4([this] { return m_rng(); });
+    party.name = tr("New party").toStdString();
+    m_campaign.parties.push_back(party);
+    saveParties();
+    {
+        const QSignalBlocker blocker(m_partyChoice);
+        m_partyChoice->addItem(QString::fromStdString(party.name), QString::fromStdString(party.id));
+        m_partyChoice->setCurrentIndex(m_partyChoice->count() - 1);
+    }
+    showPartyMembers();
+    m_partyName->setFocus();
+    m_partyName->selectAll();
+}
+
+void CharactersPage::deleteParty()
+{
+    const Party* party = chosenParty();
+    if (party == nullptr) {
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this, tr("Delete party"),
+        tr("Delete %1? Encounters that hold it keep its characters.").arg(QString::fromStdString(party->name)));
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    const std::string id = party->id;
+    std::erase_if(m_campaign.parties, [&id](const Party& candidate) { return candidate.id == id; });
+    for (Adventure& adventure : m_campaign.adventures) {
+        if (adventure.partyId == id) {
+            adventure.partyId.clear();
+        }
+    }
+    if (m_encounterStore != nullptr) {
+        try {
+            std::vector<Encounter> encounters = m_encounterStore->loadAll();
+            if (forgetParty(encounters, id) > 0) {
+                m_encounterStore->saveAll(encounters);
+            }
+        } catch (const EncounterStoreError& error) {
+            QMessageBox::warning(this, tr("Could not update encounters"), QString::fromStdString(error.what()));
+        }
+    }
+    saveParties();
+    refreshParties();
+}
+
+void CharactersPage::onPartyNameEdited(const QString& text)
+{
+    Party* party = chosenParty();
+    if (party == nullptr || isBlank(text)) {
+        return;
+    }
+    party->name = text.trimmed().toStdString();
+    m_partyChoice->setItemText(m_partyChoice->currentIndex(), text.trimmed());
+    saveParties();
+}
+
+void CharactersPage::onPartyMemberToggled()
+{
+    Party* party = chosenParty();
+    if (party == nullptr) {
+        return;
+    }
+    // In the roster's order.
+    party->characterIds.clear();
+    for (int i = 0; i < m_partyMembers->count(); ++i) {
+        const QListWidgetItem* item = m_partyMembers->item(i);
+        if (item->checkState() == Qt::Checked) {
+            party->characterIds.push_back(item->data(Qt::UserRole).toString().toStdString());
+        }
+    }
+    saveParties();
+    m_partyHint->setText(memberNote(static_cast<int>(party->characterIds.size())));
+}
+
+void CharactersPage::saveParties()
+{
+    if (m_campaignStore == nullptr) {
+        return;
+    }
+    try {
+        m_campaignStore->save(m_campaign);
+    } catch (const CampaignStoreError& error) {
+        QMessageBox::warning(this, tr("Could not save parties"), QString::fromStdString(error.what()));
+        return;
+    }
+    if (m_encounterStore == nullptr) {
+        return;
+    }
+    // Encounters holding a party, not started yet, follow it.
+    try {
+        std::vector<Encounter> encounters = m_encounterStore->loadAll();
+        if (syncPartyRows(encounters, m_campaign, m_characters,
+                          [this] { return generateUuidV4([this] { return m_rng(); }); })) {
+            m_encounterStore->saveAll(encounters);
+        }
+    } catch (const EncounterStoreError& error) {
+        QMessageBox::warning(this, tr("Could not update encounters"), QString::fromStdString(error.what()));
+    }
 }
 
 }  // namespace combat::ui
