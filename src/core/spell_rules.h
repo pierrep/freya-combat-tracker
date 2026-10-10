@@ -2,6 +2,7 @@
 
 #include "core/encounter.h"
 #include "core/monster.h"
+#include "core/sheet.h"
 
 #include <optional>
 #include <string>
@@ -29,6 +30,25 @@ std::optional<MonsterAttack> spellAsAttack(const std::string& name, int slotLeve
 // gives a condition to the user, is left as it is.
 std::vector<MonsterAttack> actionableSpells(const Monster& monster, const MonsterAttack& action);
 std::vector<MonsterAttack> actionableSpells(const Monster& monster, const MonsterFeature& feature);
+// Every spell a bonus action, reaction or legendary action can cast ("casts
+// Counterspell or Shield"), in the order named: the combat spells above, the
+// ones with their own rule here (Shield's +5 AC, Counterspell's save, Cure
+// Wounds and Healing Word's healing), and every other spell in the catalog as
+// one that is only cast (castOnly). An empty catalog gives the combat spells.
+std::vector<MonsterAttack> actionableSpells(const Monster& monster, const MonsterFeature& feature,
+                                            const std::vector<Spell>& catalog);
+
+// The Shield a creature's reaction can cast, from its stat block: the feature
+// and the spell as built above. Nothing when no reaction casts Shield.
+struct ShieldReaction {
+    MonsterFeature feature;
+    MonsterAttack spell;
+};
+std::optional<ShieldReaction> shieldReactionOf(const Monster& monster, const std::vector<Spell>& catalog);
+// How much AC Shield adds, and the timed effect it is kept as.
+inline constexpr int kShieldAcBonus = 5;
+// Under Shield now (its +5 AC is on the creature): Magic Missile does nothing.
+bool hasShieldUp(const Combatant& combatant);
 
 SpellStrike resolveSpellStrike(const MonsterAttack& attack, int currentHp);
 

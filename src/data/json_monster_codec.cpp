@@ -407,6 +407,9 @@ void readAttackFields(const json& value, MonsterAttack& attack, const std::strin
     attack.repeatSameTarget = json_util::readBoolOr<Error>(value, "repeatSameTarget", false, attackContext);
     attack.concentration = json_util::readOptionalString<Error>(value, "concentration", attackContext);
     attack.repeatSave = readSave(value, "repeatSave", attackContext);
+    attack.castOnly = json_util::readBoolOr<Error>(value, "castOnly", false, attackContext);
+    attack.failureOutcome = json_util::readOptionalString<Error>(value, "failureOutcome", attackContext);
+    attack.successOutcome = json_util::readOptionalString<Error>(value, "successOutcome", attackContext);
 }
 
 void writeAttackFields(json& row, const MonsterAttack& attack)
@@ -501,6 +504,15 @@ void writeAttackFields(json& row, const MonsterAttack& attack)
     }
     if (attack.allowSelf) {
         row["allowSelf"] = true;
+    }
+    if (attack.castOnly) {
+        row["castOnly"] = true;
+    }
+    if (!attack.failureOutcome.empty()) {
+        row["failureOutcome"] = attack.failureOutcome;
+    }
+    if (!attack.successOutcome.empty()) {
+        row["successOutcome"] = attack.successOutcome;
     }
     if (attack.selfOnly) {
         row["selfOnly"] = true;

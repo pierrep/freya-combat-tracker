@@ -4099,7 +4099,7 @@ TEST_CASE("a sustained spell's later uses are buttons while it concentrates, and
     QPushButton* aura = nullptr;
     for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
         if (label->isVisible() && label->text() == QStringLiteral("Spirit Guardians (in the aura)")) {
-            for (QPushButton* candidate : label->parentWidget()->parentWidget()->findChildren<QPushButton*>()) {
+            for (QPushButton* candidate : label->parentWidget()->findChildren<QPushButton*>()) {
                 if (candidate->isVisible() && candidate->objectName() == QStringLiteral("featureTarget")) {
                     aura = candidate;
                 }
@@ -4735,4 +4735,275 @@ TEST_CASE("the Options page says what recordings there are, and plays the test t
         emit page.reloadSamplesRequested();  // a build without sound: the button is off
     }
     CHECK(asked);
+}
+
+namespace {
+
+// The visible button on the action row titled so ("Shield", "Arcane Burst").
+QPushButton* buttonStarting(App& app, const QString& titleStart)
+{
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("actionTitle"))) {
+        if (!label->isVisible() || !label->text().startsWith(titleStart)) {
+            continue;
+        }
+        for (QPushButton* candidate : label->parentWidget()->findChildren<QPushButton*>()) {
+            if (candidate->isVisible()) {
+                return candidate;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool logHas(App& app, const QString& text)
+{
+    auto* log = app.find<QListWidget>("fightLog");
+    for (int i = 0; i < log->count(); ++i) {
+        if (log->item(i)->text().contains(text)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The open question about Shield, if one is showing.
+QLabel* shieldQuestion(App& app)
+{
+    for (QLabel* label : app.window->findChildren<QLabel*>(QStringLiteral("promptText"))) {
+        if (label->isVisible() && label->text().contains(QStringLiteral("cast Shield"))) {
+            return label;
+        }
+    }
+    return nullptr;
+}
+
+Encounter mageFight(App& app, bool twoMages)
+{
+    Character aria = fighter();
+    aria.hp = {400, 400};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Tower";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "mage"), "mage"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    if (twoMages) {
+        encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "mage"), "rival"));
+        encounter.combatants[2].initiative = 30;
+        encounter.combatants[2].name = "Rival";
+        encounter.turnIndex = 2;  // the rival's turn
+    }
+    encounter.combatants[0].initiative = 5;
+    encounter.combatants[1].initiative = 20;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    return encounter;
+}
+
+}  // namespace
+
+TEST_CASE("a mage's Protective Magic is a row for Counterspell and one for Shield, sharing its uses")
+{
+    App app;
+    const Encounter start = mageFight(app, false);
+    app.select("mage");
+    QPushButton* counterspell = buttonStarting(app, QStringLiteral("Counterspell"));
+    QPushButton* shield = buttonStarting(app, QStringLiteral("Shield"));
+    QPushButton* misty = buttonStarting(app, QStringLiteral("Misty Step"));
+    CHECK(counterspell != nullptr && shield != nullptr && misty != nullptr);
+    if (counterspell == nullptr || shield == nullptr || misty == nullptr) {
+        return;
+    }
+    CHECK(counterspell->text() == QStringLiteral("Target…"));
+    CHECK(shield->text() == QStringLiteral("Cast"));
+    CHECK(misty->text() == QStringLiteral("Cast"));  // one spell: the ability's own row
+
+    // Shield on its own (against Magic Missile, say): +5 AC, a use and the reaction gone.
+    shield->click();
+    QApplication::processEvents();
+    Encounter fight = app.saved();
+    const int baseAc = App::in(start, "mage").ac;
+    CHECK_EQ(App::in(fight, "mage").ac, baseAc + 5);
+    CHECK(App::in(fight, "mage").economy.reactionUsed);
+    CHECK_EQ(App::in(fight, "mage").usesRemaining.at("Protective Magic (3/Day)"), 2);
+    // Counterspell now has no reaction to use.
+    app.select("mage");
+    CHECK(!buttonStarting(app, QStringLiteral("Counterspell"))->isEnabled());
+    // Misty Step, a bonus action, is cast and logged.
+    buttonStarting(app, QStringLiteral("Misty Step"))->click();
+    QApplication::processEvents();
+    CHECK(App::in(app.saved(), "mage").economy.bonusActionUsed);
+
+    // The Shield's AC lasts until the start of the mage's next turn (it is
+    // the mage's turn now: through Aria's, then gone).
+    app.find<QPushButton>("nextTurn")->click();  // mage -> aria
+    QApplication::processEvents();
+    CHECK_EQ(App::in(app.saved(), "mage").ac, baseAc + 5);
+    app.find<QPushButton>("nextTurn")->click();  // aria -> mage
+    QApplication::processEvents();
+    CHECK_EQ(App::in(app.saved(), "mage").ac, baseAc);
+}
+
+TEST_CASE("Counterspell makes the caster save against the mage's DC, and says what a failure means")
+{
+    App app;
+    mageFight(app, false);
+    app.select("mage");
+    buttonStarting(app, QStringLiteral("Counterspell"))->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    auto* text = app.find<QLabel>("promptText");
+    CHECK(text->text().contains(QStringLiteral("DC 14 Constitution")));
+    CHECK(text->text().contains(QStringLiteral("dissipates")));
+    app.answer("promptFailed");
+    CHECK(logHas(app, QStringLiteral("its spell dissipates")));
+    const Encounter fight = app.saved();
+    CHECK(App::in(fight, "mage").economy.reactionUsed);
+    CHECK_EQ(App::in(fight, "mage").usesRemaining.at("Protective Magic (3/Day)"), 2);
+    CHECK_EQ(App::in(fight, "aria").hp, 400);
+}
+
+TEST_CASE("a player's hit on a mage with Shield ready asks first: cast and miss, cast and still hit, or not")
+{
+    App app;
+    const Encounter start = mageFight(app, false);
+    const int hp = App::in(start, "mage").hp;
+    const int ac = App::in(start, "mage").ac;
+    const auto attack = [&app] {
+        app.select("aria");
+        app.find<QSpinBox>("characterAttackDamage")->setValue(6);
+        app.find<QPushButton>("characterAttack")->click();
+        QApplication::processEvents();
+        app.clickTarget("mage");
+        QApplication::processEvents();
+    };
+    // Cast: the attack misses, and the mage's AC is 5 higher.
+    attack();
+    CHECK(app.find<QLabel>("promptText")->text().contains(QStringLiteral("cast Shield")));
+    CHECK_EQ(App::in(app.saved(), "mage").hp, hp);  // nothing yet
+    app.answer("promptPassed");
+    Encounter fight = app.saved();
+    CHECK_EQ(App::in(fight, "mage").hp, hp);
+    CHECK_EQ(App::in(fight, "mage").ac, ac + 5);
+    CHECK(App::in(fight, "mage").economy.reactionUsed);
+    CHECK(logHas(app, QStringLiteral("misses Mage (Shield")));
+    app.find<QPushButton>("undoFight")->click();
+    QApplication::processEvents();
+    CHECK_EQ(App::in(app.saved(), "mage").ac, ac);
+
+    // Not cast: the damage lands.
+    attack();
+    app.answer("promptFailed");
+    fight = app.saved();
+    CHECK_EQ(App::in(fight, "mage").hp, hp - 6);
+    CHECK_EQ(App::in(fight, "mage").ac, ac);
+    CHECK(!App::in(fight, "mage").economy.reactionUsed);
+    app.find<QPushButton>("undoFight")->click();
+    QApplication::processEvents();
+
+    // Cast, but the roll beat the new AC too.
+    attack();
+    app.answer("promptShieldStillHits");
+    fight = app.saved();
+    CHECK_EQ(App::in(fight, "mage").hp, hp - 6);
+    CHECK_EQ(App::in(fight, "mage").ac, ac + 5);
+}
+
+TEST_CASE("a monster's hit that Shield would turn into a miss is asked about, and becomes a miss when cast")
+{
+    App app;
+    const Encounter start = mageFight(app, true);
+    const int hp = App::in(start, "mage").hp;
+    const int ac = App::in(start, "mage").ac;
+    // The rival's Arcane Burst (+6) hits AC 15 on 9 to 13 and Shield stops
+    // that: some throws ask, the rest don't. Undo until one asks.
+    bool asked = false;
+    for (int attempt = 0; attempt < 120 && !asked; ++attempt) {
+        app.select("rival");
+        QPushButton* burst = buttonStarting(app, QStringLiteral("Arcane Burst"));
+        CHECK(burst != nullptr);
+        if (burst == nullptr) {
+            return;
+        }
+        burst->click();
+        QApplication::processEvents();
+        app.clickTarget("mage");
+        QApplication::processEvents();
+        QLabel* prompt = shieldQuestion(app);
+        if (prompt != nullptr) {
+            asked = true;
+            CHECK(prompt->text().contains(QStringLiteral("At AC %1 the attack misses").arg(ac + 5)));
+            // The damage waits for the answer.
+            CHECK_EQ(App::in(app.saved(), "mage").hp, hp);
+            break;
+        }
+        // A miss, or a hit the Shield wouldn't stop: never asked about.
+        const Encounter fight = app.saved();
+        CHECK(!App::in(fight, "mage").economy.reactionUsed);
+        app.find<QPushButton>("undoFight")->click();
+        QApplication::processEvents();
+    }
+    CHECK(asked);
+    if (!asked) {
+        return;
+    }
+    app.answer("promptPassed");
+    const Encounter fight = app.saved();
+    CHECK_EQ(App::in(fight, "mage").hp, hp);
+    CHECK_EQ(App::in(fight, "mage").ac, ac + 5);
+    CHECK_EQ(App::in(fight, "mage").usesRemaining.at("Protective Magic (3/Day)"), 2);
+    CHECK(logHas(app, QStringLiteral("(Shield) rolled")));
+    // Shield is up: the next hit is against AC 20, and nothing is asked.
+    app.select("rival");
+    buttonStarting(app, QStringLiteral("Arcane Burst"))->click();
+    QApplication::processEvents();
+    app.clickTarget("mage");
+    QApplication::processEvents();
+    CHECK(shieldQuestion(app) == nullptr);
+}
+
+TEST_CASE("the Priest's Divine Aid is a row for each spell: Healing Word heals, the rest are cast")
+{
+    App app;
+    Character aria = fighter();
+    aria.hp = {5, 30};
+    app.characters.saveAll({aria});
+    Encounter encounter;
+    encounter.id = "fight";
+    encounter.name = "Temple";
+    encounter.combatants.push_back(makeMonsterCombatant(srd(app.srdMonsters, "priest"), "priest"));
+    encounter.combatants.push_back(makeCharacterCombatant(aria, "aria"));
+    encounter.combatants[0].initiative = 20;
+    encounter.combatants[1].initiative = 10;
+    encounter.started = true;
+    app.encounters.saveAll({encounter});
+    app.open();
+    app.window->findChildren<ui::CombatPage*>().front()->setAutoPass(false);
+    app.select("priest");
+    for (const char* name : {"Bless", "Dispel Magic", "Healing Word", "Lesser Restoration"}) {
+        CHECK(buttonStarting(app, QString::fromLatin1(name)) != nullptr);
+    }
+    CHECK(buttonStarting(app, QStringLiteral("Bless"))->text() == QStringLiteral("Cast"));
+    QPushButton* heal = buttonStarting(app, QStringLiteral("Healing Word"));
+    CHECK(heal->text() == QStringLiteral("Help…"));
+    heal->click();
+    QApplication::processEvents();
+    app.clickTarget("aria");
+    Encounter fight = app.saved();
+    // 2d4 + 3: 5 to 11.
+    CHECK(App::in(fight, "aria").hp >= 10);
+    CHECK(App::in(fight, "aria").hp <= 16);
+    CHECK(App::in(fight, "priest").economy.bonusActionUsed);
+    CHECK_EQ(App::in(fight, "priest").usesRemaining.at("Divine Aid (3/Day)"), 2);
+    app.find<QPushButton>("undoFight")->click();
+    QApplication::processEvents();
+    // Bless: cast, concentrated on, and logged.
+    app.select("priest");
+    buttonStarting(app, QStringLiteral("Bless"))->click();
+    QApplication::processEvents();
+    fight = app.saved();
+    CHECK_EQ(App::in(fight, "priest").concentration, std::string("bless"));
+    CHECK(logHas(app, QStringLiteral("casts Bless (Divine Aid")));
 }

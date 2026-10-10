@@ -1925,6 +1925,12 @@ void CombatPage::hideEvent(QHideEvent* event)
 
 namespace {
 
+// Magic Missile at any level: Shield stops it.
+bool magicMissile(const MonsterAttack& attack)
+{
+    return attack.name.rfind("Magic Missile", 0) == 0;
+}
+
 HistoryPrompt toHistory(const CombatPage::Prompt& prompt)
 {
     HistoryPrompt row;
@@ -1944,12 +1950,13 @@ HistoryPrompt toHistory(const CombatPage::Prompt& prompt)
     row.advantage = prompt.advantage;
     row.afterHit = prompt.afterHit;
     row.wasBloodied = prompt.wasBloodied;
+    row.critical = prompt.critical;
     return row;
 }
 
 std::optional<CombatPage::Prompt> fromHistory(const HistoryPrompt& row)
 {
-    if (row.kind < 0 || row.kind > static_cast<int>(CombatPage::Prompt::Kind::Escape) || row.ability < 0 ||
+    if (row.kind < 0 || row.kind > static_cast<int>(CombatPage::Prompt::Kind::Shield) || row.ability < 0 ||
         row.ability >= static_cast<int>(kAbilityOrder.size())) {
         return std::nullopt;
     }
@@ -1970,6 +1977,10 @@ std::optional<CombatPage::Prompt> fromHistory(const HistoryPrompt& row)
     prompt.advantage = row.advantage;
     prompt.afterHit = row.afterHit;
     prompt.wasBloodied = row.wasBloodied;
+    prompt.critical = row.critical;
+    if (prompt.kind == CombatPage::Prompt::Kind::Shield && !prompt.attack.has_value()) {
+        return std::nullopt;
+    }
     if (prompt.kind == CombatPage::Prompt::Kind::ActionSave &&
         (!prompt.attack.has_value() || (prompt.afterHit ? !prompt.attack->riderSave : !prompt.attack->save))) {
         return std::nullopt;
@@ -3226,8 +3237,11 @@ void CombatPage::rebuildActions(const Combatant& combatant)
             QString text;
             QString hint;
         };
+        if (attack.castOnly) {
+            return Label{tr("Cast"), tr("Cast it: the GM does the rest.")};
+        }
         if (attack.selfOnly) {
-            return Label{tr("Use"), tr("Cast it on itself.")};
+            return Label{attack.benefit.has_value() ? tr("Cast") : tr("Use"), tr("Cast it on itself.")};
         }
         if (attack.benefit.has_value()) {
             return Label{tr("Help…"), tr("Pick a creature to help, then click it.")};
@@ -3410,10 +3424,16 @@ void CombatPage::rebuildActions(const Combatant& combatant)
             const std::vector<std::vector<std::string>> choices =
                 feature.targeted.has_value() ? std::vector<std::vector<std::string>>{}
                                              : standardActionChoices(feature.effect);
-            const std::vector<MonsterAttack> spells =
+            std::vector<MonsterAttack> spells =
                 rowKind.has_value() && choices.empty() && feature.name != "Legendary Action Uses"
-                    ? actionableSpells(block, feature)
+                    ? actionableSpells(block, feature, m_spells)
                     : std::vector<MonsterAttack>{};
+            // One spell with no rules of its own (Misty Step): the ability's
+            // own row casts it.
+            const bool castsOne = spells.size() == 1 && spells.front().castOnly;
+            if (castsOne) {
+                spells.clear();
+            }
             // A legendary action that casts a spell keeps one title. The spell's
             // roll line sits under that action's own text.
             const bool mergeSpells = kind.has_value() && *kind == FeatureKind::Legendary && !spells.empty();
@@ -3476,8 +3496,8 @@ void CombatPage::rebuildActions(const Combatant& combatant)
             } else if (rowKind.has_value() && spells.empty() && feature.name != "Legendary Action Uses") {
                 const Availability available = featureAvailability(combatant, *rowKind, feature, theirTurn);
                 const FeatureKind which = *rowKind;
-                QString text = tr("Use");
-                QString hint = tr("Use it.");
+                QString text = castsOne ? tr("Cast") : tr("Use");
+                QString hint = castsOne ? tr("Cast it: the GM does the rest.") : tr("Use it.");
                 const bool helpful = feature.targeted.has_value() && feature.targeted->benefit.has_value();
                 if (feature.targeted.has_value()) {
                     if (helpful) {
@@ -3883,11 +3903,13 @@ void CombatPage::rebuildPrompts()
                          })) {
             continue;  // the grapple ended some other way
         }
-        if ((prompt.kind == Prompt::Kind::Rider || prompt.kind == Prompt::Kind::ActionSave) &&
+        if ((prompt.kind == Prompt::Kind::Rider || prompt.kind == Prompt::Kind::ActionSave ||
+             prompt.kind == Prompt::Kind::Shield) &&
             (combatantById(prompt.sourceId) == nullptr || !prompt.attack)) {
             continue;
         }
         const bool repeat = prompt.kind != Prompt::Kind::Rider && prompt.kind != Prompt::Kind::ActionSave &&
+                            prompt.kind != Prompt::Kind::Shield &&
                             std::any_of(kept.begin(), kept.end(), [&prompt](const Prompt& other) {
             return other.kind == prompt.kind && other.combatantId == prompt.combatantId &&
                    other.conditionId == prompt.conditionId && other.sourceId == prompt.sourceId &&
@@ -4026,6 +4048,9 @@ void CombatPage::rebuildPrompts()
             if (!riderIds.isEmpty()) {
                 failure << riderIds.join(tr(", "));
             }
+            if (!attack.failureOutcome.empty()) {
+                failure << QString::fromStdString(attack.failureOutcome);
+            }
             if (!failure.isEmpty()) {
                 text += tr(" Failure: %1").arg(failure.join(tr("; ")));
                 text += !prompt.afterHit && attack.save->halfOnSuccess && totalDamage(prompt.damage) > 0
@@ -4035,6 +4060,42 @@ void CombatPage::rebuildPrompts()
             pass = tr("Saved");
             fail = tr("Failed");
             dismissText = tr("Not affected");
+            break;
+        }
+        case Prompt::Kind::Shield: {
+            const MonsterAttack& attack = *prompt.attack;
+            const QString attacker = bold(nameOf(prompt.sourceId));
+            QString uses;
+            if (const std::optional<ShieldReaction> shield = readyShield(*combatant);
+                shield.has_value() && shield->feature.perDay.has_value()) {
+                const auto left = combatant->usesRemaining.find(shield->feature.name);
+                uses = tr(", %1 of %2 left today")
+                           .arg(left == combatant->usesRemaining.end() ? *shield->feature.perDay : left->second)
+                           .arg(*shield->feature.perDay);
+            }
+            const QString reaction = tr("(%1%2)").arg(abilityName(prompt.auraName), uses);
+            const int shielded = combatant->ac + (hasShieldUp(*combatant) ? 0 : kShieldAcBonus);
+            if (prompt.dc > 0) {
+                text = tr("%1's %2 hits %3: %4 against AC %5. Does %3 cast Shield %6? At AC %7 the attack misses.")
+                           .arg(attacker, abilityName(attack.name), name)
+                           .arg(prompt.dc)
+                           .arg(combatant->ac)
+                           .arg(reaction)
+                           .arg(shielded);
+                pass = tr("Cast Shield");
+            } else if (magicMissile(attack)) {
+                text = tr("%1's %2 is aimed at %3. Does %3 cast Shield %4? Magic Missile does no damage to it, and "
+                          "it has AC %5 until the start of its next turn.")
+                           .arg(attacker, abilityName(attack.name), name, reaction)
+                           .arg(shielded);
+                pass = tr("Cast Shield");
+            } else {
+                text = tr("%1 hits %2 for %3. Does %2 cast Shield %4? At AC %5, an attack roll under %5 misses.")
+                           .arg(attacker, name, QString::fromStdString(describeDamage(prompt.damage)), reaction)
+                           .arg(shielded);
+                pass = tr("Cast: it misses");
+            }
+            fail = tr("Don't cast");
             break;
         }
         case Prompt::Kind::Rider: {
@@ -4101,6 +4162,17 @@ void CombatPage::rebuildPrompts()
         if (prompt.kind == Prompt::Kind::Rider) {
             roll->hide();
             failed->hide();
+        }
+        if (prompt.kind == Prompt::Kind::Shield) {
+            roll->hide();
+            dismiss->hide();
+            if (prompt.dc == 0 && !magicMissile(*prompt.attack)) {
+                // The player knows the roll: Shield may not be enough.
+                auto* stillHits = new QPushButton(tr("Cast: still hits"));
+                stillHits->setObjectName(QStringLiteral("promptShieldStillHits"));
+                layout->insertWidget(layout->indexOf(failed), stillHits);
+                connect(stillHits, &QPushButton::clicked, this, [this, i] { resolvePrompt(i, 4); });
+            }
         }
         if (prompt.kind == Prompt::Kind::Escape && prompt.dc <= 0) {
             roll->hide();  // the table knows the DC; the app doesn't
@@ -4172,6 +4244,8 @@ void CombatPage::resolvePrompt(std::size_t index, int outcome)
         }
     } else if (prompt.kind == Prompt::Kind::ActionSave) {
         resolveActionSave(prompt, outcome);
+    } else if (prompt.kind == Prompt::Kind::Shield) {
+        resolveShield(prompt, outcome);
     } else if (prompt.kind == Prompt::Kind::Escape) {
         bool escaped = outcome == 1;
         const QString grappler = nameOf(prompt.sourceId);
@@ -5636,6 +5710,38 @@ void CombatPage::onFeatureClicked(const std::string& combatantId, FeatureKind ki
     if (combatant == nullptr) {
         return;
     }
+    if (feature.targeted.has_value() && feature.targeted->castOnly) {
+        // A spell the app has no rules for: spent and logged.
+        PageUndo before = capture();
+        if (!useFeature(*combatant, kind, feature, isTheirTurn(*combatant))) {
+            return;
+        }
+        const MonsterAttack& spell = *feature.targeted;
+        QString line = tr("%1 casts %2 (%3).")
+                           .arg(QString::fromStdString(combatant->name), abilityName(spell.name), abilityName(feature.name));
+        if (feature.perDay.has_value()) {
+            const auto left = combatant->usesRemaining.find(feature.name);
+            line += tr(" %n use(s) left today.", nullptr, left == combatant->usesRemaining.end() ? 0 : left->second);
+        }
+        if (kind == FeatureKind::Legendary) {
+            line += tr(" %n legendary use(s) left.", nullptr, combatant->economy.legendaryRemaining);
+        }
+        addLog(line);
+        endByEvents(*combatant, actionEvents(spell.name, spell.effect, &spell, false));
+        if (!spell.concentration.empty()) {
+            if (combatant->concentration == spell.concentration) {
+                endConcentration(*combatant);
+                releaseEndedConditions();
+            }
+            setConcentration(*combatant, spell.concentration);
+        }
+        const std::string castId = combatant->id;
+        commit(std::move(before), EditKind::Once, castId);
+        if (kind == FeatureKind::BonusAction) {
+            maybeAutoPass(castId);
+        }
+        return;
+    }
     if (feature.targeted.has_value() && feature.targeted->selfOnly) {
         PageUndo before = capture();
         if (!useFeature(*combatant, kind, feature, isTheirTurn(*combatant))) {
@@ -5656,6 +5762,16 @@ void CombatPage::onFeatureClicked(const std::string& combatantId, FeatureKind ki
         // it was already under, not the Invisible condition this cast gives.
         endByEvents(*combatant, actionEvents(spell.name, spell.effect, &spell, false));
         applyRiders(*combatant, *combatant, spell, kRiderOnCast, RollMode::Normal, 0);
+        if (spell.benefit.has_value()) {
+            // Shield: +5 AC until the start of its next turn.
+            const BenefitResult result = applyBenefit(*selectedEncounter(), *combatant, *combatant, spell, dieRoller());
+            if (result.acBonus != 0) {
+                addLog(tr("%1 gets +%2 AC (AC %3) until the start of its next turn.")
+                           .arg(QString::fromStdString(combatant->name))
+                           .arg(result.acBonus)
+                           .arg(combatant->ac));
+            }
+        }
         const std::string selfId = combatant->id;
         commit(std::move(before), EditKind::Once, selfId);
         return;
@@ -6036,13 +6152,15 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
         carryToSheet(*target);
     } else if (armed.fixedDamage.has_value()) {
         // A character's attack: the player rolled it; the damage is typed in.
-        const DamageResult result = applyDamage(*target, *armed.fixedDamage);
-        addLog(tr("%1 hits %2 for %3.")
-                   .arg(QString::fromStdString(attacker->name), QString::fromStdString(target->name),
-                        QString::fromStdString(describeDamage(*armed.fixedDamage))));
-        dealtDamage = result.taken > 0;
         attacker->economy.actionUsed = true;
-        afterDamage(*target, result, source);
+        if (!offerShield(*attacker, *target, attack, 0, false, RollMode::Normal, targetWasBloodied, *armed.fixedDamage)) {
+            const DamageResult result = applyDamage(*target, *armed.fixedDamage);
+            addLog(tr("%1 hits %2 for %3.")
+                       .arg(QString::fromStdString(attacker->name), QString::fromStdString(target->name),
+                            QString::fromStdString(describeDamage(*armed.fixedDamage))));
+            dealtDamage = result.taken > 0;
+            afterDamage(*target, result, source);
+        }
     } else if (attack.attackBonus.has_value()) {
         const bool melee = isMeleeAttack(attack);
         RollMode mode = RollMode::Normal;
@@ -6138,70 +6256,12 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
             rolled += tr(" (advantage from %1 and disadvantage from %2 cancel)")
                           .arg(joined(choice.advantages), joined(choice.disadvantages));
         }
+        // Shield: a hit the target's reaction would turn into a miss is asked
+        // about first (offerShield holds it until the GM says).
         if (!roll.hit) {
-            if (attack.halfDamageOnMiss && !parts.empty()) {
-                const DamageOptions missOptions = damageOptionsFor(*attacker, target, attack);
-                const std::vector<TypedDamage> damage =
-                    halveDamage(rollDamageParts(parts, missOptions, dieRoller()));
-                setDiceCaption(tr("Damage (half on a miss): %1").arg(QString::fromStdString(describeDamage(damage))),
-                               tr("Half of %1").arg(QString::fromStdString(damageFormula(parts, missOptions))));
-                const DamageResult result = applyDamage(*target, damage);
-                dealtDamage = dealtDamage || result.taken > 0;
-                addLog(tr("%1 misses %2: %3 rolled, %4 against AC %5, splashing for %6.")
-                           .arg(source, QString::fromStdString(target->name), rolled)
-                           .arg(roll.total)
-                           .arg(target->ac)
-                           .arg(QString::fromStdString(describeDamage(damage))));
-                afterDamage(*target, result, source);
-            } else {
-                addLog(tr("%1 misses %2: %3 rolled, %4 against AC %5.")
-                           .arg(source, QString::fromStdString(target->name), rolled)
-                           .arg(roll.total)
-                           .arg(target->ac));
-            }
-        } else {
-            DamageOptions options = damageOptionsFor(*attacker, target, attack);
-            options.critical = critical;
-            options.advantage = mode == RollMode::Advantage;
-            const std::vector<TypedDamage> damage = rollDamageParts(parts, options, dieRoller());
-            // The calculation, not the dice (they are on the table): "1d6+2 piercing".
-            // The hit card waits for a click before the damage is thrown.
-            setDiceCaption((critical ? tr("Damage (critical): %1") : tr("Damage: %1"))
-                               .arg(QString::fromStdString(describeDamage(damage))),
-                           QString::fromStdString(damageFormula(parts, options)));
-            addLog(tr("%1 %2 %3: %4 rolled, %5 against AC %6, for %7.")
-                       .arg(source, critical ? tr("critically hits") : tr("hits"), QString::fromStdString(target->name),
-                            rolled)
-                       .arg(roll.total)
-                       .arg(target->ac)
-                       .arg(QString::fromStdString(describeDamage(damage))));
-            const DamageResult result = applyDamage(*target, damage, critical);
-            dealtDamage = dealtDamage || result.taken > 0;
-            addLaterDamage(*attacker, *target, attack);
-            afterDamage(*target, result, source);
-            if (attack.drain.has_value()) {
-                applyDrainTo(*attacker, *target, *attack.drain, damage, result);
-            }
-            applyRiders(*attacker, *target, attack, kRiderOnHit, mode, result.taken);
-            // "If this damage reduces the target to 0 Hit Points": not a target
-            // already at 0, which takes a death save failure instead.
-            if (result.droppedToZero && !target->dead && isCharacterCombatant(*target)) {
-                applyRiders(*attacker, *target, attack, kRiderOnZeroHp, mode, result.taken);
-            }
-            // "If the target is a creature, it is subjected to the following effect."
-            if (attack.riderSave.has_value() && !target->dead &&
-                (!ridersFor(attack, kRiderOnFailure).empty() || !ridersFor(attack, kRiderOnFailureBy5).empty())) {
-                Prompt prompt;
-                prompt.kind = Prompt::Kind::ActionSave;
-                prompt.combatantId = target->id;
-                prompt.sourceId = attacker->id;
-                prompt.ability = attack.riderSave->ability;
-                prompt.dc = attack.riderSave->dc;
-                prompt.attack = attack;
-                prompt.afterHit = true;
-                prompt.advantage = mode == RollMode::Advantage;
-                askActionSave(std::move(prompt));
-            }
+            dealtDamage = landMiss(*attacker, *target, attack, rolled, roll.total) || dealtDamage;
+        } else if (!(face < 20 && offerShield(*attacker, *target, attack, roll.total, critical, mode, targetWasBloodied))) {
+            dealtDamage = landHit(*attacker, *target, attack, critical, mode, rolled, roll.total) || dealtDamage;
         }
     } else if (attack.save.has_value()) {
         // The save is asked at the top of the page: rolled here, or the
@@ -6227,6 +6287,11 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
                        .arg(QString::fromStdString(target->name))
                        .arg(attack.failureHpThreshold.value_or(0)));
             carryToSheet(*target);
+        } else if (strike.applyDamage && !parts.empty() && magicMissile(attack) && hasShieldUp(*target)) {
+            addLog(tr("%1: %2's Shield stops it.").arg(source, QString::fromStdString(target->name)));
+        } else if (strike.applyDamage && !parts.empty() && magicMissile(attack) &&
+                   offerShield(*attacker, *target, attack, 0, false, RollMode::Normal, targetWasBloodied)) {
+            // Asked first: the dart waits for the answer.
         } else if (strike.applyDamage && !parts.empty()) {
             const DamageOptions strikeOptions = damageOptionsFor(*attacker, target, attack);
             const std::vector<TypedDamage> damage = rollDamageParts(parts, strikeOptions, dieRoller());
@@ -6274,6 +6339,232 @@ void CombatPage::resolveArmedOn(const std::string& targetId)
     if (!m_armed.has_value()) {
         maybeAutoPass(attackerId);
     }
+}
+
+bool CombatPage::landMiss(Combatant& attacker, Combatant& target, const MonsterAttack& attack, const QString& rolled,
+                          int total)
+{
+    const QString source = tr("%1's %2").arg(QString::fromStdString(attacker.name), abilityName(attack.name));
+    const std::vector<DamagePart> parts = attackDamageParts(attack);
+    bool dealt = false;
+    if (attack.halfDamageOnMiss && !parts.empty()) {
+        const DamageOptions missOptions = damageOptionsFor(attacker, &target, attack);
+        const std::vector<TypedDamage> damage =
+            halveDamage(rollDamageParts(parts, missOptions, dieRoller()));
+        setDiceCaption(tr("Damage (half on a miss): %1").arg(QString::fromStdString(describeDamage(damage))),
+                       tr("Half of %1").arg(QString::fromStdString(damageFormula(parts, missOptions))));
+        const DamageResult result = applyDamage(target, damage);
+        dealt = result.taken > 0;
+        addLog(tr("%1 misses %2: %3 rolled, %4 against AC %5, splashing for %6.")
+                   .arg(source, QString::fromStdString(target.name), rolled)
+                   .arg(total)
+                   .arg(target.ac)
+                   .arg(QString::fromStdString(describeDamage(damage))));
+        afterDamage(target, result, source);
+    } else {
+        addLog(tr("%1 misses %2: %3 rolled, %4 against AC %5.")
+                   .arg(source, QString::fromStdString(target.name), rolled)
+                   .arg(total)
+                   .arg(target.ac));
+    }
+    return dealt;
+}
+
+bool CombatPage::landHit(Combatant& attacker, Combatant& target, const MonsterAttack& attack, bool critical,
+                         RollMode mode, const QString& rolled, int total)
+{
+    const QString source = tr("%1's %2").arg(QString::fromStdString(attacker.name), abilityName(attack.name));
+    const std::vector<DamagePart> parts = attackDamageParts(attack);
+    bool dealt = false;
+    DamageOptions options = damageOptionsFor(attacker, &target, attack);
+    options.critical = critical;
+    options.advantage = mode == RollMode::Advantage;
+    const std::vector<TypedDamage> damage = rollDamageParts(parts, options, dieRoller());
+    // The calculation, not the dice (they are on the table): "1d6+2 piercing".
+    // The hit card waits for a click before the damage is thrown.
+    setDiceCaption((critical ? tr("Damage (critical): %1") : tr("Damage: %1"))
+                       .arg(QString::fromStdString(describeDamage(damage))),
+                   QString::fromStdString(damageFormula(parts, options)));
+    addLog(tr("%1 %2 %3: %4 rolled, %5 against AC %6, for %7.")
+               .arg(source, critical ? tr("critically hits") : tr("hits"), QString::fromStdString(target.name),
+                    rolled)
+               .arg(total)
+               .arg(target.ac)
+               .arg(QString::fromStdString(describeDamage(damage))));
+    const DamageResult result = applyDamage(target, damage, critical);
+    dealt = result.taken > 0;
+    addLaterDamage(attacker, target, attack);
+    afterDamage(target, result, source);
+    if (attack.drain.has_value()) {
+        applyDrainTo(attacker, target, *attack.drain, damage, result);
+    }
+    applyRiders(attacker, target, attack, kRiderOnHit, mode, result.taken);
+    // "If this damage reduces the target to 0 Hit Points": not a target
+    // already at 0, which takes a death save failure instead.
+    if (result.droppedToZero && !target.dead && isCharacterCombatant(target)) {
+        applyRiders(attacker, target, attack, kRiderOnZeroHp, mode, result.taken);
+    }
+    // "If the target is a creature, it is subjected to the following effect."
+    if (attack.riderSave.has_value() && !target.dead &&
+        (!ridersFor(attack, kRiderOnFailure).empty() || !ridersFor(attack, kRiderOnFailureBy5).empty())) {
+        Prompt prompt;
+        prompt.kind = Prompt::Kind::ActionSave;
+        prompt.combatantId = target.id;
+        prompt.sourceId = attacker.id;
+        prompt.ability = attack.riderSave->ability;
+        prompt.dc = attack.riderSave->dc;
+        prompt.attack = attack;
+        prompt.afterHit = true;
+        prompt.advantage = mode == RollMode::Advantage;
+        askActionSave(std::move(prompt));
+    }
+    return dealt;
+}
+
+std::optional<ShieldReaction> CombatPage::readyShield(const Combatant& target)
+{
+    if (!target.statBlock.has_value() || target.dead || target.hp <= 0) {
+        return std::nullopt;
+    }
+    std::optional<ShieldReaction> shield = shieldReactionOf(*target.statBlock, m_spells);
+    if (!shield.has_value() ||
+        !featureAvailability(target, FeatureKind::Reaction, shield->feature, isTheirTurn(target)).available) {
+        return std::nullopt;
+    }
+    return shield;
+}
+
+bool CombatPage::offerShield(const Combatant& attacker, const Combatant& target, const MonsterAttack& attack, int total,
+                             bool critical, RollMode mode, bool wasBloodied, std::vector<TypedDamage> damage)
+{
+    if (hasShieldUp(target) || !readyShield(target).has_value()) {
+        return false;
+    }
+    if (total > 0 && total >= target.ac + kShieldAcBonus) {
+        return false;  // a hit even with Shield
+    }
+    Prompt prompt;
+    prompt.kind = Prompt::Kind::Shield;
+    prompt.combatantId = target.id;
+    prompt.sourceId = attacker.id;
+    prompt.auraName = readyShield(target)->feature.name;
+    prompt.dc = total;
+    prompt.attack = attack;
+    prompt.critical = critical;
+    prompt.advantage = mode == RollMode::Advantage;
+    prompt.wasBloodied = wasBloodied;
+    prompt.damage = std::move(damage);
+    const QString targetName = QString::fromStdString(target.name);
+    if (total > 0) {
+        addLog(tr("%1's %2 hits %3 (%4 against AC %5): Shield would make it miss.")
+                   .arg(QString::fromStdString(attacker.name), abilityName(attack.name), targetName)
+                   .arg(total)
+                   .arg(target.ac));
+    } else if (magicMissile(attack)) {
+        addLog(tr("%1's %2 is aimed at %3: Shield would stop it.")
+                   .arg(QString::fromStdString(attacker.name), abilityName(attack.name), targetName));
+    } else {
+        addLog(tr("%1 hits %2: Shield might make it miss.").arg(QString::fromStdString(attacker.name), targetName));
+    }
+    m_prompts.push_back(std::move(prompt));
+    rebuildPrompts();
+    return true;
+}
+
+// outcome: 1 cast Shield (the attack misses unless it beats the new AC), 4
+// cast it but a player's attack still hits, 2 or 3 not cast.
+void CombatPage::resolveShield(const Prompt& prompt, int outcome)
+{
+    Combatant* target = combatantById(prompt.combatantId);
+    Combatant* attacker = combatantById(prompt.sourceId);
+    if (target == nullptr || attacker == nullptr || !prompt.attack.has_value()) {
+        return;
+    }
+    const std::optional<bool> outerUnconscious =
+        std::exchange(m_riderTargetWasUnconscious, std::optional<bool>(hasCondition(*target, "unconscious")));
+    const std::string outerTargetId = std::exchange(m_riderTargetId, target->id);
+    const auto restoreUnconscious = qScopeGuard([this, outerUnconscious, outerTargetId] {
+        m_riderTargetWasUnconscious = outerUnconscious;
+        m_riderTargetId = outerTargetId;
+    });
+    struct DamageSource {
+        CombatPage* page;
+        std::string attackerId;
+        std::string action;
+        ~DamageSource()
+        {
+            page->m_damageAttackerId = attackerId;
+            page->m_damageAction = action;
+        }
+    } restore{this, m_damageAttackerId, m_damageAction};
+    m_damageAttackerId = attacker->id;
+    m_damageAction = prompt.attack->name;
+
+    const MonsterAttack& attack = *prompt.attack;
+    const QString targetName = QString::fromStdString(target->name);
+    bool up = hasShieldUp(*target);
+    if ((outcome == 1 || outcome == 4) && !up) {
+        const std::optional<ShieldReaction> shield = readyShield(*target);
+        if (shield.has_value() && useFeature(*target, FeatureKind::Reaction, shield->feature, isTheirTurn(*target))) {
+            applyBenefit(*selectedEncounter(), *target, *target, shield->spell, dieRoller());
+            QString line = tr("%1 casts Shield (%2): AC %3 until the start of its next turn.")
+                               .arg(targetName, abilityName(shield->feature.name))
+                               .arg(target->ac);
+            if (shield->feature.perDay.has_value()) {
+                const auto left = target->usesRemaining.find(shield->feature.name);
+                line += tr(" %n use(s) left today.", nullptr, left == target->usesRemaining.end() ? 0 : left->second);
+            }
+            addLog(line);
+            endByEvents(*target, actionEvents(shield->spell.name, shield->spell.effect, &shield->spell, false));
+            up = true;
+        } else {
+            addLog(tr("%1 can't cast Shield now.").arg(targetName));
+        }
+    }
+    const QString source = tr("%1's %2").arg(QString::fromStdString(attacker->name), abilityName(attack.name));
+    bool dealt = false;
+    if (prompt.dc == 0 && magicMissile(attack)) {
+        if (up) {
+            addLog(tr("%1: %2's Shield stops it.").arg(source, targetName));
+        } else {
+            const std::vector<DamagePart> parts = attackDamageParts(attack);
+            const DamageOptions options = damageOptionsFor(*attacker, target, attack);
+            const std::vector<TypedDamage> damage = rollDamageParts(parts, options, dieRoller());
+            addDiceDetail(QString::fromStdString(damageFormula(parts, options)));
+            const DamageResult result = applyDamage(*target, damage);
+            dealt = result.taken > 0;
+            addLog(tr("%1 hits %2 for %3.").arg(source, targetName, QString::fromStdString(describeDamage(damage))));
+            afterDamage(*target, result, source);
+        }
+    } else if (prompt.dc == 0) {
+        // A player's attack: the damage was typed in.
+        if (up && outcome != 4) {
+            addLog(tr("%1's attack misses %2 (Shield, AC %3).").arg(QString::fromStdString(attacker->name), targetName)
+                       .arg(target->ac));
+        } else {
+            const DamageResult result = applyDamage(*target, prompt.damage);
+            dealt = result.taken > 0;
+            addLog(tr("%1 hits %2 for %3.")
+                       .arg(QString::fromStdString(attacker->name), targetName,
+                            QString::fromStdString(describeDamage(prompt.damage))));
+            afterDamage(*target, result, tr("%1's attack").arg(QString::fromStdString(attacker->name)));
+        }
+    } else if (up && prompt.dc < target->ac) {
+        dealt = landMiss(*attacker, *target, attack, tr("%1 (Shield)").arg(prompt.dc), prompt.dc);
+    } else {
+        dealt = landHit(*attacker, *target, attack, prompt.critical,
+                        prompt.advantage ? RollMode::Advantage : RollMode::Normal, QString::number(prompt.dc), prompt.dc);
+    }
+    if (dealt) {
+        if (prompt.wasBloodied && isMonsterCombatant(*attacker)) {
+            for (const std::string& ready : noteDamagedBloodied(*attacker)) {
+                addLog(tr("%1 damaged a creature that was already Bloodied: %2 can be used now.")
+                           .arg(QString::fromStdString(attacker->name), abilityName(ready)));
+            }
+        }
+        endByEvents(*attacker, {kEndsOnDealsDamage});
+    }
+    carryToSheet(*target);
 }
 
 void CombatPage::askActionSave(Prompt prompt)
@@ -6445,10 +6736,15 @@ void CombatPage::resolveActionSave(const Prompt& prompt, int outcome)
     if (!success && !target->dead) {
         applyRiders(*attacker, *target, attack, failureRiders, RollMode::Normal, 0);
         addLaterDamage(*attacker, *target, attack);
-        if (attack.riders.empty() && totalDamage(damage) == 0 && !attack.failureHpThreshold.has_value() &&
-            attack.failureSelfHealing.empty()) {
+        if (!attack.failureOutcome.empty()) {
+            addLog(tr("%1: %2.").arg(targetName, QString::fromStdString(attack.failureOutcome)));
+        } else if (attack.riders.empty() && totalDamage(damage) == 0 && !attack.failureHpThreshold.has_value() &&
+                   attack.failureSelfHealing.empty()) {
             addLog(tr("Apply the effect's conditions to %1 by hand.").arg(targetName));
         }
+    }
+    if (success && !attack.successOutcome.empty()) {
+        addLog(tr("%1: %2.").arg(targetName, QString::fromStdString(attack.successOutcome)));
     }
     if (result.concentrationDc.has_value()) {
         askConcentrationSave(*target, *result.concentrationDc);

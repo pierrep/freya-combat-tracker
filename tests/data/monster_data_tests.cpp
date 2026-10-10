@@ -2,6 +2,7 @@
 #include "core/monster_catalog.h"
 #include "core/spell_rules.h"
 #include "data/json_monsters.h"
+#include "data/json_sheet.h"
 #include "test_harness.h"
 
 #include <algorithm>
@@ -1029,4 +1030,110 @@ TEST_CASE("every combat spell a creature names becomes an attack")
     if (!missing.empty() || buttons < 40) {
         throw test::Failure(missing + "spell buttons: " + std::to_string(buttons));
     }
+}
+
+TEST_CASE("an ability that casts one of several spells has every spell, in order, each with its own rule or only cast")
+{
+    const auto monsters = loadSrdMonsters(fs::path{COMBAT_TRACKER_SRD_DIR} / "monsters.json");
+    const std::vector<Spell> catalog = loadSpellCatalog(fs::path{COMBAT_TRACKER_SRD_DIR} / "spells.json");
+    const auto monsterNamed = [&monsters](const std::string& id) -> const Monster& {
+        for (const Monster& monster : monsters) {
+            if (monster.id == id) {
+                return monster;
+            }
+        }
+        throw test::Failure("no monster " + id);
+    };
+    const auto featureNamed = [](const std::vector<MonsterFeature>& features, const std::string& prefix) {
+        for (const MonsterFeature& feature : features) {
+            if (feature.name.rfind(prefix, 0) == 0) {
+                return feature;
+            }
+        }
+        throw test::Failure("no feature " + prefix);
+    };
+    const auto names = [](const std::vector<MonsterAttack>& spells) {
+        std::vector<std::string> out;
+        for (const MonsterAttack& spell : spells) {
+            out.push_back(spell.name);
+        }
+        return out;
+    };
+
+    // The Mage's Protective Magic: Counterspell, then Shield.
+    const Monster& mage = monsterNamed("mage");
+    const std::vector<MonsterAttack> protective =
+        actionableSpells(mage, featureNamed(mage.reactions, "Protective Magic"), catalog);
+    CHECK(names(protective) == (std::vector<std::string>{"Counterspell", "Shield"}));
+    if (protective.size() == 2) {
+        const MonsterAttack& counterspell = protective[0];
+        CHECK(counterspell.save.has_value() && counterspell.save->ability == Ability::Constitution);
+        CHECK_EQ(counterspell.save.has_value() ? counterspell.save->dc : 0, 14);  // the Mage's spell save DC
+        CHECK(counterspell.damage.empty());
+        CHECK(!counterspell.failureOutcome.empty());
+        CHECK(!counterspell.castOnly);
+        const MonsterAttack& shield = protective[1];
+        CHECK(shield.selfOnly);
+        CHECK(shield.benefit.has_value() && shield.benefit->acBonus == kShieldAcBonus);
+        CHECK(!shield.castOnly);
+    }
+    const std::optional<ShieldReaction> shield = shieldReactionOf(mage, catalog);
+    CHECK(shield.has_value() && shield->feature.perDay == std::optional<int>(3));
+    CHECK(!shieldReactionOf(mage, {}).has_value());  // no catalog, no Shield
+    CHECK(!shieldReactionOf(monsterNamed("priest"), catalog).has_value());
+    // The Archmage's and the Lich's, at their own DCs; the Lich's has no daily limit.
+    const Monster& archmage = monsterNamed("archmage");
+    const std::vector<MonsterAttack> archmageSpells =
+        actionableSpells(archmage, featureNamed(archmage.reactions, "Protective Magic"), catalog);
+    CHECK(!archmageSpells.empty() && archmageSpells.front().save.has_value() &&
+          archmageSpells.front().save->dc == 17);
+    const Monster& lich = monsterNamed("lich");
+    CHECK(shieldReactionOf(lich, catalog).has_value() && !shieldReactionOf(lich, catalog)->feature.perDay.has_value());
+    const std::vector<MonsterAttack> lichSpells =
+        actionableSpells(lich, featureNamed(lich.reactions, "Protective Magic"), catalog);
+    CHECK(!lichSpells.empty() && lichSpells.front().save.has_value() && lichSpells.front().save->dc == 20);
+
+    // The Priest's Divine Aid: Bless and Lesser Restoration only cast,
+    // Dispel Magic too, Healing Word heals 2d4 + its Wisdom (+3 from DC 13).
+    const Monster& priest = monsterNamed("priest");
+    const std::vector<MonsterAttack> aid = actionableSpells(priest, featureNamed(priest.bonusActions, "Divine Aid"), catalog);
+    CHECK(names(aid) == (std::vector<std::string>{"Bless", "Dispel Magic", "Healing Word", "Lesser Restoration"}));
+    for (const MonsterAttack& spell : aid) {
+        if (spell.name == "Healing Word") {
+            CHECK(spell.benefit.has_value() && spell.benefit->healing == "2d4+3");
+            CHECK(spell.allowSelf);
+            CHECK(!spell.castOnly);
+        } else {
+            CHECK(spell.castOnly);
+            CHECK(!spell.effect.empty());
+        }
+        if (spell.name == "Bless") {
+            CHECK_EQ(spell.concentration, std::string("bless"));
+        }
+    }
+    // The Solar's Cure Wounds at level 2: 4d8 plus its modifier.
+    const Monster& solar = monsterNamed("solar");
+    for (const MonsterAttack& spell : actionableSpells(solar, featureNamed(solar.bonusActions, "Divine Aid"), catalog)) {
+        if (spell.name.rfind("Cure Wounds", 0) == 0) {
+            CHECK_EQ(spell.name, std::string("Cure Wounds (level 2)"));
+            CHECK(spell.benefit.has_value() && spell.benefit->healing.rfind("4d8+", 0) == 0);
+        }
+    }
+    // The Drider's three, Darkness among them, its combat spells as before.
+    const Monster& drider = monsterNamed("drider");
+    const std::vector<MonsterAttack> spider =
+        actionableSpells(drider, featureNamed(drider.bonusActions, "Magic of the Spider Queen"), catalog);
+    CHECK(names(spider) == (std::vector<std::string>{"Darkness", "Faerie Fire", "Web"}));
+    if (spider.size() == 3) {
+        CHECK(spider[0].castOnly);
+        CHECK(!spider[1].castOnly && spider[1].save.has_value());
+        CHECK(!spider[2].castOnly);
+    }
+    // Misty Step alone: one spell, only cast.
+    const std::vector<MonsterAttack> misty = actionableSpells(mage, featureNamed(mage.bonusActions, "Misty Step"), catalog);
+    CHECK(names(misty) == std::vector<std::string>{"Misty Step"});
+    CHECK(!misty.empty() && misty.front().castOnly);
+    // An ability that does more than cast stays as it is (the Vampire's Charm).
+    const Monster& vampire = monsterNamed("vampire");
+    CHECK(actionableSpells(vampire, featureNamed(vampire.bonusActions, "Charm"), catalog).empty());
 }

@@ -293,6 +293,13 @@ struct MonsterAttack {
     // The save a condition repeats later, when casting itself is not a save
     // (Power Word Stun).
     std::optional<SaveSpec> repeatSave{};
+    // A spell the app has no rules for (Misty Step, Bless): casting it spends
+    // the ability and is logged, and the GM does the rest.
+    bool castOnly = false;
+    // What a save means when it is neither damage nor a condition
+    // (Counterspell: "its spell has no effect").
+    std::string failureOutcome{};
+    std::string successOutcome{};
 
     bool operator==(const MonsterAttack&) const = default;
 };

@@ -104,6 +104,9 @@ json promptJson(const HistoryPrompt& prompt)
     if (prompt.wasBloodied) {
         row["wasBloodied"] = true;
     }
+    if (prompt.critical) {
+        row["critical"] = true;
+    }
     return row;
 }
 
@@ -144,6 +147,7 @@ HistoryPrompt promptFrom(const json& row, const std::string& context)
     prompt.advantage = json_util::readBoolOr<Error>(row, "advantage", false, context);
     prompt.afterHit = json_util::readBoolOr<Error>(row, "afterHit", false, context);
     prompt.wasBloodied = json_util::readBoolOr<Error>(row, "wasBloodied", false, context);
+    prompt.critical = json_util::readBoolOr<Error>(row, "critical", false, context);
     return prompt;
 }
 

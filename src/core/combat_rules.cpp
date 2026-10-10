@@ -941,7 +941,8 @@ std::vector<std::string> describeActionRules(const MonsterAttack& attack)
         if (benefit.acBonus != 0) {
             what.push_back("+" + std::to_string(benefit.acBonus) + " AC");
         }
-        std::string line = "Helps the creature you pick (itself too): " + joinWords(what);
+        std::string line = (attack.selfOnly ? "On itself: " : "Helps the creature you pick (itself too): ") +
+                           joinWords(what);
         if (benefit.advantageOnAttacks || benefit.acBonus != 0) {
             line += benefit.until == kUntilSourceEnd ? " until the end of the monster's next turn"
                                                      : " until the start of the monster's next turn";

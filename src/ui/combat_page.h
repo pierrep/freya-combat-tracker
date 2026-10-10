@@ -4,6 +4,7 @@
 #include "core/combat_rules.h"
 #include "core/encounter.h"
 #include "core/sheet.h"
+#include "core/spell_rules.h"
 #include "ui/dice_overlay.h"
 
 #include <QString>
@@ -66,7 +67,12 @@ public:
         // Escape: a grappled creature spends its action on a Strength
         // (Athletics) or Dexterity (Acrobatics) check against the grapple's
         // escape DC (sourceId is the grappler; dc 0 when not known).
-        enum class Kind { Concentration, SaveToEnd, DeathSave, Aura, Rider, Hide, ActionSave, Escape };
+        // Shield: an attack hit a creature whose reaction can cast Shield, and
+        // the +5 AC would make it miss (or it was Magic Missile, or a
+        // player's attack whose roll the app doesn't know). sourceId is the
+        // attacker, auraName the reaction, dc the attack roll's total (0 when
+        // not known), damage a player's typed-in damage.
+        enum class Kind { Concentration, SaveToEnd, DeathSave, Aura, Rider, Hide, ActionSave, Escape, Shield };
         Kind kind = Kind::Concentration;
         std::string combatantId;
         std::string conditionId;
@@ -89,6 +95,8 @@ public:
         bool advantage = false;
         bool afterHit = false;
         bool wasBloodied = false;
+        // Shield: the hit was a critical one.
+        bool critical = false;
 
         bool operator==(const Prompt&) const = default;
     };
@@ -328,6 +336,20 @@ private:
     void askActionSave(Prompt prompt);
     // outcome: 0 roll it, 1 saved, 2 failed, 4 failed by 5 or more.
     void resolveActionSave(const Prompt& prompt, int outcome);
+    // A monster's attack roll that missed, or hit: the damage, the riders and
+    // any save it calls for. True when it dealt damage.
+    bool landMiss(Combatant& attacker, Combatant& target, const MonsterAttack& attack, const QString& rolled,
+                  int total);
+    bool landHit(Combatant& attacker, Combatant& target, const MonsterAttack& attack, bool critical, RollMode mode,
+                 const QString& rolled, int total);
+    // The reaction that casts Shield, when the target has it ready now.
+    std::optional<ShieldReaction> readyShield(const Combatant& target);
+    // Asks whether the target casts Shield against this hit (total 0: a
+    // player's roll the app doesn't know). True when it was asked: the hit
+    // waits for the answer.
+    bool offerShield(const Combatant& attacker, const Combatant& target, const MonsterAttack& attack, int total,
+                     bool critical, RollMode mode, bool wasBloodied, std::vector<TypedDamage> damage = {});
+    void resolveShield(const Prompt& prompt, int outcome);
 
     // Undo helpers. capture() before a change; commit() after it pushes the
     // snapshot when something changed, saves, and redraws.

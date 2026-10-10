@@ -567,6 +567,165 @@ std::vector<MonsterAttack> spellsFrom(const std::string& effect, const Monster& 
     return attacks;
 }
 
+// A monster's proficiency bonus, from its Challenge Rating.
+int monsterProficiency(const std::string& challengeRating)
+{
+    if (challengeRating.find('/') != std::string::npos) {
+        return 2;
+    }
+    int rating = 0;
+    for (const char c : challengeRating) {
+        if (c < '0' || c > '9') {
+            break;
+        }
+        rating = rating * 10 + (c - '0');
+    }
+    if (rating < 5) {
+        return 2;
+    }
+    return std::min(9, 3 + (rating - 5) / 4);
+}
+
+struct CatalogMention {
+    const Spell* spell = nullptr;
+    int slot = 0;
+};
+
+// Catalog spells named where the text says the creature casts them, in order.
+std::vector<CatalogMention> catalogMentions(const std::string& text, const std::vector<Spell>& catalog)
+{
+    std::vector<const Spell*> byLength;
+    for (const Spell& spell : catalog) {
+        if (!spell.name.empty()) {
+            byLength.push_back(&spell);
+        }
+    }
+    std::sort(byLength.begin(), byLength.end(),
+              [](const Spell* left, const Spell* right) { return left->name.size() > right->name.size(); });
+    const std::vector<std::pair<std::size_t, std::size_t>> casts = castSpans(text);
+    std::vector<CatalogMention> found;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (i > 0 && isNameChar(static_cast<unsigned char>(text[i - 1]))) {
+            continue;
+        }
+        if (!inSpan(i, {}, casts)) {
+            continue;
+        }
+        for (const Spell* spell : byLength) {
+            const std::size_t length = spell->name.size();
+            if (i + length > text.size() || text.compare(i, length, spell->name) != 0) {
+                continue;
+            }
+            if (i + length < text.size() && isNameChar(static_cast<unsigned char>(text[i + length]))) {
+                continue;
+            }
+            CatalogMention mention;
+            mention.spell = spell;
+            mention.slot = slotAfter(text, i + length, spell->level);
+            const bool already = std::any_of(found.begin(), found.end(), [&mention](const CatalogMention& other) {
+                return other.spell == mention.spell && other.slot == mention.slot;
+            });
+            if (!already) {
+                found.push_back(mention);
+            }
+            i += length - 1;
+            break;
+        }
+    }
+    return found;
+}
+
+// A spell's rules in brief: its first paragraph, cut at a sentence near 300
+// characters.
+std::string briefRules(const Spell& spell)
+{
+    std::string text = spell.description.substr(0, spell.description.find("\n"));
+    const std::size_t higher = text.find("Using a Higher-Level Spell Slot");
+    if (higher != std::string::npos) {
+        text = text.substr(0, higher);
+    }
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\n')) {
+        text.pop_back();
+    }
+    if (text.size() > 320) {
+        const std::size_t stop = text.rfind(". ", 320);
+        text = stop == std::string::npos || stop < 80 ? text.substr(0, 317) + "..." : text.substr(0, stop + 1);
+    }
+    return text;
+}
+
+std::string spellAttackName(const Spell& spell, int slot)
+{
+    return slot != spell.level && slot > 0 ? spell.name + " (level " + std::to_string(slot) + ")" : spell.name;
+}
+
+std::string baseSpellName(const std::string& name)
+{
+    return name.substr(0, name.find(" (level "));
+}
+
+MonsterAttack castOnlySpell(const Spell& spell, int slot)
+{
+    MonsterAttack attack;
+    attack.name = spellAttackName(spell, slot);
+    attack.effect = briefRules(spell);
+    attack.castOnly = true;
+    if (spell.concentration) {
+        attack.concentration = spell.id;
+    }
+    return attack;
+}
+
+// The spells a reaction or bonus action casts most, with their own rules.
+std::optional<MonsterAttack> ruledSpell(const Spell& spell, int slot, std::optional<int> dc, const Monster& monster)
+{
+    MonsterAttack attack;
+    attack.name = spellAttackName(spell, slot);
+    if (spell.id == "shield") {
+        attack.effect = "Reaction, when hit by an attack roll or targeted by Magic Missile: +5 AC until the start of "
+                        "its next turn, including against the triggering attack, and no damage from Magic Missile. "
+                        "When a hit or Magic Missile is one Shield would stop, you are asked first.";
+        attack.selfOnly = true;
+        Benefit benefit;
+        benefit.acBonus = kShieldAcBonus;
+        attack.benefit = benefit;
+        return attack;
+    }
+    if (!dc.has_value()) {
+        return std::nullopt;
+    }
+    if (spell.id == "counterspell") {
+        attack.effect = "Reaction, when it sees a creature within 60 feet casting a spell with Verbal, Somatic or "
+                        "Material components: that creature makes a Constitution save. On a failure the spell "
+                        "dissipates with no effect, and the action, Bonus Action or Reaction used to cast it is "
+                        "wasted (a spell slot it used is not).";
+        SaveSpec save;
+        save.ability = Ability::Constitution;
+        save.dc = *dc;
+        attack.save = save;
+        attack.failureOutcome = "its spell dissipates with no effect, and the action, Bonus Action or Reaction used "
+                                "to cast it is wasted (a spell slot it used is not)";
+        attack.successOutcome = "its spell goes ahead";
+        return attack;
+    }
+    if (spell.id == "cure-wounds" || spell.id == "healing-word") {
+        const bool cure = spell.id == "cure-wounds";
+        const int modifier = std::max(0, *dc - 8 - monsterProficiency(monster.challengeRating));
+        const int dice = 2 * (1 + std::max(0, slot - spell.level));
+        Benefit benefit;
+        benefit.healing = std::to_string(dice) + (cure ? "d8" : "d4");
+        if (modifier > 0) {
+            benefit.healing += "+" + std::to_string(modifier);
+        }
+        attack.benefit = benefit;
+        attack.allowSelf = true;
+        attack.effect = (cure ? std::string("A creature it touches regains ") : std::string("A creature it can see within 60 feet regains ")) +
+                        benefit.healing + " Hit Points.";
+        return attack;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::optional<MonsterAttack> spellAsAttack(const std::string& name, int slotLevel, int saveDc,
@@ -631,6 +790,66 @@ std::vector<MonsterAttack> actionableSpells(const Monster& monster, const Monste
     }
     const bool ownBudget = feature.perDay.has_value() || feature.recharge.has_value();
     return spellsFrom(feature.effect, monster, false, {}, ownBudget);
+}
+
+std::vector<MonsterAttack> actionableSpells(const Monster& monster, const MonsterFeature& feature,
+                                            const std::vector<Spell>& catalog)
+{
+    std::vector<MonsterAttack> combatSpells = actionableSpells(monster, feature);
+    if (catalog.empty() || feature.targeted.has_value() || feature.selfEffect.has_value()) {
+        return combatSpells;
+    }
+    std::optional<int> dc = spellSaveDc(feature.effect);
+    if (!dc.has_value()) {
+        dc = spellSaveDc(blockText(monster));
+    }
+    std::vector<bool> used(combatSpells.size(), false);
+    std::vector<MonsterAttack> spells;
+    for (const CatalogMention& mention : catalogMentions(feature.effect, catalog)) {
+        const std::string name = spellAttackName(*mention.spell, mention.slot);
+        bool matched = false;
+        for (std::size_t i = 0; i < combatSpells.size(); ++i) {
+            if (!used[i] && (combatSpells[i].name == name || baseSpellName(combatSpells[i].name) == name)) {
+                used[i] = true;
+                spells.push_back(combatSpells[i]);
+                matched = true;
+                break;
+            }
+        }
+        if (matched) {
+            continue;
+        }
+        if (std::optional<MonsterAttack> ruled = ruledSpell(*mention.spell, mention.slot, dc, monster)) {
+            spells.push_back(std::move(*ruled));
+        } else {
+            spells.push_back(castOnlySpell(*mention.spell, mention.slot));
+        }
+    }
+    for (std::size_t i = 0; i < combatSpells.size(); ++i) {
+        if (!used[i]) {
+            spells.push_back(combatSpells[i]);
+        }
+    }
+    return spells;
+}
+
+std::optional<ShieldReaction> shieldReactionOf(const Monster& monster, const std::vector<Spell>& catalog)
+{
+    for (const MonsterFeature& feature : monster.reactions) {
+        for (const MonsterAttack& spell : actionableSpells(monster, feature, catalog)) {
+            if (spell.name == "Shield") {
+                return ShieldReaction{feature, spell};
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+bool hasShieldUp(const Combatant& combatant)
+{
+    return std::any_of(combatant.timedEffects.begin(), combatant.timedEffects.end(), [](const auto& effect) {
+        return effect.first == "ac:" + std::to_string(kShieldAcBonus) + ":Shield";
+    });
 }
 
 std::vector<std::string> combatSpellMentions(const std::string& text)

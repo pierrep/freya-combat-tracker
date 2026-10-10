@@ -46,6 +46,7 @@ struct HistoryPrompt {
     bool advantage = false;
     bool afterHit = false;
     bool wasBloodied = false;
+    bool critical = false;  // a Shield question: the hit was critical
 
     bool operator==(const HistoryPrompt&) const = default;
 };
